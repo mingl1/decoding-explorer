@@ -1,5 +1,6 @@
 # views/main_window.py
 import os
+import select
 import sys
 import warnings
 from typing import List
@@ -12,8 +13,10 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenuBar,
+    QProgressBar,
     QPushButton,
     QSizeGrip,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -25,6 +28,7 @@ from utils import is_dark_mode
 from view.FileListWidget import FileTableWidget
 from view.MetadataView import MetadataView
 from viewmodel.file_manager_vm import FileManagerVM
+from viewmodel.metadata_vm import MetadataVM
 
 warnings.filterwarnings("ignore")
 
@@ -46,10 +50,11 @@ class MainWindow(QMainWindow):
         self.vm = FileManagerVM()
 
         self.file_table_widget = FileTableWidget(
-            file_dropped_callback=self.handle_dropped_paths
+            file_dropped_callback=self.handle_dropped_paths, vm=self.vm
         )
-        self.metadata_view = MetadataView()
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.metadata_vm = MetadataVM()
+        self.metadata_view = MetadataView(splitter, vm=self.metadata_vm)
         splitter.addWidget(self.file_table_widget)
         splitter.addWidget(self.metadata_view)
         splitter.setStretchFactor(0, 3)
@@ -58,18 +63,61 @@ class MainWindow(QMainWindow):
         self.load_button = QPushButton("Load Folder")
         self.load_button.clicked.connect(self.on_load_folder)
 
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.status_label = QLabel()
+        self.status_label.setVisible(False)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setVisible(False)
+        self.cancel_button.clicked.connect(self.cancel_alignment)
+
+        self.export_progress_bar = QProgressBar()
+        self.export_progress_bar.setVisible(False)
+
         self._setup_main_window()
 
         # Create a container widget for layout
         container = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(0)
+        layout.setContentsMargins(5, 0, 0, 5)
         layout.addWidget(self.load_button)
-        layout.addWidget(splitter)
+        progress_layout = QHBoxLayout()
+        progress_layout.setContentsMargins(5, 0, 5, 0)
+        progress_layout.setSpacing(5)
+        progress_layout.addWidget(self.progress_bar)
+        progress_layout.addWidget(self.cancel_button)
+        layout.addLayout(progress_layout)
+        layout.addWidget(self.export_progress_bar)
+        self.status_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        self.status_label.setContentsMargins(5, 0, 5, 5)
+
+        layout.addWidget(self.status_label, stretch=0)
+        layout.addWidget(splitter, stretch=1)
         container.setLayout(layout)
 
         # Connect ViewModel signals to UI slots
         self.vm.file_list_updated.connect(self.update_file_list)
-        self.vm.file_status_updated.connect(self.update_file_status)
+        self.vm.file_status_updated.connect(self.update_files_view)
+        self.vm.align_progress.connect(self.update_progress)
+        self.vm.align_error.connect(self.show_error)
+        self.vm.align_complete.connect(self.alignment_finished)
+        self.vm.export_progress.connect(self.update_export_progress)
+        self.vm.beads_generated.connect(self.save_beads)
+
+        self.file_table_widget.itemSelectionChanged.connect(
+            self.handle_selection_change
+        )
+        self.metadata_vm.metadata_applied_sig.connect(self.handle_metadata_applied)
+        # !TODO: Cancel shading correction if false
+        self.metadata_vm.shading_correction_sig.connect(
+            lambda _: self.vm.apply_shading(self.get_selected_files())
+        )
+        self.metadata_vm.align_channels_sig.connect(self.start_alignment)
+        self.metadata_view.export_all_sig.connect(self.vm.export_files)
+        self.metadata_view.generate_beads_sig.connect(self.vm.generate_beads)
 
         # Set the container widget as central widget
         self.setCentralWidget(container)
@@ -78,6 +126,45 @@ class MainWindow(QMainWindow):
         self.setMenuBar(self.menuBarUI)
         if sys.platform == "win32":
             self.menuBarUI.installEventFilter(self)
+
+    def save_beads(self, beads):
+        self.status_label.setText(f"Beads generated: {len(beads)}")
+        self.progress_bar.setVisible(False)
+        self.cancel_button.setVisible(False)
+        file = QFileDialog.getSaveFileName(
+            self, "Save Beads Data", "", "Excel Files (*.xlsx), CSV Files (*.csv)"
+        )
+        if file:
+            if file[0].endswith(".xlsx"):
+                beads.to_excel(file[0], index=False)
+            elif file[0].endswith(".csv"):
+                beads.to_csv(file[0], index=False)
+
+    def handle_metadata_applied(self, new_metadata: dict):
+        selected_items = self.file_table_widget.selectedItems()
+        for item in selected_items:
+            if item.column() == 0:
+                file_item = item.data(Qt.ItemDataRole.UserRole)
+                file_path = file_item.path if isinstance(file_item, FileItem) else None
+                file_item.metadata = new_metadata.get(file_path, file_item.metadata)
+                assert file_path is not None
+                item.setData(Qt.ItemDataRole.UserRole, file_item)
+
+    def get_selected_files(self) -> List[FileItem]:
+        selected_items = self.file_table_widget.selectedItems()
+        selected_files = []
+        for item in selected_items:
+            if item.column() == 0:  # Filename column
+                file_item = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(file_item, FileItem):
+                    selected_files.append(file_item)
+        return selected_files
+
+    def handle_selection_change(self):
+        selected_files = self.get_selected_files()
+        self.metadata_vm.update_selected_items(selected_files)
+        self.vm.selected_files = selected_files
+        print(f"Selected {len(selected_files)} files")
 
     def handle_dropped_paths(self, paths: List[str]):
         for path in paths:
@@ -90,6 +177,41 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory()
         if folder:
             self.vm.load_folder(folder)
+
+    def start_alignment(self):
+        self.progress_bar.setVisible(True)
+        self.status_label.setVisible(True)
+        self.cancel_button.setVisible(True)
+        self.vm.align_channels(self.get_selected_files())
+
+    def update_progress(self, value, message):
+        self.progress_bar.setValue(value)
+        self.status_label.setText(message)
+
+    def show_error(self, message):
+        self.status_label.setText(f"Error: {message}")
+        self.progress_bar.setVisible(False)
+        self.cancel_button.setVisible(False)
+
+    def alignment_finished(self, aligned_images):
+        self.status_label.setText("Alignment complete!")
+        self.progress_bar.setVisible(False)
+        self.cancel_button.setVisible(False)
+        # Do something with aligned_images
+
+    def cancel_alignment(self):
+        self.vm.cancel_alignment()
+        self.status_label.setVisible(False)
+        self.progress_bar.setVisible(False)
+        self.cancel_button.setVisible(False)
+        self.cancel_button.setEnabled(True)
+
+    def update_export_progress(self, value, total):
+        self.export_progress_bar.setVisible(True)
+        self.export_progress_bar.setMaximum(total)
+        self.export_progress_bar.setValue(value)
+        if value == total:
+            self.export_progress_bar.setVisible(False)
 
     def _setup_main_window(self):
         self.setWindowTitle("Decoding-Explorer")
@@ -172,8 +294,8 @@ class MainWindow(QMainWindow):
         )
         header.show()
 
-    def update_file_status(self, file_path: str, status: FileStatus):
-        self.file_table_widget.update_file_status(file_path, status)
+    def update_files_view(self, files: List[FileItem]):
+        self.file_table_widget.update_file_display(files)
 
     def toggle_maximize(self):
         if self.isMaximized():

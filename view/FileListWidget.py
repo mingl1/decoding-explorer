@@ -1,21 +1,22 @@
 import os
 
 from PyQt6.QtCore import QRect, QRectF, QSize, Qt
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QAction, QColor, QFont, QPainter, QPen
 from PyQt6.QtSvg import QSvgRenderer  # For rendering SVGs
-from PyQt6.QtWidgets import QHeaderView, QTableWidget, QTableWidgetItem
+from PyQt6.QtWidgets import QHeaderView, QMenu, QTableWidget, QTableWidgetItem
 
 from model.file_item import FileItem
+from model.status_enum import FileStatus
 from utils import resource_path
 
 
 class FileTableWidget(QTableWidget):
-    def __init__(self, file_dropped_callback):
+    def __init__(self, file_dropped_callback, vm):
         super().__init__(0, 4)  # columns: path, shape, dtype, status
         self.setAcceptDrops(True)
         self.setSortingEnabled(True)
         self.file_dropped_callback = file_dropped_callback
-
+        self.vm = vm
         self.setHorizontalHeaderLabels(["Filename", "Status", "Shape (CYX)", "Dtype"])
         header = self.horizontalHeader()
         assert header is not None
@@ -24,6 +25,8 @@ class FileTableWidget(QTableWidget):
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         header.setStretchLastSection(True)
         header.hide()
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.open_context_menu)
         self.svg_renderer = QSvgRenderer(resource_path("assets/upload.svg"))
 
     def dragEnterEvent(self, event):
@@ -45,6 +48,7 @@ class FileTableWidget(QTableWidget):
         row = self.rowCount()
         self.insertRow(row)
         filename_item = QTableWidgetItem(os.path.basename(file_item.path))
+        filename_item.setData(Qt.ItemDataRole.UserRole, file_item)
         shape_item = QTableWidgetItem(str(file_item.shape))
         dtype_item = QTableWidgetItem(str(file_item.dtype))
         status_item = QTableWidgetItem(file_item.status.name)
@@ -90,14 +94,33 @@ class FileTableWidget(QTableWidget):
                 text,
             )
 
-    def update_file_status(self, file_path: str, status):
-        for row in range(self.rowCount()):
-            item = self.item(row, 3)  # Status column
-            filename_item = self.item(row, 0)  # Filename column
-            if (
-                filename_item
-                and item
-                and filename_item.text() == os.path.basename(file_path)
-            ):
-                item.setBackground(QColor(status.color))
-                break
+    def update_file_display(self, files: list[FileItem]):
+        for file_item in files:
+            file_path = file_item.path
+            for row in range(self.rowCount()):
+                item = self.item(row, 1)  # Status column
+                filename_item = self.item(row, 0)  # Filename column
+                if (
+                    filename_item
+                    and item
+                    and filename_item.text() == os.path.basename(file_path)
+                ):
+                    item.setBackground(QColor(file_item.status.color))
+                    item.setText(file_item.status.name)
+                    filename_item.setData(Qt.ItemDataRole.UserRole, file_item)
+                    print(f"Updated status for {file_path} to {file_item.status}")
+
+    def open_context_menu(self, position):
+        index = self.indexAt(position)
+        if not index.isValid():
+            return
+
+        row = index.row()
+        file_item = self.item(row, 0).data(Qt.ItemDataRole.UserRole)
+
+        menu = QMenu(self)
+        set_ref_action = QAction("Set as Reference Image", self)
+        set_ref_action.triggered.connect(lambda: self.vm.set_reference(file_item))
+        menu.addAction(set_ref_action)
+
+        menu.exec(self.viewport().mapToGlobal(position))

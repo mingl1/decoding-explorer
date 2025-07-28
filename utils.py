@@ -94,3 +94,71 @@ def get_memory_usage_mb():
     process = psutil.Process(os.getpid())
     mem_bytes = process.memory_info().rss  # Resident Set Size
     return mem_bytes / (1024 * 1024)  # MB
+
+
+def calculate_ncc(img1, img2):
+    """
+    Calculate NCC (Normalized Cross-Correlation) between two images.
+
+    Args:
+        img1: First image (reference/target)
+        img2: Second image (aligned)
+
+    Returns:
+        NCC value between -1 and 1 (1 = perfect correlation)
+    """
+    try:
+        # Ensure images have the same shape
+        if img1.shape != img2.shape:
+            min_h = min(img1.shape[0], img2.shape[0])
+            min_w = min(img1.shape[1], img2.shape[1])
+            img1 = img1[:min_h, :min_w]
+            img2 = img2[:min_h, :min_w]
+
+        # Convert to float to avoid overflow
+        img1_float = img1.astype(np.float64)
+        img2_float = img2.astype(np.float64)
+
+        # Flatten images
+        img1_flat = img1_float.flatten()
+        img2_flat = img2_float.flatten()
+
+        # Calculate means
+        mean1 = np.mean(img1_flat)
+        mean2 = np.mean(img2_flat)
+
+        # Center the data
+        img1_centered = img1_flat - mean1
+        img2_centered = img2_flat - mean2
+
+        # Calculate NCC
+        numerator = np.sum(img1_centered * img2_centered)
+        denominator = np.sqrt(np.sum(img1_centered**2) * np.sum(img2_centered**2))
+
+        if denominator == 0:
+            return 0.0  # No correlation if one image is constant
+
+        ncc = numerator / denominator
+        return ncc
+
+    except Exception as e:
+        print(f"Error calculating NCC: {str(e)}")
+        return None
+
+
+def to_uint8(image):
+    """Convert image to uint8 with proper scaling"""
+    # Check if image is already uint8
+    if image.dtype == np.uint8:
+        return image
+
+    # Convert to float and scale to 0-255
+    img_float = image.astype(np.float32)
+    if img_float.max() > img_float.min():  # Check to avoid division by zero
+        img_norm = (img_float - img_float.min()) * (
+            255.0 / (img_float.max() - img_float.min())
+        )
+        return img_norm.astype(np.uint8)
+    else:
+        print("Warning: Image has no variation, returning zeros")
+        return np.zeros_like(image, dtype=np.uint8)

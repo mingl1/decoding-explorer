@@ -1,6 +1,29 @@
-pyside6>=6.5.0
-numpy
-scipy
-opencv-python
-tifffile
-scikit-image
+antspyx==0.6.1
+astroalign==2.6.1
+diplib==3.5.2
+itk-elastix==0.23.0
+matplotlib==3.10.3
+numpy==1.26.4
+opencv-contrib-python==4.11.0.86
+opencv-python==4.11.0.86
+pandas==2.3.0
+pillow==11.3.0
+pyclesperanto-prototype==0.24.5
+pyopengl==3.1.9
+pyqt6==6.9.1
+pyqtgraph==0.13.7
+pystackreg==0.2.8
+python-whois==0.9.5
+qtrangeslider==0.1.5
+scikit-image==0.24.0
+scikit-learn==1.7.0
+seaborn==0.13.2
+sep==1.4.0
+setuptools==80.9.0
+simpleitk==2.5.2
+siphash24==1.7
+stardist==0.9.1
+tensorflow==2.10.1; platform_system == "Windows"
+tensorflow==2.17.1; platform_system != "Windows"
+umap-learn==0.5.9.post2
+tensorflow-io-gcs-filesystem==0.31.0; platform_system == "Windows"
