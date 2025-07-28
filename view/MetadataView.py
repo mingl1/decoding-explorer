@@ -30,12 +30,20 @@ class MetadataView(QWidget):
         self.size_x_input = QLineEdit()
         self.size_y_input = QLineEdit()
         self.max_size_input = QLineEdit()
+        self.num_tiles_input = QLineEdit()
+        self.overlap_input = QLineEdit()
         metadata_title = QLabel("Metadata")
         metadata_title.setStyleSheet("font-weight: bold; font-size: 16px;")
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setFrameShadow(QFrame.Shadow.Sunken)
         separator.setLineWidth(1)
+        align_arrays_title = QLabel("Align Arrays")
+        align_arrays_title.setStyleSheet("font-weight: bold; font-size: 16px;")
+        align_arrays_separator = QFrame()
+        align_arrays_separator.setFrameShape(QFrame.Shape.HLine)
+        align_arrays_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        align_arrays_separator.setLineWidth(1)
         self.apply_btn = QPushButton("Update Metadata")
         self.apply_btn.clicked.connect(
             lambda: self.vm.apply_metadata(self.get_metadata_changes())
@@ -46,9 +54,9 @@ class MetadataView(QWidget):
         )
         self.align_channels_btn = QPushButton("Align to Reference")
         self.align_channels_btn.clicked.connect(self.vm.align_channels)
-        self.export_all_btn = QPushButton("Export All")
+        self.export_all_btn = QPushButton("Export Selected Images")
         self.export_all_btn.clicked.connect(self.export_all)
-        self.generate_beads_btn = QPushButton("Generate Beads")
+        self.generate_beads_btn = QPushButton("Generate and Export Beads")
         self.generate_beads_btn.clicked.connect(self.generate_beads_sig.emit)
 
         self.form_layout.addRow(metadata_title)
@@ -62,6 +70,10 @@ class MetadataView(QWidget):
         self.form_layout.addRow("Max Size:", self.max_size_input)
         self.form_layout.addRow(self.apply_btn)
         self.form_layout.addRow(self.apply_shading_correction_btn)
+        self.form_layout.addRow(align_arrays_title)
+        self.form_layout.addRow(align_arrays_separator)
+        self.form_layout.addRow("Num Tiles:", self.num_tiles_input)
+        self.form_layout.addRow("Overlap:", self.overlap_input)
         self.form_layout.addRow(self.align_channels_btn)
         self.form_layout.addRow(self.export_all_btn)
         self.form_layout.addRow(self.generate_beads_btn)
@@ -84,6 +96,8 @@ class MetadataView(QWidget):
             self.size_y_input.setText(str(metadata_list[0].metadata.PhysicalSizeY))
             self.channel_input.setText(str(metadata_list[0].metadata.reference_channel))
             self.max_size_input.setText(str(metadata_list[0].metadata.max_size))
+            self.num_tiles_input.setText(str(metadata_list[0].metadata.num_tiles))
+            self.overlap_input.setText(str(metadata_list[0].metadata.overlap))
         else:
             self.prefix_input.setText("")
             self.axes_input.setText("")
@@ -92,6 +106,8 @@ class MetadataView(QWidget):
             self.size_y_input.setText("")
             self.channel_input.setText("")
             self.max_size_input.setText("")
+            self.num_tiles_input.setText("")
+            self.overlap_input.setText("")
 
     def all_same_metadata(self, metadata_list: list[FileItem]) -> bool:
         if not metadata_list:
@@ -109,8 +125,10 @@ class MetadataView(QWidget):
             "unit": self.unit_input.text(),
             "PhysicalSizeX": float(self.size_x_input.text()),
             "PhysicalSizeY": float(self.size_y_input.text()),
-            "reference_channel": self.channel_input.text(),
-            "max_size": self.max_size_input.text(),
+            "reference_channel": int(self.channel_input.text()),
+            "max_size": int(self.max_size_input.text()),
+            "num_tiles": int(self.num_tiles_input.text()),
+            "overlap": int(self.overlap_input.text()),
         }
 
     def export_all(self):

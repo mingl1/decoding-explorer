@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
         self.vm.align_complete.connect(self.alignment_finished)
         self.vm.export_progress.connect(self.update_export_progress)
         self.vm.beads_generated.connect(self.save_beads)
+        self.vm.bead_progress.connect(self.update_progress)
 
         self.file_table_widget.itemSelectionChanged.connect(
             self.handle_selection_change
@@ -117,7 +118,7 @@ class MainWindow(QMainWindow):
         )
         self.metadata_vm.align_channels_sig.connect(self.start_alignment)
         self.metadata_view.export_all_sig.connect(self.vm.export_files)
-        self.metadata_view.generate_beads_sig.connect(self.vm.generate_beads)
+        self.metadata_view.generate_beads_sig.connect(self.start_bead_generation)
 
         # Set the container widget as central widget
         self.setCentralWidget(container)
@@ -158,6 +159,8 @@ class MainWindow(QMainWindow):
                 file_item = item.data(Qt.ItemDataRole.UserRole)
                 if isinstance(file_item, FileItem):
                     selected_files.append(file_item)
+        # sort by path to have consistent order
+        selected_files.sort(key=lambda x: x.path)
         return selected_files
 
     def handle_selection_change(self):
@@ -182,11 +185,29 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.status_label.setVisible(True)
         self.cancel_button.setVisible(True)
+        self.cancel_button.clicked.disconnect()
+        self.cancel_button.clicked.connect(self.cancel_alignment)
         self.vm.align_channels(self.get_selected_files())
 
+    def start_bead_generation(self):
+        self.progress_bar.setVisible(True)
+        self.status_label.setVisible(True)
+        self.cancel_button.setVisible(True)
+        self.cancel_button.clicked.disconnect()
+        self.cancel_button.clicked.connect(self.cancel_bead_generation)
+        self.vm.generate_beads()
+
     def update_progress(self, value, message):
+        if not self.progress_bar.isVisible():
+            self.progress_bar.setVisible(True)
+            self.status_label.setVisible(True)
+            self.cancel_button.setVisible(True)
         self.progress_bar.setValue(value)
         self.status_label.setText(message)
+        if value >= 100:
+            self.progress_bar.setVisible(False)
+            self.cancel_button.setVisible(False)
+            self.status_label.setVisible(False)
 
     def show_error(self, message):
         self.status_label.setText(f"Error: {message}")
@@ -201,6 +222,13 @@ class MainWindow(QMainWindow):
 
     def cancel_alignment(self):
         self.vm.cancel_alignment()
+        self.status_label.setVisible(False)
+        self.progress_bar.setVisible(False)
+        self.cancel_button.setVisible(False)
+        self.cancel_button.setEnabled(True)
+
+    def cancel_bead_generation(self):
+        self.vm.cancel_bead_generation()
         self.status_label.setVisible(False)
         self.progress_bar.setVisible(False)
         self.cancel_button.setVisible(False)

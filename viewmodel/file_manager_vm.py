@@ -18,6 +18,7 @@ from utils import get_memory_usage_mb
 
 class BeadGenerationThread(QThread):
     beads_generated = pyqtSignal(DataFrame)
+    progress = pyqtSignal(int, str)
 
     def __init__(self, ref_bf, tifs, max_size, signal_to_noise_cutoff):
         super().__init__()
@@ -25,15 +26,27 @@ class BeadGenerationThread(QThread):
         self.tifs = tifs
         self.max_size = max_size
         self.signal_to_noise_cutoff = signal_to_noise_cutoff
+        self._is_running = True
 
     def run(self):
+        if not self._is_running:
+            return
         results = image_processing.process_beads(
             self.ref_bf,
             self.tifs,
             max_size=self.max_size,
             signal_to_noise_cutoff=self.signal_to_noise_cutoff,
+            progress_callback=self.progress.emit,
+            is_running_callback=self.is_running,
         )
-        self.beads_generated.emit(results)
+        if self._is_running:
+            self.beads_generated.emit(results)
+
+    def cancel(self):
+        self._is_running = False
+
+    def is_running(self):
+        return self._is_running
 
 
 class FileManagerVM(QObject):
@@ -45,6 +58,7 @@ class FileManagerVM(QObject):
     align_complete = pyqtSignal(list)
     export_progress = pyqtSignal(int, int)
     beads_generated = pyqtSignal(DataFrame)
+    bead_progress = pyqtSignal(int, str)
 
     def __init__(self):
         super().__init__()
@@ -185,6 +199,10 @@ class FileManagerVM(QObject):
         if self.register_thread:
             self.register_thread.cancel()
 
+    def cancel_bead_generation(self):
+        if self.bead_thread:
+            self.bead_thread.cancel()
+
     def set_reference(self, file_item: FileItem):
         if self.reference_item:
             if self.reference_item.path in self.files:
@@ -221,7 +239,18 @@ class FileManagerVM(QObject):
                 "PhysicalSizeX": file_item.metadata.PhysicalSizeX,
                 "PhysicalSizeY": file_item.metadata.PhysicalSizeY,
             }
-
+            # ensure max size
+            if len(export_image.shape) > 2:
+                export_image = export_image[
+                    :,
+                    : int(file_item.metadata.max_size),
+                    : int(file_item.metadata.max_size),
+                ]
+            elif len(export_image.shape) == 2:
+                export_image = export_image[
+                    : int(file_item.metadata.max_size),
+                    : int(file_item.metadata.max_size),
+                ]
             file_name = os.path.basename(file_item.path)
             if file_item.metadata.prefix:
                 file_name = f"{file_item.metadata.prefix}_{file_name}"
@@ -283,21 +312,15 @@ class FileManagerVM(QObject):
             signal_to_noise_cutoff=0.1,
         )
         self.bead_thread.beads_generated.connect(
-            lambda res: self._on_beads_generated(tifs, res)
+            lambda res: self._on_beads_generated(res)
         )
+        self.bead_thread.progress.connect(self.bead_progress.emit)
         self.bead_thread.start()
 
-    def _on_beads_generated(self, tifs, results):
+    def _on_beads_generated(self, results):
         to_be_updated = []
-        ref_bf_path = tifs[0][1].path
-        self.files[ref_bf_path].beads = results
-        file_items = [f[1] for f in tifs]
-        for f in file_items:
-            my_f = self.files.get(f.path)
-            if not my_f:
-                continue
-            my_f.status = FileStatus.BEADS_GENERATED
-            to_be_updated.append(my_f)
+        self.files[self.reference_item.path].beads = results
+        to_be_updated.append(self.files[self.reference_item.path])
         self.beads_generated.emit(results)
         self.file_status_updated.emit(to_be_updated)
 

@@ -92,7 +92,9 @@ class Register(QThread):
                     adjust_contrast(tif["image"][bf_channel][:m, :m], 50, 99)
                 )
 
-        fixed_map = TileMap("fixed", reference_bf, self.overlap, self.num_tiles)
+        fixed_map = TileMap(
+            "fixed", reference_bf, int(self.overlap), int(self.num_tiles)
+        )
         aligned_outputs = []
         moving_maps = []
         for tif_n, alignable_brightfield in enumerate(alignment_layers):
