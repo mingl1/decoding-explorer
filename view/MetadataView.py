@@ -58,6 +58,8 @@ class MetadataView(QWidget):
         self.export_all_btn.clicked.connect(self.export_all)
         self.generate_beads_btn = QPushButton("Generate and Export Beads")
         self.generate_beads_btn.clicked.connect(self.generate_beads_sig.emit)
+        self.inspect_beads_btn = QPushButton("Inspect Beads")
+        self.inspect_beads_btn.clicked.connect(self.vm.inspect_beads)
 
         self.form_layout.addRow(metadata_title)
         self.form_layout.addRow(separator)
@@ -77,6 +79,7 @@ class MetadataView(QWidget):
         self.form_layout.addRow(self.align_channels_btn)
         self.form_layout.addRow(self.export_all_btn)
         self.form_layout.addRow(self.generate_beads_btn)
+        self.form_layout.addRow(self.inspect_beads_btn)
 
         self.vm.update_metadata_view_sig.connect(self.update_metadata)
 

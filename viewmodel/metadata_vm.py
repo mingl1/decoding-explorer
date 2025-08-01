@@ -1,4 +1,7 @@
+from os import error
+
 from PyQt6.QtCore import QObject, pyqtSignal
+from pytools import F
 
 from model.file_item import FileItem, MetaData
 from utils import get_memory_usage_mb
@@ -9,6 +12,8 @@ class MetadataVM(QObject):
     update_metadata_view_sig = pyqtSignal(list)
     shading_correction_sig = pyqtSignal(bool)
     align_channels_sig = pyqtSignal(bool)
+    inspect_beads_sig = pyqtSignal(FileItem)
+    error_sig = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -30,3 +35,12 @@ class MetadataVM(QObject):
 
     def align_channels(self):
         self.align_channels_sig.emit(True)
+
+    def inspect_beads(self):
+        print(f"Inspecting beads for {len(self.selected_files)} items")
+        if len(self.selected_files) == 0:
+            self.error_sig.emit("No files selected.")
+            return
+        elif len(self.selected_files) > 1:
+            self.error_sig.emit("You should select the reference file only.")
+        self.inspect_beads_sig.emit(self.selected_files[0])

@@ -4,6 +4,7 @@ import sys
 import cv2
 import numpy as np
 import psutil
+from numpy.typing import NDArray
 from pystackreg.util import to_uint16
 
 
@@ -162,3 +163,22 @@ def to_uint8(image):
     else:
         print("Warning: Image has no variation, returning zeros")
         return np.zeros_like(image, dtype=np.uint8)
+
+
+def adjust_contrast(
+    img: NDArray[np.float32] | NDArray[np.float64], min_percentile=2, max_percentile=98
+):
+    """Adjust image contrast using percentile-based clipping for float images"""
+    # Calculate percentiles
+    minval = np.percentile(img, min_percentile)
+    maxval = np.percentile(img, max_percentile)
+
+    # Avoid division by zero
+    if maxval - minval < 1e-12:
+        return np.zeros_like(img)
+
+    # Clip and rescale to [0.0, 1.0]
+    img_adjusted = np.clip(img, minval, maxval)
+    img_adjusted = (img_adjusted - minval) / (maxval - minval)
+
+    return img_adjusted  # stays float64, values in [0.0, 1.0]

@@ -7,6 +7,7 @@ from typing import List
 
 from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
 from PyQt6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -27,6 +28,7 @@ from model.status_enum import FileStatus
 from utils import is_dark_mode
 from view.FileListWidget import FileTableWidget
 from view.MetadataView import MetadataView
+from view.roi_inspector import ROI_Inspector
 from viewmodel.file_manager_vm import FileManagerVM
 from viewmodel.metadata_vm import MetadataVM
 
@@ -107,6 +109,7 @@ class MainWindow(QMainWindow):
         self.vm.export_progress.connect(self.update_export_progress)
         self.vm.beads_generated.connect(self.save_beads)
         self.vm.bead_progress.connect(self.update_progress)
+        self.vm.inspect_beads_signal.connect(self.show_roi_inspector_window)
 
         self.file_table_widget.itemSelectionChanged.connect(
             self.handle_selection_change
@@ -119,7 +122,7 @@ class MainWindow(QMainWindow):
         self.metadata_vm.align_channels_sig.connect(self.start_alignment)
         self.metadata_view.export_all_sig.connect(self.vm.export_files)
         self.metadata_view.generate_beads_sig.connect(self.start_bead_generation)
-
+        self.metadata_vm.inspect_beads_sig.connect(self.vm.inspect_beads)
         # Set the container widget as central widget
         self.setCentralWidget(container)
 
@@ -127,6 +130,19 @@ class MainWindow(QMainWindow):
         self.setMenuBar(self.menuBarUI)
         if sys.platform == "win32":
             self.menuBarUI.installEventFilter(self)
+
+    def show_roi_inspector_window(self, bf_image, beads_df):
+
+        print(
+            f"Showing ROI Inspector with {len(beads_df)} beads, image shape {bf_image.shape}"
+        )
+
+        data = {
+            "bf_image": bf_image,
+            "beads_df": beads_df,
+        }
+        self.roi_inspector = ROI_Inspector(data)
+        self.roi_inspector.show()
 
     def save_beads(self, beads):
         self.status_label.setText(f"Beads generated: {len(beads)}")
@@ -210,9 +226,23 @@ class MainWindow(QMainWindow):
             self.status_label.setVisible(False)
 
     def show_error(self, message):
-        self.status_label.setText(f"Error: {message}")
+        # popup error message
+        self.status_label.setVisible(False)
         self.progress_bar.setVisible(False)
         self.cancel_button.setVisible(False)
+        popup_dialog = QDialog(self)
+        popup_dialog.setWindowTitle("Error")
+        popup_dialog.resize(400, 200)
+        layout = QVBoxLayout()
+        label = QLabel(message)
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(popup_dialog.accept)
+        layout.addWidget(ok_button)
+        popup_dialog.setLayout(layout)
+        popup_dialog.setModal(True)
+        popup_dialog.exec()
 
     def alignment_finished(self, aligned_images):
         self.status_label.setText("Alignment complete!")

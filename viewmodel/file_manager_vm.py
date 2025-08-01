@@ -4,6 +4,7 @@ from math import e
 from weakref import ref
 
 import numpy as np
+import pandas as pd
 import tifffile
 from pandas import DataFrame
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
@@ -59,6 +60,7 @@ class FileManagerVM(QObject):
     export_progress = pyqtSignal(int, int)
     beads_generated = pyqtSignal(DataFrame)
     bead_progress = pyqtSignal(int, str)
+    inspect_beads_signal = pyqtSignal(np.ndarray, DataFrame)
 
     def __init__(self):
         super().__init__()
@@ -72,6 +74,38 @@ class FileManagerVM(QObject):
     def set_reference_item(self, file_item: FileItem):
         self.reference_item = file_item
         print(f"Reference item set to: {file_item.path}")
+
+    def inspect_beads(self, file_item: FileItem):
+        print(f"Inspecting beads for file: {file_item.path}")
+
+        if file_item.path not in self.files:
+            self.align_error.emit("File not found in the manager.")
+            return
+        most_updated_file = self.files[file_item.path]
+        # test data
+        df = pd.read_csv("./test_outputs/efficient_test.csv")
+        print(f"Loaded {len(df)} beads from CSV for testing.")
+        most_updated_file.beads = df
+        if most_updated_file.beads is None or most_updated_file.beads.empty:
+            self.align_error.emit("No beads data available for this file.")
+            return
+        # if shade corrected, this will be the shade corrected bf image
+        bf = most_updated_file.working_image
+        # didn't shade correct, just load the brightfield channel
+        if bf is None:
+            try:
+                bf = load_image(
+                    most_updated_file.path, int(most_updated_file.metadata.max_size)
+                )
+                if len(bf.shape) == 3:
+                    bf = np.array(bf[int(most_updated_file.metadata.reference_channel)])
+            except Exception as e:
+                self.align_error.emit(f"Failed to load brightfield image: {str(e)}")
+                return
+        elif len(bf.shape) == 3:
+            # For some reason was aligned, take the reference channel
+            bf = np.array(bf[int(most_updated_file.metadata.reference_channel)])
+        self.inspect_beads_signal.emit(bf, most_updated_file.beads)
 
     def load_folder(self, folder_path):
         to_be_emitted = []

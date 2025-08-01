@@ -313,6 +313,170 @@ def second_pass_beadfinding(brightfield, beads):
     return beads
 
 
+def edge_bead_filtering(radius, max_size):
+    def filter_func(bead):
+        x, y = bead
+        # Check if the bead is at least 'radius' pixels away from the edges
+        if (x - 2 * radius) > 0 and (x + 2 * radius) < max_size:
+            if (y - 2 * radius) > 0 and (y + 2 * radius) < max_size:
+                return True
+        return False
+
+    return filter_func
+
+
+# def get_excel(
+#     beads,
+#     signal_to_noise_cutoff,
+#     tifs,
+#     max_size,
+#     layer_threshold_dict=defaultdict(int),
+#     progress_callback=None,
+#     is_running_callback=None,
+# ):
+#     def update_progress_internal(value, message):
+#         if progress_callback:
+#             # Scale the internal progress (0-100) to a sub-range of the overall progress (40-90)
+#             overall_progress = 40 + (value / 100) * 50
+#             progress_callback(int(overall_progress), message)
+
+#     def is_running():
+#         if is_running_callback:
+#             return is_running_callback()
+#         return True
+
+#     ColorThreshold = signal_to_noise_cutoff
+#     export_to_excel = np.zeros((len(beads), len(tifs)), dtype="uint8")
+
+#     results_from_cycles = []
+#     results_from_cycles_SNR = []
+#     results_from_cycles_Sig_absolute_threshold = []
+#     layer_threshold_bool = True
+#     tif_metadata = [f.metadata for _, f in tifs]
+#     tif_images = [img for img, _ in tifs]
+#     # flor layer is all channels except brightfield
+#     for i, md in enumerate(tif_metadata):
+#         assert isinstance(md, MetaData)
+#         md.flors_layers = [
+#             j for j in range(len(tif_images[i])) if j != int(md.reference_channel)
+#         ]
+#         print(
+#             f"Flors layers for tif {i} are {md.flors_layers}, reference channel is {md.reference_channel}"
+#         )
+#     # GETTING ALL THE BEAD BRIGHTNESSES
+#     total_beads = len(beads)
+#     total_cycles = len(tif_metadata)
+#     total_layers_per_cycle = (
+#         len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
+#     )
+#     total_steps = total_cycles * total_layers_per_cycle * total_beads
+
+#     current_step = 0
+#     for tif_count, md in enumerate(tif_metadata):
+#         if not is_running():
+#             return None
+#         reference_for_hist_match = None
+
+#         cycle_specific_data = np.zeros(
+#             (len(beads), len(md.flors_layers)), dtype="uint16"
+#         )
+#         cycle_specific_sig_noise_data = np.zeros(
+#             (len(beads), len(md.flors_layers)), dtype="float"
+#         )
+#         cycle_specific_Sig_absolute_threshold_data = np.zeros(
+#             (len(beads), len(md.flors_layers)), dtype="float"
+#         )
+
+#         for i, layer in enumerate(md.flors_layers):
+#             if not is_running():
+#                 return None
+#             flor_layer = tif_images[tif_count][layer, :, :]
+
+#             if reference_for_hist_match is None:
+#                 reference_for_hist_match = flor_layer
+#             else:
+#                 flor_layer = match_histograms(
+#                     flor_layer, reference_for_hist_match, channel_axis=-1
+#                 )
+
+#             radius = 2
+#             layer_specific_data = np.zeros(len(beads), dtype="uint16")
+#             sig_noise_data = np.zeros(len(beads), dtype="float")
+#             layer_threshold = np.zeros(len(beads), dtype="float")
+#             last_progress = -1
+#             # filter out edge beads:
+#             max_size = md.max_size
+#             beads = filter(edge_bead_filtering(radius, max_size), beads)
+#             for b_i, bead in enumerate(beads):
+#                 if not is_running():
+#                     return None
+#                 current_step += 1
+#                 progress_percentage = int((current_step / total_steps) * 100)
+#                 if progress_percentage != last_progress:
+#                     update_progress_internal(
+#                         progress_percentage,
+#                         f"Processing cycle {tif_count + 1}/{total_cycles}, layer {i + 1}/{total_layers_per_cycle}, bead {b_i + 1}/{total_beads}",
+#                     )
+#                     last_progress = progress_percentage
+#                 x, y = bead
+
+#                 roi = flor_layer[
+#                     y - radius : y + radius,
+#                     x - radius : x + radius,
+#                 ]
+#                 brightness = np.median(roi)
+
+#                 if (x - 2 * 20) > 0 and (x + 2 * 20) < max_size:
+#                     if (y - 2 * 20) > 0 and (y + 2 * 20) < max_size:
+#                         local_flor_layer = flor_layer[
+#                             y - radius : y + radius,
+#                             x - radius : x + radius,
+#                         ]
+#                         flor_layer_background_intensity_local = np.percentile(
+#                             local_flor_layer, 10
+#                         )
+#                         if (
+#                             flor_layer_background_intensity_local > 0
+#                         ):  # Corrected if statement
+#                             signal_noise_ratio = (
+#                                 brightness - flor_layer_background_intensity_local
+#                             ) / flor_layer_background_intensity_local
+#                         else:
+#                             signal_noise_ratio = 0
+#                     else:
+#                         signal_noise_ratio = 0
+#                 else:
+#                     signal_noise_ratio = 0
+
+#                 layer_specific_data[b_i] = brightness
+#                 sig_noise_data[b_i] = signal_noise_ratio
+#                 layer_threshold[b_i] = brightness > layer_threshold_dict[layer]  # boolean values
+
+#             cycle_specific_data[:, i] = layer_specific_data
+#             cycle_specific_sig_noise_data[:, i] = sig_noise_data
+#             cycle_specific_Sig_absolute_threshold_data[:, i] = layer_threshold
+
+#         results_from_cycles.append(cycle_specific_data)
+#         results_from_cycles_SNR.append(cycle_specific_sig_noise_data)
+#         results_from_cycles_Sig_absolute_threshold.append(
+#             cycle_specific_Sig_absolute_threshold_data
+#         )
+
+#         brightest_layers = np.argmax(cycle_specific_data, axis=1)
+#         export_to_excel[:, tif_count] = brightest_layers
+
+#         for i, row in enumerate(cycle_specific_sig_noise_data):
+#             if np.max(row) < ColorThreshold:
+#                 export_to_excel[i, tif_count] = 255
+
+#         for i, row in enumerate(cycle_specific_Sig_absolute_threshold_data):
+#             if np.all(row) == 0:
+#                 export_to_excel[i, tif_count] = 255
+
+#     export_to_excel = np.hstack((beads, export_to_excel))
+#     return export_to_excel
+
+
 def get_excel(
     beads,
     signal_to_noise_cutoff,
@@ -333,13 +497,13 @@ def get_excel(
             return is_running_callback()
         return True
 
+    beads = list(filter(edge_bead_filtering(20, max_size), beads))
     ColorThreshold = signal_to_noise_cutoff
     export_to_excel = np.zeros((len(beads), len(tifs)), dtype="uint8")
 
     results_from_cycles = []
     results_from_cycles_SNR = []
     results_from_cycles_Sig_absolute_threshold = []
-    layer_threshold_bool = True
     tif_metadata = [f.metadata for _, f in tifs]
     tif_images = [img for img, _ in tifs]
     # flor layer is all channels except brightfield
@@ -358,6 +522,7 @@ def get_excel(
         len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
     )
     total_steps = total_cycles * total_layers_per_cycle * total_beads
+    radius = 2
 
     current_step = 0
     for tif_count, md in enumerate(tif_metadata):
@@ -383,16 +548,20 @@ def get_excel(
             if reference_for_hist_match is None:
                 reference_for_hist_match = flor_layer
             else:
-                flor_layer = match_histograms(
-                    flor_layer, reference_for_hist_match, channel_axis=-1
-                )
-
-            radius = 2
+                flor_layer = match_histograms(flor_layer, reference_for_hist_match)
 
             layer_specific_data = np.zeros(len(beads), dtype="uint16")
             sig_noise_data = np.zeros(len(beads), dtype="float")
             layer_threshold = np.zeros(len(beads), dtype="float")
             last_progress = -1
+            # filter out edge beads:
+            max_size = md.max_size
+            bead_rois = [
+                flor_layer[y - radius : y + radius, x - radius : x + radius]
+                for x, y in beads
+            ]
+
+            percentile_map = np.percentile(bead_rois, 10, axis=(1, 2))
             for b_i, bead in enumerate(beads):
                 if not is_running():
                     return None
@@ -406,43 +575,21 @@ def get_excel(
                     last_progress = progress_percentage
                 x, y = bead
 
-                if (x - 2 * radius) > 0 and (x + 2 * radius) < max_size:
-                    if (y - 2 * radius) > 0 and (y + 2 * radius) < max_size:
-                        roi = flor_layer[
-                            y - radius : y + radius,
-                            x - radius : x + radius,
-                        ]
-                        brightness = np.median(roi)
+                roi = bead_rois[b_i]
+                brightness = np.median(roi)
+                flor_layer_background_intensity_local = percentile_map[b_i]
+                if flor_layer_background_intensity_local > 0:  # Corrected if statement
+                    signal_noise_ratio = (
+                        brightness - flor_layer_background_intensity_local
+                    ) / flor_layer_background_intensity_local
+                else:
+                    signal_noise_ratio = 0
 
-                        if (x - 2 * 20) > 0 and (x + 2 * 20) < max_size:
-                            if (y - 2 * 20) > 0 and (y + 2 * 20) < max_size:
-                                local_flor_layer = flor_layer[
-                                    y - radius : y + radius,
-                                    x - radius : x + radius,
-                                ]
-                                flor_layer_background_intensity_local = np.percentile(
-                                    local_flor_layer, 10
-                                )
-                                if (
-                                    flor_layer_background_intensity_local > 0
-                                ):  # Corrected if statement
-                                    signal_noise_ratio = (
-                                        brightness
-                                        - flor_layer_background_intensity_local
-                                    ) / flor_layer_background_intensity_local
-                                    layer_threshold_bool = (
-                                        brightness > layer_threshold_dict[layer]
-                                    )
-                                else:
-                                    signal_noise_ratio = 0
-                            else:
-                                signal_noise_ratio = 0
-                        else:
-                            signal_noise_ratio = 0
-
-                        layer_specific_data[b_i] = brightness
-                        sig_noise_data[b_i] = signal_noise_ratio
-                        layer_threshold[b_i] = layer_threshold_bool  # boolean values
+                layer_specific_data[b_i] = brightness
+                sig_noise_data[b_i] = signal_noise_ratio
+                layer_threshold[b_i] = (
+                    brightness > layer_threshold_dict[layer]
+                )  # boolean values
 
             cycle_specific_data[:, i] = layer_specific_data
             cycle_specific_sig_noise_data[:, i] = sig_noise_data
