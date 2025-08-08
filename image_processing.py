@@ -9,13 +9,14 @@ import numpy as np
 import pandas as pd
 import tifffile as tiff
 import tqdm
-from csbdeep.utils import normalize
 from scipy.spatial import KDTree
 from skimage.exposure import match_histograms
 from skimage.measure import regionprops
 from skimage.segmentation import expand_labels
-from stardist.models import StarDist2D
-
+from skimage.filters import threshold_isodata, threshold_otsu
+from skimage.morphology import closing, square
+from skimage.segmentation import clear_border
+from skimage.measure import label, regionprops
 from model.file_item import MetaData
 
 
@@ -155,43 +156,65 @@ class TileMap:
         return np.array(centerpoints)
 
 
-def beadfinding(brightfield, preferred_thresholding, num_tiles=12, px_overlap=0):
+def beadfinding(brightfield, preferred_thresholding, num_tiles=12, px_overlap=20):
     # tilize brightfield 0 -> tilemap
-    tileset = TileMap("tm", brightfield, px_overlap, num_tiles)
+    # tileset = TileMap("tm", brightfield, px_overlap, num_tiles)
 
     # build tilaziable list
-    all_beads = np.array([[0, 0]])
+    # all_beads = np.array([[0, 0]])
 
-    # filtering information, min and max to exclude
-    filter_min = px_overlap
-    filter_max = px_overlap + brightfield.shape[0] // num_tiles
+    # # filtering information, min and max to exclude
+    # filter_min = px_overlap
+    # filter_max = px_overlap + brightfield.shape[0] // num_tiles
 
-    # for tile t in tilemap
-    i = 0
-    for tile, bounds in tileset:
+    # # for tile t in tilemap
+    # i = 0
+    # for tile, bounds in tileset:
+    #     # thresholded_image = preferred_thresholding(tile)
+    #     # contours, _ = cv2.findContours(
+    #     #     thresholded_image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
+    #     # )
 
-        thresholded_image = preferred_thresholding(tile)
-        contours, _ = cv2.findContours(
-            thresholded_image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
-        )
+    #     beads = find_beads(tile)
 
-        beads = np.array(
-            [bead_filter(bead_center(x), filter_min, filter_max) for x in contours],
-            dtype=np.uint16,
-        )
+    #     tile_top_left_x = bounds["center"][0] - tileset.tile_size - bounds["xmin"] / 2
+    #     tile_top_left_y = bounds["center"][1] - tileset.tile_size - bounds["ymin"] / 2
 
-        tile_top_left_x = bounds["center"][0] - tileset.tile_size - bounds["xmin"] / 2
-        tile_top_left_y = bounds["center"][1] - tileset.tile_size - bounds["ymin"] / 2
+    #     beads[:, 0] += round(tile_top_left_x)
+    #     beads[:, 1] += round(tile_top_left_y)
 
-        beads[:, 0] += round(tile_top_left_x)
-        beads[:, 1] += round(tile_top_left_y)
+    #     all_beads = np.concatenate((all_beads, beads), axis=0)
 
-        all_beads = np.concatenate((all_beads, beads), axis=0)
+    #     i += 1
+    # old method missed around 5% of beads, even after second pass
+    # new method gets more beads and is like 2 passes in one
+    # since second pass doesn't rarely adds new beads
+    # (2688242-2548509)/2688242 = 0.0519793233
+    
+    # in addition, new method centroids are more centered than before
+    # think before they were skewed top left due to always rounding down
+    
+    # new method also gives regions that can be displayed
+    all_beads,roi_coords = find_beads(brightfield)
+    
+    return all_beads,roi_coords
 
-        i += 1
+def find_beads(brightfield):
+    mask = threshold_otsu(brightfield)
+    bw = closing(brightfield > mask, square(1))
 
-    return all_beads
-
+    cleared = clear_border(bw)
+    label_image = label(cleared)
+    centers =[]
+    coords = []
+    for region in regionprops(label_image, brightfield):
+        y, x = region.centroid_weighted
+        coords.append(region.coords)
+        centers.append([x,y])
+    centers = np.array(centers)
+    centers = np.rint(centers)
+    centers = centers.astype(np.uint16)
+    return centers, coords
 
 def scale(arr):
     return ((arr - arr.min()) * (1 / (arr.max() - arr.min()) * 255)).astype("uint8")
@@ -476,6 +499,58 @@ def edge_bead_filtering(radius, max_size):
 #     export_to_excel = np.hstack((beads, export_to_excel))
 #     return export_to_excel
 
+import numpy as np
+from collections import defaultdict
+import concurrent.futures
+from functools import partial
+
+def process_bead_batch(args):
+    """Process a batch of beads for a single layer"""
+    (flor_layer, beads_batch, radius, layer_threshold, roi_coords_batch, 
+    start_idx, end_idx, reference_for_hist_match) = args
+    
+    batch_size = end_idx - start_idx
+    layer_specific_data = np.zeros(batch_size, dtype="uint16")
+    sig_noise_data = np.zeros(batch_size, dtype="float")
+    layer_threshold_data = np.zeros(batch_size, dtype="float")
+    
+    # Apply histogram matching if needed
+    if reference_for_hist_match is not None:
+        flor_layer = match_histograms(flor_layer, reference_for_hist_match)
+    
+    # Process each bead in the batch
+    if roi_coords_batch is not None:
+        # Use provided ROI coordinates
+        bead_rois = [
+            flor_layer[coords[:, 0], coords[:, 1]]
+            for coords in roi_coords_batch
+        ]
+    else:
+        # Use circular ROI around bead coordinates
+        bead_rois = [
+            flor_layer[y - radius : y + radius, x - radius : x + radius]
+            for x, y in beads_batch
+        ]
+    
+    percentile_map = [np.percentile(region_vals, 10) for region_vals in bead_rois]
+    
+    for b_i, bead in enumerate(beads_batch):
+        roi = bead_rois[b_i]
+        brightness = np.median(roi)
+        flor_layer_background_intensity_local = percentile_map[b_i]
+        
+        if flor_layer_background_intensity_local > 0:
+            signal_noise_ratio = (
+                brightness - flor_layer_background_intensity_local
+            ) / flor_layer_background_intensity_local
+        else:
+            signal_noise_ratio = 0
+
+        layer_specific_data[b_i] = brightness
+        sig_noise_data[b_i] = signal_noise_ratio
+        layer_threshold_data[b_i] = brightness > layer_threshold
+    
+    return layer_specific_data, sig_noise_data, layer_threshold_data
 
 def get_excel(
     beads,
@@ -485,10 +560,12 @@ def get_excel(
     layer_threshold_dict=defaultdict(int),
     progress_callback=None,
     is_running_callback=None,
+    roi_coords=None,
+    batch_size=50000,  # Process in batches
+    n_workers=6  # Number of parallel workers
 ):
     def update_progress_internal(value, message):
         if progress_callback:
-            # Scale the internal progress (0-100) to a sub-range of the overall progress (40-90)
             overall_progress = 40 + (value / 100) * 50
             progress_callback(int(overall_progress), message)
 
@@ -497,16 +574,20 @@ def get_excel(
             return is_running_callback()
         return True
 
-    beads = list(filter(edge_bead_filtering(20, max_size), beads))
+    # beads = np.array(list(filter(edge_bead_filtering(20, max_size), beads)))
+    # print(f"Processing {beads.shape[0]} beads")
+    
     ColorThreshold = signal_to_noise_cutoff
     export_to_excel = np.zeros((len(beads), len(tifs)), dtype="uint8")
 
     results_from_cycles = []
     results_from_cycles_SNR = []
     results_from_cycles_Sig_absolute_threshold = []
+    
     tif_metadata = [f.metadata for _, f in tifs]
-    tif_images = [img for img, _ in tifs]
-    # flor layer is all channels except brightfield
+    tif_images = [np.array(img) for img, _ in tifs]
+    
+    # Setup flors layers
     for i, md in enumerate(tif_metadata):
         assert isinstance(md, MetaData)
         md.flors_layers = [
@@ -515,19 +596,26 @@ def get_excel(
         print(
             f"Flors layers for tif {i} are {md.flors_layers}, reference channel is {md.reference_channel}"
         )
-    # GETTING ALL THE BEAD BRIGHTNESSES
+
     total_beads = len(beads)
     total_cycles = len(tif_metadata)
     total_layers_per_cycle = (
         len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
     )
-    total_steps = total_cycles * total_layers_per_cycle * total_beads
     radius = 2
+    # roi_coords = np.array(roi_coords)
+    bounding_boxes = np.array(len(beads))
+    if roi_coords is not None:
+        coords_array = [np.array(region) for region in roi_coords]
 
-    current_step = 0
+        bounding_boxes = [
+            (*region.min(axis=0), *region.max(axis=0)) for region in coords_array
+        ]
+    # Process each cycle
     for tif_count, md in enumerate(tif_metadata):
         if not is_running():
             return None
+            
         reference_for_hist_match = None
 
         cycle_specific_data = np.zeros(
@@ -543,57 +631,53 @@ def get_excel(
         for i, layer in enumerate(md.flors_layers):
             if not is_running():
                 return None
+                
             flor_layer = tif_images[tif_count][layer, :, :]
 
             if reference_for_hist_match is None:
                 reference_for_hist_match = flor_layer
+                hist_match_ref = None  # Don't match first layer to itself
             else:
-                flor_layer = match_histograms(flor_layer, reference_for_hist_match)
+                hist_match_ref = reference_for_hist_match
 
-            layer_specific_data = np.zeros(len(beads), dtype="uint16")
-            sig_noise_data = np.zeros(len(beads), dtype="float")
-            layer_threshold = np.zeros(len(beads), dtype="float")
-            last_progress = -1
-            # filter out edge beads:
-            max_size = md.max_size
-            bead_rois = [
-                flor_layer[y - radius : y + radius, x - radius : x + radius]
-                for x, y in beads
-            ]
-
-            percentile_map = np.percentile(bead_rois, 10, axis=(1, 2))
-            for b_i, bead in enumerate(beads):
-                if not is_running():
-                    return None
-                current_step += 1
-                progress_percentage = int((current_step / total_steps) * 100)
-                if progress_percentage != last_progress:
-                    update_progress_internal(
-                        progress_percentage,
-                        f"Processing cycle {tif_count + 1}/{total_cycles}, layer {i + 1}/{total_layers_per_cycle}, bead {b_i + 1}/{total_beads}",
-                    )
-                    last_progress = progress_percentage
-                x, y = bead
-
-                roi = bead_rois[b_i]
-                brightness = np.median(roi)
-                flor_layer_background_intensity_local = percentile_map[b_i]
-                if flor_layer_background_intensity_local > 0:  # Corrected if statement
-                    signal_noise_ratio = (
-                        brightness - flor_layer_background_intensity_local
-                    ) / flor_layer_background_intensity_local
-                else:
-                    signal_noise_ratio = 0
-
-                layer_specific_data[b_i] = brightness
-                sig_noise_data[b_i] = signal_noise_ratio
-                layer_threshold[b_i] = (
-                    brightness > layer_threshold_dict[layer]
-                )  # boolean values
-
-            cycle_specific_data[:, i] = layer_specific_data
-            cycle_specific_sig_noise_data[:, i] = sig_noise_data
-            cycle_specific_Sig_absolute_threshold_data[:, i] = layer_threshold
+            layer_threshold = layer_threshold_dict[layer]
+            
+            # Create batches for parallel processing
+            n_batches = (total_beads + batch_size - 1) // batch_size
+            batch_args = []
+            
+            for batch_idx in range(n_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min((batch_idx + 1) * batch_size, total_beads)
+                
+                beads_batch = beads[start_idx:end_idx]
+                roi_coords_batch = roi_coords[start_idx:end_idx] if roi_coords else None
+                
+                batch_args.append((
+                    flor_layer, beads_batch, radius, layer_threshold, 
+                    roi_coords_batch, start_idx, end_idx, hist_match_ref
+                ))
+            
+            # Process batches in parallel
+            with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
+                batch_results = list(executor.map(process_bead_batch, batch_args))
+            
+            # Combine results from all batches
+            for batch_idx, (layer_data, snr_data, threshold_data) in enumerate(batch_results):
+                start_idx = batch_idx * batch_size
+                end_idx = min((batch_idx + 1) * batch_size, total_beads)
+                
+                cycle_specific_data[start_idx:end_idx, i] = layer_data
+                cycle_specific_sig_noise_data[start_idx:end_idx, i] = snr_data
+                cycle_specific_Sig_absolute_threshold_data[start_idx:end_idx, i] = threshold_data
+            
+            # Update progress
+            progress = ((tif_count * total_layers_per_cycle + i + 1) / 
+                       (total_cycles * total_layers_per_cycle)) * 100
+            update_progress_internal(
+                progress,
+                f"Processing cycle {tif_count + 1}/{total_cycles}, layer {i + 1}/{total_layers_per_cycle}"
+            )
 
         results_from_cycles.append(cycle_specific_data)
         results_from_cycles_SNR.append(cycle_specific_sig_noise_data)
@@ -605,16 +689,31 @@ def get_excel(
         export_to_excel[:, tif_count] = brightest_layers
 
         for i, row in enumerate(cycle_specific_sig_noise_data):
-            if np.max(row) < ColorThreshold:
+            # if np.max(row) < ColorThreshold
+            # ^ Previoys if statement, it filtered out rows
+            # if any one of the channels were noisy
+            # but this led to a lot of good/clear beads being filtered 
+            # There were cases where there is a clear channel with a clear bead in the roi
+            # but was filtered out because other channels were noisy 
+            
+            # so changed to if the channels are all noisy
+            if np.min(row) > 1-ColorThreshold:
                 export_to_excel[i, tif_count] = 255
+                print("Sig noise filtered:", beads[i])
 
         for i, row in enumerate(cycle_specific_Sig_absolute_threshold_data):
             if np.all(row) == 0:
                 export_to_excel[i, tif_count] = 255
+                print("threshold filtered: ", beads[i])
 
-    export_to_excel = np.hstack((beads, export_to_excel))
+    # Add bead coordinates as first two columns
+    # bounding_boxes: shape (N, 4)
+    bounding_boxes_str = np.array([
+        f"({x1}, {y1}, {x2}, {y2})" for x1, y1, x2, y2 in bounding_boxes
+    ]).reshape(-1, 1)  # Make it a column vector
+    export_to_excel = np.hstack((beads[:, :2], export_to_excel, bounding_boxes_str))
+    print(f"Final get excel length: {len(export_to_excel)}")
     return export_to_excel
-
 
 def blur_layer(layer, image_stack, blur_percentage=1):
     layer_4 = image_stack[layer]  # Modify the 4th layer
@@ -1039,15 +1138,15 @@ def process_beads(
     update_progress(0, "Preprocessing brightfield image...")
     if not is_running():
         return None
-    log(f"Preprocessing brightfield image (max_size: {max_size})")
-    brightfield = preprocess_brightfield(brightfield, max_size)
+    # log(f"Preprocessing brightfield image (max_size: {max_size})")
+    # brightfield = preprocess_brightfield(brightfield, max_size)
     log(f"Preprocessed to shape: {brightfield.shape}")
     update_progress(10, "Initial bead detection...")
     if not is_running():
         return None
 
     log("Initial bead detection...")
-    beads = beadfinding(brightfield, thresholding)
+    beads,roi_coords = beadfinding(brightfield, thresholding)
     initial_bead_count = len(beads)
     log(f"Initial bead detection found {initial_bead_count} beads")
     update_progress(20, "Removing duplicate beads...")
@@ -1064,10 +1163,10 @@ def process_beads(
     if not is_running():
         return None
 
-    log("Performing second pass bead detection...")
-    beads = second_pass_beadfinding(brightfield, beads)
+    # log("Performing second pass bead detection...")
+    # beads = second_pass_beadfinding(brightfield, beads)
     final_bead_count = len(beads)
-    log(f"Second pass found {final_bead_count - unique_bead_count} additional beads")
+    # log(f"Second pass found {final_bead_count - unique_bead_count} additional beads")
     log(f"Total beads detected from brightfield layer: {final_bead_count}")
     update_progress(40, "Calculating signal-to-noise ratios...")
     if not is_running():
@@ -1082,6 +1181,7 @@ def process_beads(
         max_size,
         progress_callback=progress_callback,
         is_running_callback=is_running,
+        roi_coords = roi_coords
     )
     if not is_running():
         return None
@@ -1089,17 +1189,18 @@ def process_beads(
     update_progress(90, "Filtering out rows with all zeros...")
     log(f"Beads with valid protein data: {len(bead_data)}")
     filtered_rows = []
-    log("Filtering out rows with all zeros in protein channels...")
+    log("Filtering out rows set to 255 in protein channels...")
     for i, row in enumerate(tqdm.tqdm(bead_data)):
         if not is_running():
             return None
-        if not np.any(bead_data[i, 2:] == 255):
+        if not np.any(bead_data[i, 2:-1] == 255):
             filtered_rows.append(row)
     filtered_rows = np.array(filtered_rows)
     bead_data = filtered_rows
     headers = ["x", "y"]
     for i in range(len(tifs)):
         headers.append(f"cy{i}")
+    headers.append("bbox")
     df = pd.DataFrame(bead_data, columns=headers)
     log(f"Dataframe created with shape: {df.shape}")
     update_progress(100, "Bead generation complete.")

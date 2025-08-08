@@ -4,14 +4,15 @@ import numpy as np
 import pandas as pd
 import tifffile as tiff
 from PyQt6.QtWidgets import QApplication
-
+from PIL import Image
 from view import roi_inspector
 
 if __name__ == "__main__":
     # Example usage: load a CSV file and print its contents
 
     #
-    df = pd.read_csv("test_outputs/efficient_test.csv")
+    df = pd.read_csv("withbbox.csv")
+    bboxs = df.pop("bbox")
     print(df.head())
     print(f"Loaded {len(df)} beads from CSV.")
 
@@ -27,8 +28,11 @@ if __name__ == "__main__":
     cycle2 = np.array(cycle2)[1:]
     print(f"Loaded BF image with shape {bf_image.shape}.")
     app = QApplication([])
+    labeled_image = Image.open("labeled_image.png").convert('RGB')
+    labeled_image = np.array(labeled_image)
+    print(labeled_image.shape)
     inspector = roi_inspector.ROI_Inspector(
-        {"bf_image": bf_image, "beads": df, "cycles": {"cy0": cycle1, "cy1": cycle2}}
+        {"bf_image": bf_image, "beads": df, "cycles": {"cy0": cycle1, "cy1": cycle2}, "bboxs":bboxs, "labeled_image":labeled_image}
     )
     inspector.show()
     sys.exit(app.exec())
