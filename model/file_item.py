@@ -16,7 +16,7 @@ class MetaData:
     PhysicalSizeY: float = 0.3250
     max_size: int = 10000
     reference_channel: int = 0
-    prefix: str = "changed_"
+    prefix: str = "changed"
     overlap: int = 250
     num_tiles: int = 10
     flors_layers: list[int] | None = None  # filled in later

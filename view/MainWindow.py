@@ -168,16 +168,7 @@ class MainWindow(QMainWindow):
                 item.setData(Qt.ItemDataRole.UserRole, file_item)
 
     def get_selected_files(self) -> List[FileItem]:
-        selected_items = self.file_table_widget.selectedItems()
-        selected_files = []
-        for item in selected_items:
-            if item.column() == 0:  # Filename column
-                file_item = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(file_item, FileItem):
-                    selected_files.append(file_item)
-        # sort by path to have consistent order
-        selected_files.sort(key=lambda x: x.path)
-        return selected_files
+        return self.file_table_widget.get_selected_files()
 
     def handle_selection_change(self):
         selected_files = self.get_selected_files()
@@ -190,6 +181,7 @@ class MainWindow(QMainWindow):
             if os.path.isdir(path):
                 self.vm.load_folder(path)
             elif os.path.isfile(path):
+                print("loading file:", path)
                 self.vm.load_file(path)
 
     def on_load_folder(self):

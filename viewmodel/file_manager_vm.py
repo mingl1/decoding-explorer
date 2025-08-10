@@ -3,12 +3,13 @@ from email.mime import image
 from math import e
 from weakref import ref
 
+import imageio.v3 as iio  # or PIL / cv2
 import numpy as np
 import pandas as pd
 import tifffile
 from pandas import DataFrame
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
-from tifffile import TiffFile
+from tifffile import TiffFile, TiffFileError
 
 import image_processing
 import utils
@@ -122,9 +123,23 @@ class FileManagerVM(QObject):
     def load_file(self, file_path):
         if os.path.isfile(file_path):
             self.files[file_path] = FileItem(path=file_path)
-            shape, dtype = get_tif_info(file_path)
+
+            try:
+                # Try TIFF-specific metadata extraction
+                shape, dtype = get_tif_info(file_path)
+            except (OSError, ValueError, TiffFileError):
+                # Fallback: load as generic image array
+                try:
+                    arr = iio.imread(file_path)
+                    shape = arr.shape
+                    dtype = arr.dtype
+                except Exception as e:
+                    print(f"Failed to load {file_path}: {e}")
+                    return  # Can't even load as generic image
+
             self.files[file_path].shape = shape
             self.files[file_path].dtype = str(dtype)
+
             if file_path not in self.emitted_files:
                 self.emitted_files.add(file_path)
                 self.file_list_updated.emit([self.files[file_path]])
@@ -159,8 +174,12 @@ class FileManagerVM(QObject):
     def align_channels(self, selected_files: list[FileItem]):
         if not self.reference_item:
             return
+        # import here to avoid startup overhead
         from align_arrays import Register
 
+        selected_files = [
+            f for f in selected_files if f.path != self.reference_item.path
+        ]
         alignable_images = []
         for f in selected_files:
             image = np.array(load_image(f.path, int(f.metadata.max_size)))
@@ -229,6 +248,13 @@ class FileManagerVM(QObject):
             to_be_updated.append(my_f)
         self.file_status_updated.emit(to_be_updated)
 
+    def delete_files(self, selected_files: list[FileItem]):
+        for f in selected_files:
+            if f.path in self.files:
+                del self.files[f.path]
+                if f.path in self.emitted_files:
+                    self.emitted_files.remove(f.path)
+
     def cancel_alignment(self):
         if self.register_thread:
             self.register_thread.cancel()
@@ -238,6 +264,7 @@ class FileManagerVM(QObject):
             self.bead_thread.cancel()
 
     def set_reference(self, file_item: FileItem):
+        to_be_updated = []
         if self.reference_item:
             if self.reference_item.path in self.files:
                 working_image = self.files[self.reference_item.path].working_image
@@ -249,9 +276,11 @@ class FileManagerVM(QObject):
                     )
                 elif len(working_image.shape) > 2:
                     self.files[self.reference_item.path].status = FileStatus.ALIGNED
+                to_be_updated.append(self.files[self.reference_item.path])
         self.reference_item = file_item
         self.files[file_item.path].status = FileStatus.REFERENCE
-        self.file_status_updated.emit([self.files[file_item.path]])
+        to_be_updated.append(self.files[file_item.path])
+        self.file_status_updated.emit(to_be_updated)
 
     def export_files(self, folder_path: str, selected_files: list[FileItem]):
         total_files = len(selected_files)
@@ -300,6 +329,7 @@ class FileManagerVM(QObject):
         ), "Reference item must be set before generating beads."
         tifs = []
         curr_files = self.selected_files
+        curr_reference = self.reference_item
         curr_files.insert(0, self.reference_item)
         for f in curr_files:
             my_f = self.files.get(f.path)
@@ -346,15 +376,15 @@ class FileManagerVM(QObject):
             signal_to_noise_cutoff=0.1,
         )
         self.bead_thread.beads_generated.connect(
-            lambda res: self._on_beads_generated(res)
+            lambda res: self._on_beads_generated(res, curr_reference.path)
         )
         self.bead_thread.progress.connect(self.bead_progress.emit)
         self.bead_thread.start()
 
-    def _on_beads_generated(self, results):
+    def _on_beads_generated(self, results, reference_path):
         to_be_updated = []
-        self.files[self.reference_item.path].beads = results
-        to_be_updated.append(self.files[self.reference_item.path])
+        self.files[reference_path].beads = results
+        to_be_updated.append(self.files[reference_path])
         self.beads_generated.emit(results)
         self.file_status_updated.emit(to_be_updated)
 

@@ -54,8 +54,6 @@ class MetadataView(QWidget):
         )
         self.align_channels_btn = QPushButton("Align to Reference")
         self.align_channels_btn.clicked.connect(self.vm.align_channels)
-        self.export_all_btn = QPushButton("Export Selected Images")
-        self.export_all_btn.clicked.connect(self.export_all)
         self.generate_beads_btn = QPushButton("Generate and Export Beads")
         self.generate_beads_btn.clicked.connect(self.generate_beads_sig.emit)
         self.inspect_beads_btn = QPushButton("Inspect Beads")
@@ -77,7 +75,6 @@ class MetadataView(QWidget):
         self.form_layout.addRow("Num Tiles:", self.num_tiles_input)
         self.form_layout.addRow("Overlap:", self.overlap_input)
         self.form_layout.addRow(self.align_channels_btn)
-        self.form_layout.addRow(self.export_all_btn)
         self.form_layout.addRow(self.generate_beads_btn)
         self.form_layout.addRow(self.inspect_beads_btn)
 

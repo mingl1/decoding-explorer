@@ -1,17 +1,25 @@
 import os
+from typing import List
 
 from PyQt6.QtCore import QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import QAction, QColor, QFont, QPainter, QPen
 from PyQt6.QtSvg import QSvgRenderer  # For rendering SVGs
-from PyQt6.QtWidgets import QHeaderView, QMenu, QTableWidget, QTableWidgetItem
+from PyQt6.QtWidgets import (
+    QFileDialog,
+    QHeaderView,
+    QMenu,
+    QTableWidget,
+    QTableWidgetItem,
+)
 
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from utils import resource_path
+from viewmodel.file_manager_vm import FileManagerVM
 
 
 class FileTableWidget(QTableWidget):
-    def __init__(self, file_dropped_callback, vm):
+    def __init__(self, file_dropped_callback, vm: FileManagerVM):
         super().__init__(0, 4)  # columns: path, shape, dtype, status
         self.setAcceptDrops(True)
         self.setSortingEnabled(True)
@@ -110,6 +118,20 @@ class FileTableWidget(QTableWidget):
                     filename_item.setData(Qt.ItemDataRole.UserRole, file_item)
                     print(f"Updated status for {file_path} to {file_item.status}")
 
+    def get_selected_files(self) -> List[FileItem]:
+        selected_items = self.selectedItems()
+        selected_files = []
+        for item in selected_items:
+            if item.column() == 0:  # Filename column
+                file_item = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(file_item, FileItem):
+                    selected_files.append(file_item)
+        # sort by path to have consistent order
+        selected_files.sort(key=lambda x: x.path)
+        # remove reference file if selected:
+        selected_files = [f for f in selected_files]
+        return selected_files
+
     def open_context_menu(self, position):
         index = self.indexAt(position)
         if not index.isValid():
@@ -121,6 +143,36 @@ class FileTableWidget(QTableWidget):
         menu = QMenu(self)
         set_ref_action = QAction("Set as Reference Image", self)
         set_ref_action.triggered.connect(lambda: self.vm.set_reference(file_item))
-        menu.addAction(set_ref_action)
+        selected_items = self.get_selected_files()
+        if len(selected_items) == 1:
+            menu.addAction(set_ref_action)
+        export_files_action = QAction("Export As TIFF", self)
+
+        def export_files():
+            folder = QFileDialog.getExistingDirectory()
+            if folder:
+                self.vm.export_files(folder, selected_items)
+
+        export_files_action.triggered.connect(export_files)
+        menu.addAction(export_files_action)
+
+        delete_action = QAction("Delete", self)
+        delete_action.triggered.connect(self.handle_delete_selected)
+        menu.addAction(delete_action)
 
         menu.exec(self.viewport().mapToGlobal(position))
+
+    def handle_delete_selected(self):
+        # delete ui rows:
+        selection_model = self.selectionModel()
+        assert selection_model is not None
+        rows = sorted(
+            {index.row() for index in selection_model.selectedRows()}, reverse=True
+        )
+        my_model = self.model()
+        assert my_model is not None
+        for row in rows:
+            my_model.removeRow(row)
+        # delete from vm:
+        selected_files = self.get_selected_files()
+        self.vm.delete_files(selected_files)

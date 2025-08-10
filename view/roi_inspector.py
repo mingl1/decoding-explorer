@@ -1,6 +1,8 @@
 import math
+import re
 
 import numpy as np
+import pandas as pd
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
@@ -8,7 +10,6 @@ from PyQt6.QtGui import (
     QDoubleValidator,
     QImage,
     QIntValidator,
-    QKeyEvent,
     QPainter,
     QPen,
     QPixmap,
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -28,12 +30,10 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSlider,
     QVBoxLayout,
-    QGridLayout
-    
 )
-import re
+
 from utils import adjust_contrast, to_uint8
-import pandas as pd
+
 
 class NullableIntValidator(QIntValidator):
     def validate(self, input_str, pos):
@@ -102,9 +102,9 @@ class ROI_Inspector(QDialog):
 
         self.target_image = snapshot_data["bf_image"].copy()
         self.beads = snapshot_data.get("beads", None)
-        self.cycles = snapshot_data.get("cycles",None)
-        self.bboxs = snapshot_data.get("bboxs",None)
-        self.labeled_image = snapshot_data.get("labeled_image",None)
+        self.cycles = snapshot_data.get("cycles", None)
+        self.bboxs = snapshot_data.get("bboxs", None)
+        self.labeled_image = snapshot_data.get("labeled_image", None)
         # adjust cycles contrast:
         if self.beads is None:
             print("Warning: No beads data provided.")
@@ -203,7 +203,8 @@ class ROI_Inspector(QDialog):
         self.control_layout.addWidget(trans_group)
         self.control_layout.addWidget(radius_group)
         self.control_layout.addWidget(scale_group)
-        self.control_layout.addWidget(roi_mode_group)
+        if self.labeled_image is not None:
+            self.control_layout.addWidget(roi_mode_group)
         self.control_layout.addStretch()
         self.control_layout.addWidget(self.reset_button)
         self._setup_confirm_cancel_buttons()
@@ -275,7 +276,7 @@ class ROI_Inspector(QDialog):
             2 * radius * scale,
             Qt.AspectRatioMode.KeepAspectRatio,
         )
-        assert isinstance(self.beads,pd.DataFrame)
+        assert isinstance(self.beads, pd.DataFrame)
         output = self.beads.query(f"x=={x} & y=={y}")
         bbox = None
         idx = None
@@ -283,15 +284,15 @@ class ROI_Inspector(QDialog):
             idx = output.index[0]
             if self.bboxs is not None:
                 bbox = self.bboxs.loc[idx]
-                h,w = self.target_image.shape
+                h, w = self.target_image.shape
                 y1, x1, y2, x2 = map(int, re.findall(r"-?\d+", bbox))
                 # Clip to image bounds
                 x1 = np.clip(x1, 0, w - 1)
                 x2 = np.clip(x2, 0, w - 1)
                 y1 = np.clip(y1, 0, h - 1)
                 y2 = np.clip(y2, 0, h - 1)
-                bbox = (x1,y1,x2,y2)
-        if not self.roi_mode_input.isChecked():
+                bbox = (x1, y1, x2, y2)
+        if self.labeled_image is None or not self.roi_mode_input.isChecked():
             bbox = None
         assert isinstance(x, int) and isinstance(y, int)
         print(f"Inspecting ROI at ({x}, {y}) with radius {radius} and scale {scale}")
@@ -309,7 +310,7 @@ class ROI_Inspector(QDialog):
             y0 = max(0, y - int(radius * scale))
             y1 = min(h, y + int(radius * scale))
             if bbox is not None:
-                x0,y0,x1,y1 = expand_bbox(bbox,scale)
+                x0, y0, x1, y1 = expand_bbox(bbox, scale)
             if cycle.ndim == 3:
                 roi = cycle[:, y0:y1, x0:x1]
             else:
@@ -318,10 +319,6 @@ class ROI_Inspector(QDialog):
             print(
                 f"Cycle {key}: extracted ROI shape {roi.shape} at ({x0}:{x1}, {y0}:{y1})"
             )
-                
-
-        
-                
 
         popup = ROI_Grid_Display(rois, (x, y), radius, scale, bbox, output)
         popup.exec()  # modal dialog to display ROIs
@@ -341,7 +338,7 @@ class ROI_Inspector(QDialog):
     def create_direct_overlay(self):
         print("Creating direct overlay")
         rgb_image = None
-        if not self.roi_mode_input.isChecked():
+        if self.labeled_image is None or not self.roi_mode_input.isChecked():
             target_gray = to_uint8(self.target_image)
 
             if self.adjust_contrast:
@@ -353,7 +350,7 @@ class ROI_Inspector(QDialog):
             rgb_image = np.stack([target_gray] * 3, axis=-1)  # Shape: (H, W, 3)
         else:
             rgb_image = self.labeled_image
-        assert isinstance(rgb_image,np.ndarray)
+        # assert isinstance(rgb_image, np.ndarray)
         h, w = rgb_image.shape[:-1]
 
         # Draw red centers
@@ -380,7 +377,7 @@ class ROI_Inspector(QDialog):
         #     rgb_image[y2, x1:x2+1] = [255, 255, 255]  # Bottom
         #     rgb_image[y1:y2+1, x1] = [255, 255, 255]  # Left
         #     rgb_image[y1:y2+1, x2] = [255, 255, 255]  # Right
-            # draw bounding box white outline
+        # draw bounding box white outline
         # self.bbox, same length as self.beads, indexed same
 
         # Convert to QImage and show
@@ -392,7 +389,15 @@ class ROI_Inspector(QDialog):
 
 
 class ROI_Grid_Display(QDialog):
-    def __init__(self, rois: dict, center: tuple, radius: int, scale: float, bbox, output:pd.DataFrame|None=None):
+    def __init__(
+        self,
+        rois: dict,
+        center: tuple,
+        radius: int,
+        scale: float,
+        bbox,
+        output: pd.DataFrame | None = None,
+    ):
         super().__init__(None)
         self.setWindowTitle("ROI Grid Display")
         self.resize(800, 600)
@@ -408,28 +413,31 @@ class ROI_Grid_Display(QDialog):
         row = 1
         # channels are columns
         # rows are cycles
-        num_channels = len(rois.get("cy0",np.array([])))
+        num_channels = len(rois.get("cy0", np.array([])))
         for i in range(len(rois)):
             cycle_label = QLabel(f"Cycle {i}")
-            grid_layout.addWidget(cycle_label,i+1,0)
+            grid_layout.addWidget(cycle_label, i + 1, 0)
         for i in range(num_channels):
             channel_label = QLabel(f"Channel {i}")
-            grid_layout.addWidget(channel_label,0,i+1)
+            grid_layout.addWidget(channel_label, 0, i + 1)
         if output is not None and len(output):
             out_label = QLabel(f"Output")
-            grid_layout.addWidget(out_label,0,num_channels+1)
-        
+            grid_layout.addWidget(out_label, 0, num_channels + 1)
+
         for key, roi in rois.items():
             col = 1
             if roi.ndim == 3:
                 # Multi-channel
                 for c in range(roi.shape[0]):
-                    roi_colorized = colorize_grayscale(
-                        to_uint8(roi[c]), c
+                    roi_colorized = colorize_grayscale(to_uint8(roi[c]), c)
+                    roi_label = OverlayLabel(
+                        roi_colorized.scaled(
+                            50, 50, Qt.AspectRatioMode.KeepAspectRatio
+                        ),
+                        bbox,
                     )
-                    roi_label = OverlayLabel(roi_colorized.scaled(50, 50, Qt.AspectRatioMode.KeepAspectRatio),bbox)
-                    grid_layout.addWidget(roi_label,row,col)
-                    col+=1
+                    grid_layout.addWidget(roi_label, row, col)
+                    col += 1
             elif roi.ndim == 2:
                 # Single channel
                 pixmap = colorize_grayscale(to_uint8(roi), 0)
@@ -443,23 +451,25 @@ class ROI_Grid_Display(QDialog):
                 except:
                     pred = None
                 if pred is None:
-                    pred= "N/A"
+                    pred = "N/A"
                 else:
-                    pred= str(pred.iloc[0])
+                    pred = str(pred.iloc[0])
                 output_label = QLabel(pred)
-                grid_layout.addWidget(output_label,row,col)
-            row+=1
-            
-        layout.addLayout(grid_layout,6)
+                grid_layout.addWidget(output_label, row, col)
+            row += 1
+
+        layout.addLayout(grid_layout, 6)
 
         close_button = QPushButton("Close")
         close_button.clicked.connect(self.accept)
         layout.addWidget(close_button)
         self.setLayout(layout)
 
+
+from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QLabel
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
-from PyQt6.QtCore import Qt, QRectF
+
 
 class OverlayLabel(QLabel):
     def __init__(self, pixmap, bbox, parent=None):
@@ -473,17 +483,18 @@ class OverlayLabel(QLabel):
             self.rect_to_draw = None
 
     def paintEvent(self, event):
-        super().paintEvent(event) 
+        super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        pen = QPen(QColor('white'))
+
+        pen = QPen(QColor("white"))
         pen.setWidthF(0.5)
         painter.setPen(pen)
         if self.rect_to_draw is not None:
             painter.drawRect(self.rect_to_draw)
 
         painter.end()
+
 
 def bbox_to_qrectf(bbox):
     x1, y1, x2, y2 = bbox
@@ -503,14 +514,17 @@ def readable_matrix_string(matrix: np.ndarray) -> str:
     scale_y = math.sqrt(b**2 + d**2)
     return f"Translation: ({tx:.2f}, {ty:.2f}), Rotation: {angle_deg:.2f}°, Scale: (x: {scale_x:.2f}, y: {scale_y:.2f})"
 
-colors = [(27,158,119),(217,95,2),(117,112,179),(231,41,138)]
-def colorize_grayscale(gray_img: np.ndarray, color_indx:int) -> QPixmap:
+
+colors = [(27, 158, 119), (217, 95, 2), (117, 112, 179), (231, 41, 138)]
+
+
+def colorize_grayscale(gray_img: np.ndarray, color_indx: int) -> QPixmap:
     """Colorize grayscale image and make black pixels fully transparent."""
     h, w = gray_img.shape
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
     color = colors[color_indx]
-    for i,v in enumerate(color):
-        rgba[:,:,i] = v
+    for i, v in enumerate(color):
+        rgba[:, :, i] = v
 
     rgba[:, :, 3] = gray_img
 
@@ -527,6 +541,7 @@ def transform_to_matrix(t: QTransform):
         dtype=np.float32,
     )
     return matrix
+
 
 def expand_bbox(bbox, scale):
     x1, y1, x2, y2 = bbox
