@@ -1,5 +1,6 @@
 import concurrent.futures
 import itertools
+import os
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,6 +10,7 @@ import diplib as dip
 import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree, cKDTree
+from skimage.color import label2rgb
 from skimage.exposure import match_histograms
 from skimage.filters import threshold_isodata, threshold_otsu
 from skimage.measure import label, regionprops
@@ -227,24 +229,24 @@ def process_tile(idx, bounds, px_overlap, tile_size, brightfield_path):
     tile = bf[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
 
     # pad if needed
-    pad_top = max(0, 0 - ymin)
-    pad_bottom = max(0, ymax - bf.shape[0])
-    pad_left = max(0, 0 - xmin)
-    pad_right = max(0, xmax - bf.shape[1])
+    # pad_top = max(0, 0 - ymin)
+    # pad_bottom = max(0, ymax - bf.shape[0])
+    # pad_left = max(0, 0 - xmin)
+    # pad_right = max(0, xmax - bf.shape[1])
 
-    tile_padded = cv2.copyMakeBorder(
-        tile,
-        pad_top,
-        pad_bottom,
-        pad_left,
-        pad_right,
-        borderType=cv2.BORDER_CONSTANT,
-        value=0,
-    )
+    # tile_padded = cv2.copyMakeBorder(
+    #     tile,
+    #     pad_top,
+    #     pad_bottom,
+    #     pad_left,
+    #     pad_right,
+    #     borderType=cv2.BORDER_CONSTANT,
+    #     value=0,
+    # )
 
-    if tile_padded.size == 0 or tile_padded.shape[0] == 0 or tile_padded.shape[1] == 0:
-        return idx, np.empty((0, 2)), [], np.empty((0, 2)), []
-    beads, roi_coords = find_beads(tile_padded)  # user-provided
+    # if tile_padded.size == 0 or tile_padded.shape[0] == 0 or tile_padded.shape[1] == 0:
+    #     return idx, np.empty((0, 2)), [], np.empty((0, 2)), []
+    beads, roi_coords = find_beads(tile)  # user-provided
 
     # Adjust coordinates to global image space
     beads[:, 0] += xmin
@@ -269,7 +271,6 @@ def process_tile(idx, bounds, px_overlap, tile_size, brightfield_path):
     )
 
 
-# ---- Helper: merge two neighbor tiles' edge beads ----
 def merge_edge_pairs(beads1, rois1, beads2, rois2, radius=1):
     if len(beads1) == 0 or len(beads2) == 0:
         return beads1, rois1, beads2, rois2
@@ -306,66 +307,86 @@ def merge_edge_pairs(beads1, rois1, beads2, rois2, radius=1):
     return merged_beads, merged_rois, [], []
 
 
+import tempfile
+
+
 # ---- Main beadfinding ----
 def beadfinding(
-    brightfield, preferred_thresholding, num_tiles=10, px_overlap=50, workers=10
+    brightfield,
+    preferred_thresholding,
+    num_tiles=10,
+    px_overlap=100,
+    workers=10,
+    is_running_callback=None,
 ):
     # Memory-map the brightfield to avoid huge pickle overhead
     brightfield_path = "./tmp/brightfield_memmap.npy"
+    if not os.path.exists("./tmp"):
+        os.makedirs("./tmp")
     np.save(brightfield_path, brightfield)  # saved in .npy format for mmap use
 
-    tileset = TileMap("tm", brightfield, px_overlap, num_tiles)
-    tile_size = tileset.tile_size
+    try:
+        tileset = TileMap("tm", brightfield, px_overlap, num_tiles)
+        tile_size = tileset.tile_size
 
-    core_beads_map = {}
-    core_rois_map = {}
-    edge_beads_map = {}
-    edge_rois_map = {}
+        core_beads_map = {}
+        core_rois_map = {}
+        edge_beads_map = {}
+        edge_rois_map = {}
 
-    # ---- Parallel tile processing ----
-    with ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(
-                process_tile, idx, bounds, px_overlap, tile_size, brightfield_path
+        # ---- Parallel tile processing ----
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    process_tile, idx, bounds, px_overlap, tile_size, brightfield_path
+                )
+                for idx, (tile, bounds) in enumerate(tileset)
+            ]
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Processing tiles"
+            ):
+                if is_running_callback and not is_running_callback():
+                    executor.shutdown(wait=False)
+                    return None, None
+                idx, core_b, core_r, edge_b, edge_r = future.result()
+                core_beads_map[idx] = core_b
+                core_rois_map[idx] = core_r
+                edge_beads_map[idx] = edge_b
+                edge_rois_map[idx] = edge_r
+
+        # ---- Neighbor-only merging ----
+        neighbor_pairs = (
+            tileset.get_neighbor_pairs()
+        )  # you’d implement this to return touching tile index pairs
+        for t1, t2 in tqdm(neighbor_pairs, desc="Merging edge overlaps"):
+            if is_running_callback and not is_running_callback():
+                return None, None
+            merged_b1, merged_r1, merged_b2, merged_r2 = merge_edge_pairs(
+                edge_beads_map[t1],
+                edge_rois_map[t1],
+                edge_beads_map[t2],
+                edge_rois_map[t2],
+                radius=1,
             )
-            for idx, (tile, bounds) in enumerate(tileset)
-        ]
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Processing tiles"
-        ):
-            idx, core_b, core_r, edge_b, edge_r = future.result()
-            core_beads_map[idx] = core_b
-            core_rois_map[idx] = core_r
-            edge_beads_map[idx] = edge_b
-            edge_rois_map[idx] = edge_r
+            edge_beads_map[t1], edge_rois_map[t1] = merged_b1, merged_r1
+            edge_beads_map[t2], edge_rois_map[t2] = merged_b2, merged_r2
 
-    # ---- Neighbor-only merging ----
-    neighbor_pairs = (
-        tileset.get_neighbor_pairs()
-    )  # you’d implement this to return touching tile index pairs
-    for t1, t2 in tqdm(neighbor_pairs, desc="Merging edge overlaps"):
-        merged_b1, merged_r1, merged_b2, merged_r2 = merge_edge_pairs(
-            edge_beads_map[t1],
-            edge_rois_map[t1],
-            edge_beads_map[t2],
-            edge_rois_map[t2],
-            radius=1,
-        )
-        edge_beads_map[t1], edge_rois_map[t1] = merged_b1, merged_r1
-        edge_beads_map[t2], edge_rois_map[t2] = merged_b2, merged_r2
+        # ---- Combine all beads ----
+        final_beads = []
+        final_rois = []
+        for idx in range(len(tileset)):
+            final_beads.extend(core_beads_map[idx])
+            final_rois.extend(core_rois_map[idx])
+            final_beads.extend(edge_beads_map[idx])
+            final_rois.extend(edge_rois_map[idx])
 
-    # ---- Combine all beads ----
-    final_beads = []
-    final_rois = []
-    for idx in range(len(tileset)):
-        final_beads.extend(core_beads_map[idx])
-        final_rois.extend(core_rois_map[idx])
-        final_beads.extend(edge_beads_map[idx])
-        final_rois.extend(edge_rois_map[idx])
-
-    final_beads = np.array(final_beads)
-    print(f"Final bead count: {final_beads.shape[0]} | ROI count: {len(final_rois)}")
-    return final_beads, final_rois
+        final_beads = np.array(final_beads)
+        print(f"Final bead count: {final_beads.shape[0]}")
+        return final_beads, final_rois
+    finally:
+        if os.path.exists(brightfield_path):
+            os.remove(brightfield_path)
+            log(f"Cleaned up temporary file: {brightfield_path}")
 
     # old method missed around 5% of beads, even after second pass
     # new method gets more beads and is like 2 passes in one
@@ -374,6 +395,38 @@ def beadfinding(
 
     # in addition, new method centroids are more centered than before
     # think before they were skewed top left due to always rounding down
+
+
+def merge_global_duplicates(beads, rois, bead_radius=5):
+    """
+    beads: list of (x, y) in global coordinates
+    rois: list of (x0, y0, x1, y1) in global coordinates
+    """
+    keep_beads = []
+    keep_rois = []
+
+    used = np.zeros(len(beads), dtype=bool)
+    for i in range(len(beads)):
+        if used[i]:
+            continue
+        group_idxs = [i]
+        for j in range(i + 1, len(beads)):
+            if used[j]:
+                continue
+            # Compare centroid distance instead of neighbors only
+            dist = np.linalg.norm(np.array(beads[i]) - np.array(beads[j]))
+            if dist <= bead_radius:
+                group_idxs.append(j)
+                used[j] = True
+        # Merge group (average centers, union bbox)
+        merged_center = np.mean([beads[k] for k in group_idxs], axis=0)
+        merged_box = np.array([rois[k] for k in group_idxs])
+        x0, y0 = merged_box[:, 0].min(), merged_box[:, 1].min()
+        x1, y1 = merged_box[:, 2].max(), merged_box[:, 3].max()
+
+        keep_beads.append(tuple(merged_center))
+        keep_rois.append((x0, y0, x1, y1))
+    return keep_beads, keep_rois
 
 
 def quadtree_threshold(img, min_size=32, max_std=10):
@@ -421,8 +474,8 @@ def find_beads(brightfield):
     masked_bf = 0
     bright_and_dark = brighter_regions | masked_bf
     bw = closing(bright_and_dark, square(1))
-    # cleared = clear_border(bw)  # optional
-    cleared = bw
+    cleared = clear_border(bw)  # optional
+    # cleared = bw
 
     label_image = label(cleared)
     centers = []
@@ -720,6 +773,8 @@ def edge_bead_filtering(radius, max_size):
 #     export_to_excel = np.hstack((beads, export_to_excel))
 #     return export_to_excel
 
+from scipy.signal import convolve2d
+
 
 def process_bead_batch(args):
     """Process a batch of beads for a single layer"""
@@ -757,10 +812,13 @@ def process_bead_batch(args):
         ]
 
     percentile_map = [np.percentile(region_vals, 10) for region_vals in bead_rois]
-
+    weight = np.array([[0, 2, 0], [2, 4, 2], [0, 2, 0]], dtype="float32")
+    weight /= weight.sum()
     for b_i, bead in enumerate(beads_batch):
         roi = bead_rois[b_i]
-        brightness = np.median(roi)
+        # correlate with 3x3 gaussian filter that values center more
+        filtered_roi = convolve2d(roi, weight, mode="valid")
+        brightness = np.max(filtered_roi)
         flor_layer_background_intensity_local = percentile_map[b_i]
 
         if flor_layer_background_intensity_local > 0:
@@ -777,9 +835,6 @@ def process_bead_batch(args):
     return layer_specific_data, sig_noise_data, layer_threshold_data
 
 
-from multiprocessing import shared_memory
-
-
 def get_excel(
     beads,
     signal_to_noise_cutoff,
@@ -790,6 +845,7 @@ def get_excel(
     is_running_callback=None,
     roi_coords=None,
     n_workers=10,
+    radius=2,
 ):
     def update_progress(value, message):
         if progress_callback:
@@ -815,7 +871,6 @@ def get_excel(
     total_beads = len(beads)
     total_cycles = len(tif_metadata)
     total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
-    radius = 2
 
     # Histogram matching to first cycle's first flor layer
     reference = tif_images[0][tif_metadata[0].flors_layers[0]]
@@ -896,11 +951,6 @@ def get_excel(
                     f"Processing cycle {cycle_idx + 1}/{total_cycles}, layer {layer_idx + 1}/{total_layers}",
                 )
 
-            # After processing all layers in a cycle
-            results_from_cycles = cycle_data  # Could be stored if needed
-            results_from_cycles_SNR = cycle_snr
-            results_from_cycles_Sig_absolute_threshold = cycle_threshold
-
             # Find brightest layers per bead
             brightest_layers = np.argmax(cycle_data, axis=1)
             export_to_excel[:, cycle_idx] = brightest_layers
@@ -925,7 +975,7 @@ def get_excel(
 
     export_to_excel = np.hstack((beads[:, :2], export_to_excel, bounding_boxes_str))
     print(f"Final get_excel length: {len(export_to_excel)}")
-    return export_to_excel
+    return export_to_excel, tif_images
 
 
 def blur_layer(layer, image_stack, blur_percentage=1):
@@ -1357,7 +1407,11 @@ def process_beads(
         return None
 
     log("Initial bead detection...")
-    beads, roi_coords = beadfinding(brightfield, thresholding)
+    beads, roi_coords = beadfinding(
+        brightfield, thresholding, is_running_callback=is_running
+    )
+    if beads is None:
+        return None
     initial_bead_count = len(beads)
     log(f"Initial bead detection found {initial_bead_count} beads")
     update_progress(20, "Removing duplicate beads...")
@@ -1384,8 +1438,7 @@ def process_beads(
         return None
 
     log(f"Signal-to-noise cutoff: {signal_to_noise_cutoff}")
-
-    bead_data = get_excel(
+    ex_res = get_excel(
         beads,
         signal_to_noise_cutoff,
         tifs,
@@ -1394,6 +1447,10 @@ def process_beads(
         is_running_callback=is_running,
         roi_coords=None,
     )
+    if ex_res is None:
+        return None
+    bead_data, tif_images = ex_res
+
     assert bead_data is not None, "Bead data processing was interrupted."
     if not is_running():
         return None
@@ -1401,18 +1458,31 @@ def process_beads(
     update_progress(90, "Filtering out rows with all zeros...")
     log(f"Beads with valid protein data: {len(bead_data)}")
     filtered_rows = []
+    filtered_rois = []
     errored_rows = []
-    for i, row in enumerate(tqdm(bead_data)):
-        if not is_running():
-            return None
-        # 255 indicates brightness threshold filtered, 254 indicates SNR filtered
-        if not (np.any(row[2:] == 255) or np.any(row[2:] == 254)):
-            filtered_rows.append(row)
-        else:
-            errored_rows.append(row)
-            log(f"Filtered out {len(errored_rows)} beads due to brightness or noise.")
-    filtered_rows = np.array(filtered_rows)
+    # assert roi_coords is not None, "ROI coordinates must be provided for filtering."
+    # for i, row in enumerate(tqdm(bead_data)):
+    #     if not is_running():
+    #         return None
+    #     # 255 indicates brightness threshold filtered, 254 indicates SNR filtered
+    #     # ignore last row because it is bbox
+    #     vals = np.asarray(row[2:-1], dtype=np.uint8)
+    #     if not np.any(np.isin(vals, (254, 255))):
+    #         filtered_rows.append(row)
+    #         filtered_rois.append(roi_coords[i])
+    #     else:
+    #         errored_rows.append(row)
+
+    #         log(f"Filtered out {len(errored_rows)} beads due to brightness or noise.")
+    filtered_rows = np.array(bead_data)
     bead_data = filtered_rows
+    labeled_image = np.zeros(brightfield.shape, dtype=np.uint16)
+    filtered_rois = roi_coords if roi_coords is not None else []
+    # for i, roi in enumerate(filtered_rois):
+    #     for coord in roi:
+    #         y, x = coord
+    #         labeled_image[y, x] = i + 1
+    # labeled_image = label2rgb(labeled_image, bg_label=0)
     headers = ["x", "y"]
     for i in range(len(tifs)):
         headers.append(f"cy{i}")
@@ -1428,4 +1498,16 @@ def process_beads(
         error_df = pd.DataFrame(errored_rows, columns=headers)
         error_df.to_csv("errored_beads.csv", index=False)
     update_progress(100, "Bead generation complete.")
-    return df
+
+    results = {}
+    bboxs = df.pop("bbox")
+    cycles = {}
+    for i in range(len(tif_images)):
+        cycles[f"cy{i}"] = tif_images[i]
+        print(f"Cycle {i} image shape: {tif_images[i].shape}")
+    results["beads"] = df
+    results["cycles"] = cycles
+    results["bboxs"] = bboxs
+    results["labeled_image"] = labeled_image
+
+    return results
