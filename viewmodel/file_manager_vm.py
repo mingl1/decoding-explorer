@@ -1,13 +1,14 @@
 import os
 from email.mime import image
 from math import e
+from typing import Optional
 from weakref import ref
 
 import imageio.v3 as iio  # or PIL / cv2
 import numpy as np
 import pandas as pd
 import tifffile
-from pandas import DataFrame
+from pandas import DataFrame, Series
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from tifffile import TiffFile, TiffFileError
 
@@ -19,7 +20,7 @@ from utils import get_memory_usage_mb
 
 
 class BeadGenerationThread(QThread):
-    beads_generated = pyqtSignal(DataFrame)
+    beads_generated = pyqtSignal(dict)
     progress = pyqtSignal(int, str)
 
     def __init__(self, ref_bf, tifs, max_size, signal_to_noise_cutoff):
@@ -42,6 +43,7 @@ class BeadGenerationThread(QThread):
             is_running_callback=self.is_running,
         )
         if self._is_running:
+            assert results is not None, "Bead generation was cancelled or failed."
             self.beads_generated.emit(results)
 
     def cancel(self):
@@ -53,7 +55,7 @@ class BeadGenerationThread(QThread):
 
 class FileManagerVM(QObject):
     file_list_updated = pyqtSignal(list)
-    file_status_updated = pyqtSignal(list)
+    file_information_update = pyqtSignal(list)
     file_metadata_updated = pyqtSignal(dict)
     align_progress = pyqtSignal(int, str)
     align_error = pyqtSignal(str)
@@ -61,7 +63,9 @@ class FileManagerVM(QObject):
     export_progress = pyqtSignal(int, int)
     beads_generated = pyqtSignal(DataFrame)
     bead_progress = pyqtSignal(int, str)
-    inspect_beads_signal = pyqtSignal(np.ndarray, DataFrame)
+    inspect_beads_signal = pyqtSignal(
+        dict, DataFrame, dict, Series, np.ndarray, DataFrame
+    )
 
     def __init__(self):
         super().__init__()
@@ -76,37 +80,82 @@ class FileManagerVM(QObject):
         self.reference_item = file_item
         print(f"Reference item set to: {file_item.path}")
 
-    def inspect_beads(self, file_item: FileItem):
+    def inspect_beads(self, file_item: FileItem, protein_profile: DataFrame):
         print(f"Inspecting beads for file: {file_item.path}")
 
         if file_item.path not in self.files:
             self.align_error.emit("File not found in the manager.")
             return
         most_updated_file = self.files[file_item.path]
+        if len(protein_profile) > 0:
+            print(protein_profile.head())
         # test data
-        df = pd.read_csv("./test_outputs/efficient_test.csv")
-        print(f"Loaded {len(df)} beads from CSV for testing.")
-        most_updated_file.beads = df
+        # df = pd.read_csv("./test_outputs/efficient_test.csv")
+        # print(f"Loaded {len(df)} beads from CSV for testing.")
+        # most_updated_file.beads = df
         if most_updated_file.beads is None or most_updated_file.beads.empty:
             self.align_error.emit("No beads data available for this file.")
             return
         # if shade corrected, this will be the shade corrected bf image
-        bf = most_updated_file.working_image
-        # didn't shade correct, just load the brightfield channel
-        if bf is None:
-            try:
-                bf = load_image(
-                    most_updated_file.path, int(most_updated_file.metadata.max_size)
+        # bf = self._get_brightfield_image(most_updated_file)
+        # if bf is None:
+        # return
+        cycles = most_updated_file.cycles if most_updated_file.cycles else {}
+        bboxs = (
+            most_updated_file.bboxs
+            if most_updated_file.bboxs is not None
+            else pd.Series()
+        )
+        labeled_image = (
+            most_updated_file.labeled_image
+            if most_updated_file.labeled_image is not None
+            else np.array([])
+        )
+        bright_fields = {}
+        # bright_fields["cy0"] = bf
+        # use first channel of cycles as brightfield for other cycles
+        for cy_name, cy_image in cycles.items():
+            bright_fields[cy_name] = cy_image[0]
+        # set each cycle to exclude brightfield from decoding
+        for cy_name in cycles.keys():
+            cycles[cy_name] = cycles[cy_name][1:]
+        self.inspect_beads_signal.emit(
+            bright_fields,
+            most_updated_file.beads,
+            cycles,
+            bboxs,
+            labeled_image,
+            protein_profile,
+        )
+
+    def _get_brightfield_image(self, file_item: FileItem) -> Optional[np.ndarray]:
+        """Retrieve the brightfield image from the file item, considering shading correction."""
+        image = load_image(file_item.path, int(file_item.metadata.max_size))
+        bf_channel = int(file_item.metadata.reference_channel)
+        if file_item.working_image is not None:
+            # If shade corrected or aligned image exists, use it
+            if len(file_item.working_image.shape) == 2:
+                return file_item.working_image
+            elif len(file_item.working_image.shape) > 2:
+                if bf_channel < file_item.working_image.shape[0]:
+                    return file_item.working_image[bf_channel]
+                else:
+                    self.align_error.emit(
+                        f"Brightfield channel {bf_channel} exceeds number of channels in working image for file {os.path.basename(file_item.path)}."
+                    )
+                    return None
+        # Fallback to original image
+        if len(image.shape) > 2:
+            if bf_channel < image.shape[0]:
+                return image[bf_channel]
+            else:
+                self.align_error.emit(
+                    f"Brightfield channel {bf_channel} exceeds number of channels in original image for file {os.path.basename(file_item.path)}."
                 )
-                if len(bf.shape) == 3:
-                    bf = np.array(bf[int(most_updated_file.metadata.reference_channel)])
-            except Exception as e:
-                self.align_error.emit(f"Failed to load brightfield image: {str(e)}")
-                return
-        elif len(bf.shape) == 3:
-            # For some reason was aligned, take the reference channel
-            bf = np.array(bf[int(most_updated_file.metadata.reference_channel)])
-        self.inspect_beads_signal.emit(bf, most_updated_file.beads)
+                return None
+        elif len(image.shape) == 2:
+            return image
+        return None
 
     def load_folder(self, folder_path):
         to_be_emitted = []
@@ -159,7 +208,7 @@ class FileManagerVM(QObject):
             my_f.working_image = corrected
             my_f.status = FileStatus.SHADE_CORRECTED
             to_be_updated.append(my_f)
-        self.file_status_updated.emit(to_be_updated)
+        self.file_information_update.emit(to_be_updated)
 
     def apply_metadata(self, metadata_changes: dict, selected_files: list[FileItem]):
         for f in selected_files:
@@ -235,9 +284,10 @@ class FileManagerVM(QObject):
         self.register_thread.run_registration()
 
     def _on_alignment_complete(
-        self, aligned_tifs: list[np.ndarray], selected: list[FileItem]
+        self,
+        aligned_tifs: list[np.ndarray],
+        selected: list[FileItem],
     ):
-        assert self.reference_item is not None
         to_be_updated = []
         for i, f in enumerate(selected):
             my_f = self.files.get(f.path)
@@ -246,7 +296,7 @@ class FileManagerVM(QObject):
             my_f.working_image = aligned_tifs[i]
             my_f.status = FileStatus.ALIGNED
             to_be_updated.append(my_f)
-        self.file_status_updated.emit(to_be_updated)
+        self.file_information_update.emit(to_be_updated)
 
     def delete_files(self, selected_files: list[FileItem]):
         for f in selected_files:
@@ -280,10 +330,12 @@ class FileManagerVM(QObject):
         self.reference_item = file_item
         self.files[file_item.path].status = FileStatus.REFERENCE
         to_be_updated.append(self.files[file_item.path])
-        self.file_status_updated.emit(to_be_updated)
+        self.file_information_update.emit(to_be_updated)
 
     def export_files(self, folder_path: str, selected_files: list[FileItem]):
         total_files = len(selected_files)
+        self.export_progress.emit(0, total_files)
+
         for i, f in enumerate(selected_files):
             file_item = self.files.get(f.path)
             if not file_item:
@@ -322,16 +374,17 @@ class FileManagerVM(QObject):
             tifffile.imwrite(export_path, export_image, metadata=metadata)
             self.export_progress.emit(i + 1, total_files)
 
-    def generate_beads(self):
-        to_be_updated = []
+    def generate_beads(self, cycle_assignments: dict[int, FileItem]):
         assert (
             self.reference_item is not None
         ), "Reference item must be set before generating beads."
         tifs = []
-        curr_files = self.selected_files
-        curr_reference = self.reference_item
-        curr_files.insert(0, self.reference_item)
-        for f in curr_files:
+
+        sorted_cycles = sorted(cycle_assignments.keys())
+        ordered_files = [cycle_assignments[cycle] for cycle in sorted_cycles]
+        ordered_files.insert(0, self.reference_item)  # reference is always first
+        curr_ref_path = self.reference_item.path
+        for f in ordered_files:
             my_f = self.files.get(f.path)
             if not my_f:
                 continue
@@ -344,8 +397,6 @@ class FileManagerVM(QObject):
             elif f.working_image is not None and len(f.working_image.shape) == 3:
                 img = np.array(f.working_image)
             tifs.append((img, f))
-            my_f.status = FileStatus.BEADS_GENERATED
-            to_be_updated.append(my_f)
         ref_bf_path = self.reference_item.path
         ref_bf_channel = int(self.reference_item.metadata.reference_channel)
         ref_img = self.files[self.reference_item.path].working_image
@@ -376,17 +427,27 @@ class FileManagerVM(QObject):
             signal_to_noise_cutoff=0.1,
         )
         self.bead_thread.beads_generated.connect(
-            lambda res: self._on_beads_generated(res, curr_reference.path)
+            lambda res: self._on_beads_generated(res, curr_ref_path, cycle_assignments)
         )
         self.bead_thread.progress.connect(self.bead_progress.emit)
         self.bead_thread.start()
 
-    def _on_beads_generated(self, results, reference_path):
-        to_be_updated = []
-        self.files[reference_path].beads = results
-        to_be_updated.append(self.files[reference_path])
-        self.beads_generated.emit(results)
-        self.file_status_updated.emit(to_be_updated)
+    def _on_beads_generated(
+        self, results: dict, reference_path, cycle_assignments: dict[int, FileItem]
+    ):
+        cycles = results.get("cycles", {})
+        bboxs = results.get("bboxs", pd.Series())
+        labeled_image = results.get("labeled_image", None)
+        beads = results.get("beads", pd.DataFrame())
+
+        self.files[reference_path].cycles = cycles
+        self.files[reference_path].bboxs = bboxs
+        self.files[reference_path].labeled_image = labeled_image
+        self.files[reference_path].beads = beads
+        self.files[reference_path].status = FileStatus.BEADS_GENERATED
+        self.files[reference_path].cycle_files = cycle_assignments
+        self.beads_generated.emit(beads)
+        self.file_information_update.emit([self.files[reference_path]])
 
 
 def list_tiff_files(folder_path):

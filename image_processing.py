@@ -773,7 +773,7 @@ def edge_bead_filtering(radius, max_size):
 #     export_to_excel = np.hstack((beads, export_to_excel))
 #     return export_to_excel
 
-from scipy.signal import convolve2d
+from scipy.signal import convolve2d, correlate2d
 
 
 def process_bead_batch(args):
@@ -812,12 +812,12 @@ def process_bead_batch(args):
         ]
 
     percentile_map = [np.percentile(region_vals, 10) for region_vals in bead_rois]
-    weight = np.array([[0, 2, 0], [2, 4, 2], [0, 2, 0]], dtype="float32")
+    weight = np.array([[0, 2, 0], [2, 3, 2], [0, 2, 0]], dtype="float32")
     weight /= weight.sum()
     for b_i, bead in enumerate(beads_batch):
         roi = bead_rois[b_i]
         # correlate with 3x3 gaussian filter that values center more
-        filtered_roi = convolve2d(roi, weight, mode="valid")
+        filtered_roi = correlate2d(roi, weight, mode="valid")
         brightness = np.max(filtered_roi)
         flor_layer_background_intensity_local = percentile_map[b_i]
 
@@ -833,6 +833,96 @@ def process_bead_batch(args):
         layer_threshold_data[b_i] = brightness > layer_threshold
 
     return layer_specific_data, sig_noise_data, layer_threshold_data
+
+
+# def calculate_template_match(roi):
+#     gaussian_5x5 = np.array(
+#         [
+#             [0, 4, 7, 4, 0],
+#             [0, 16, 26, 16, 4],
+#             [7, 26, 41, 26, 7],
+#             [0, 16, 26, 16, 4],
+#             [0, 4, 7, 4, 0],
+#         ],
+#         dtype=np.float32,
+#     )
+
+
+#     # Normalize so sum = 1
+#     gaussian_5x5 /= gaussian_5x5.sum()
+#     roi = adjust_contrast(roi.astype(np.float32), 10, 90)
+#     score = correlate2d(roi.astype(np.float32), gaussian_5x5, mode="same")
+#     return np.max(score)
+def calculate_template_match(roi):
+    gaussian_9x9 = np.array(
+        [
+            [1, 4, 7, 11, 14, 11, 7, 4, 1],
+            [4, 16, 26, 41, 53, 41, 26, 16, 4],
+            [7, 26, 42, 67, 87, 67, 42, 26, 7],
+            [11, 41, 67, 107, 139, 107, 67, 41, 11],
+            [14, 53, 87, 139, 181, 139, 87, 53, 14],
+            [11, 41, 67, 107, 139, 107, 67, 41, 11],
+            [7, 26, 42, 67, 87, 67, 42, 26, 7],
+            [4, 16, 26, 41, 53, 41, 26, 16, 4],
+            [1, 4, 7, 11, 14, 11, 7, 4, 1],
+        ],
+        dtype=np.float32,
+    )
+    # remove corners
+    gaussian_9x9[0, 0] = 0
+    gaussian_9x9[0, 1] = 0
+    gaussian_9x9[1, 0] = 0
+    gaussian_9x9[0, 7] = 0
+    gaussian_9x9[0, 8] = 0
+    gaussian_9x9[1, 8] = 0
+    gaussian_9x9[7, 0] = 0
+    gaussian_9x9[8, 0] = 0
+    gaussian_9x9[8, 1] = 0
+    gaussian_9x9[7, 8] = 0
+    gaussian_9x9[8, 7] = 0
+    gaussian_9x9[8, 8] = 0
+
+    gaussian_9x9 /= np.sum(gaussian_9x9)
+    roi = adjust_contrast(roi.astype(np.float32), 10, 90)
+    score = correlate2d(roi.astype(np.float32), gaussian_9x9, mode="same")
+    return np.max(score)
+
+
+def extract_padded_rois(img, coords, channels, radius=2):
+    """
+    Extracts zero-padded ROIs for all coords and channels.
+
+    img: np.ndarray, shape (num_channels, H, W)
+    coords: np.ndarray, shape (num_beads, 2) with (x, y)
+    channels: list of channel indices
+    radius: half-size of ROI (2 → 5x5)
+    """
+    H, W = img.shape[1:]
+    size = radius * 2 + 1
+    rois = np.zeros((len(coords), len(channels), size, size), dtype=img.dtype)
+
+    for b_idx, (x, y) in enumerate(coords):
+        for c_idx, ch in enumerate(channels):
+            # Compute source slice bounds
+            x1, x2 = x - radius, x + radius + 1
+            y1, y2 = y - radius, y + radius + 1
+
+            # Compute destination slice bounds (where real pixels go inside padded ROI)
+            dx1 = max(0, -x1)
+            dy1 = max(0, -y1)
+            dx2 = size - max(0, x2 - W)
+            dy2 = size - max(0, y2 - H)
+
+            # Clip source slice to image bounds
+            sx1 = max(0, x1)
+            sy1 = max(0, y1)
+            sx2 = min(W, x2)
+            sy2 = min(H, y2)
+
+            # Copy into padded ROI
+            rois[b_idx, c_idx, dy1:dy2, dx1:dx2] = img[ch, sy1:sy2, sx1:sx2]
+
+    return rois
 
 
 def get_excel(
@@ -873,10 +963,14 @@ def get_excel(
     total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
 
     # Histogram matching to first cycle's first flor layer
-    reference = tif_images[0][tif_metadata[0].flors_layers[0]]
-    for i, md in enumerate(tif_metadata[1:], start=1):
+    for i, md in enumerate(tif_metadata):
+        reference = tif_images[i][md.flors_layers[0]]
         for layer in md.flors_layers[1:]:
-            tif_images[i][layer] = match_histograms(tif_images[i][layer], reference)
+            img16 = match_histograms(tif_images[i][layer], reference)
+            img8 = np.zeros_like(img16, dtype=np.uint8)
+            img8 = cv2.normalize(img16, img8, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+            img_eq = cv2.equalizeHist(img8)
+            tif_images[i][layer] = img_eq
 
     bounding_boxes = np.zeros((total_beads, 4), dtype=int)
     if roi_coords:
@@ -959,12 +1053,12 @@ def get_excel(
             for i, snr_row in enumerate(cycle_snr):
                 if np.min(snr_row) > 1 - ColorThreshold:
                     export_to_excel[i, cycle_idx] = 254
-                    print("Sig noise filtered:", beads[i])
+                    # print("Sig noise filtered:", beads[i])
 
             for i, thresh_row in enumerate(cycle_threshold):
                 if np.all(thresh_row == 0):
                     export_to_excel[i, cycle_idx] = 255
-                    print("Threshold filtered:", beads[i])
+                    # print("Threshold filtered:", beads[i])
 
     bounding_boxes_str = np.array(
         [
@@ -974,8 +1068,55 @@ def get_excel(
     ).reshape(-1, 1)
 
     export_to_excel = np.hstack((beads[:, :2], export_to_excel, bounding_boxes_str))
-    print(f"Final get_excel length: {len(export_to_excel)}")
-    return export_to_excel, tif_images
+    columns = ["x", "y"] + [f"cy{i}" for i in range(len(tifs))] + ["bbox"]
+    df = pd.DataFrame(export_to_excel, columns=columns)
+    count_table = (
+        df.groupby([f"cy{i}" for i in range(len(tifs))])
+        .size()
+        .reset_index(name="counts")
+    )
+    (invalid_beads, valid_beads), best_gap = best_split_df_max_avg_gap(
+        count_table, "counts"
+    )  # type: ignore
+    invalid_idx = invalid_beads.merge(df, how="left").index
+
+    # Get indices of invalid beads
+    invalid_idx = invalid_beads.merge(df, how="left").index
+    coords = (
+        df.loc[invalid_idx, ["x", "y"]].astype("float").round().astype(int).to_numpy()
+    )
+
+    # Vectorized cycle loop
+    for cycle_idx, md in enumerate(tif_metadata):
+        # Extract all channels for this cycle
+        channels = md.flors_layers
+        img = tif_images[cycle_idx]  # shape: (num_channels, H, W)
+
+        # Build padded ROIs
+        rois = extract_padded_rois(
+            img, coords, channels, radius=2
+        )  # shape: (num_beads, num_channels, 5, 5)
+
+        # Flatten for manual vectorization
+        num_beads, num_channels = rois.shape[:2]
+        flat_rois = rois.reshape(-1, 5, 5)
+
+        # Apply template match to each ROI
+        scores_flat = np.apply_along_axis(
+            lambda r: calculate_template_match(r.reshape(5, 5)),
+            axis=1,
+            arr=flat_rois.reshape(flat_rois.shape[0], -1),
+        )
+
+        # Reshape back and get best channel per bead
+        scores = scores_flat.reshape(num_beads, num_channels)
+        best_channels = np.argmax(scores, axis=1)
+
+        # Write back into df
+        df.loc[invalid_idx, f"cy{cycle_idx}"] = best_channels
+
+    print(f"Final get_excel length: {len(df)}")
+    return df, tif_images
 
 
 def blur_layer(layer, image_stack, blur_percentage=1):
@@ -1379,6 +1520,27 @@ class CellIntensity:
             log(f"Warning: Parameter '{key}' not found.")
 
 
+def best_split_df_max_avg_gap(df, count_col):
+    # Sort by counts
+    df_sorted = df.sort_values(by=count_col).reset_index(drop=True)
+
+    best_gap = float("-inf")
+    best_split = None
+
+    for i in range(1, len(df_sorted)):
+        left = df_sorted.iloc[:i]
+        right = df_sorted.iloc[i:]
+        avg_left = left[count_col].mean()
+        avg_right = right[count_col].mean()
+        gap = avg_right - avg_left
+
+        if gap > best_gap:
+            best_gap = gap
+            best_split = (left, right)
+
+    return best_split, best_gap
+
+
 def process_beads(
     brightfield,
     tifs,
@@ -1449,17 +1611,13 @@ def process_beads(
     )
     if ex_res is None:
         return None
-    bead_data, tif_images = ex_res
+    df, tif_images = ex_res
 
-    assert bead_data is not None, "Bead data processing was interrupted."
     if not is_running():
         return None
 
     update_progress(90, "Filtering out rows with all zeros...")
-    log(f"Beads with valid protein data: {len(bead_data)}")
     filtered_rows = []
-    filtered_rois = []
-    errored_rows = []
     # assert roi_coords is not None, "ROI coordinates must be provided for filtering."
     # for i, row in enumerate(tqdm(bead_data)):
     #     if not is_running():
@@ -1474,8 +1632,7 @@ def process_beads(
     #         errored_rows.append(row)
 
     #         log(f"Filtered out {len(errored_rows)} beads due to brightness or noise.")
-    filtered_rows = np.array(bead_data)
-    bead_data = filtered_rows
+
     labeled_image = np.zeros(brightfield.shape, dtype=np.uint16)
     filtered_rois = roi_coords if roi_coords is not None else []
     # for i, roi in enumerate(filtered_rois):
@@ -1483,20 +1640,8 @@ def process_beads(
     #         y, x = coord
     #         labeled_image[y, x] = i + 1
     # labeled_image = label2rgb(labeled_image, bg_label=0)
-    headers = ["x", "y"]
-    for i in range(len(tifs)):
-        headers.append(f"cy{i}")
-    headers.append("bbox")
-    df = pd.DataFrame(bead_data, columns=headers)
     log(f"Dataframe created with shape: {df.shape}")
-    # save errored rows for debugging
 
-    errored_rows = np.array(errored_rows)
-    if len(errored_rows) == 0:
-        log("No errored beads to save.")
-    else:
-        error_df = pd.DataFrame(errored_rows, columns=headers)
-        error_df.to_csv("errored_beads.csv", index=False)
     update_progress(100, "Bead generation complete.")
 
     results = {}

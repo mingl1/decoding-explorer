@@ -5,6 +5,7 @@ import sys
 import warnings
 from typing import List
 
+from pandas import DataFrame
 from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
 from PyQt6.QtWidgets import (
     QDialog,
@@ -26,6 +27,7 @@ from PyQt6.QtWidgets import (
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from utils import is_dark_mode
+from view.CycleAssignmentWidget import CycleAssignmentWidget
 from view.FileListWidget import FileTableWidget
 from view.MetadataView import MetadataView
 from view.roi_inspector import ROI_Inspector
@@ -102,7 +104,7 @@ class MainWindow(QMainWindow):
 
         # Connect ViewModel signals to UI slots
         self.vm.file_list_updated.connect(self.update_file_list)
-        self.vm.file_status_updated.connect(self.update_files_view)
+        self.vm.file_information_update.connect(self.update_files_view)
         self.vm.align_progress.connect(self.update_progress)
         self.vm.align_error.connect(self.show_error)
         self.vm.align_complete.connect(self.alignment_finished)
@@ -123,6 +125,15 @@ class MainWindow(QMainWindow):
         self.metadata_view.export_all_sig.connect(self.vm.export_files)
         self.metadata_view.generate_beads_sig.connect(self.start_bead_generation)
         self.metadata_vm.inspect_beads_sig.connect(self.vm.inspect_beads)
+        self.metadata_view.protein_files_uploaded.connect(
+            self.metadata_vm.set_protein_files
+        )
+        self.metadata_vm.update_overview_sig.connect(
+            self.merge_bead_data_with_protein_profile
+        )
+        self.metadata_vm.statistics_updated.connect(
+            self.metadata_view.update_statistics
+        )
         # Set the container widget as central widget
         self.setCentralWidget(container)
 
@@ -131,15 +142,61 @@ class MainWindow(QMainWindow):
         if sys.platform == "win32":
             self.menuBarUI.installEventFilter(self)
 
-    def show_roi_inspector_window(self, bf_image, beads_df):
+    def merge_bead_data_with_protein_profile(self, protein_profile: DataFrame):
+        selected_files = self.get_selected_files()
+        for file_item in selected_files:
+            if file_item.beads is not None:
+                total_beads = len(file_item.beads)
+                # cy0...cyN columns to merge on
+                merge_columns = [
+                    col for col in protein_profile.columns if col.startswith("cy")
+                ]
+                merged_beads, mean_rows_per_protein = (
+                    merge_bead_data_with_protein_profile(
+                        file_item.beads, protein_profile, merge_columns
+                    )
+                )
+                counts_table = (
+                    merged_beads.groupby("Protein name")
+                    .size()
+                    .reset_index(name="row_count")
+                    .sort_values("row_count", ascending=False)
+                )
+                valid_proteins = counts_table[counts_table["Protein name"] != "Invalid"]
+                unique_rows = valid_proteins["row_count"].unique().mean()
+                error = (
+                    counts_table[counts_table["Protein name"] == "Invalid"][
+                        "row_count"
+                    ].values[0]
+                    / unique_rows
+                    * 100
+                )
+                stats = {
+                    "total_beads": total_beads,
+                    "mean_rows": unique_rows,
+                    "error": error,
+                    "counts_table": counts_table,
+                }
+                self.metadata_vm.statistics_updated.emit(stats)
+                break  # Process only the first selected file with beads
 
-        print(
-            f"Showing ROI Inspector with {len(beads_df)} beads, image shape {bf_image.shape}"
-        )
-
+    def show_roi_inspector_window(
+        self, bright_fields, beads_df, cycles, bboxs, labeled_image, protein_profile
+    ):
+        if len(labeled_image) == 0:
+            labeled_image = None
+        bf_image = bright_fields.get("cy0", None)
+        if bf_image is None:
+            self.show_error("Bright field image for cycle 0 is missing.")
+            return
         data = {
             "bf_image": bf_image,
-            "beads_df": beads_df,
+            "beads": beads_df,
+            "cycles": cycles,
+            # "bboxs": bboxs,
+            # "labeled_image": labeled_image,
+            "protein_profile": protein_profile,
+            "bright_fields": bright_fields,
         }
         self.roi_inspector = ROI_Inspector(data)
         self.roi_inspector.show()
@@ -198,12 +255,41 @@ class MainWindow(QMainWindow):
         self.vm.align_channels(self.get_selected_files())
 
     def start_bead_generation(self):
-        self.progress_bar.setVisible(True)
-        self.status_label.setVisible(True)
-        self.cancel_button.setVisible(True)
-        self.cancel_button.clicked.disconnect()
-        self.cancel_button.clicked.connect(self.cancel_bead_generation)
-        self.vm.generate_beads()
+        selected_files = self.get_selected_files()
+        if not selected_files:
+            self.show_error("No files selected for bead generation.")
+            return
+
+        reference_item = self.vm.reference_item
+        if not reference_item:
+            self.show_error("Please set a reference image first.")
+            return
+
+        files_for_assignment = [
+            f for f in selected_files if f.path != reference_item.path
+        ]
+
+        if not files_for_assignment:
+            # If only the reference file is selected, we can proceed with one cycle.
+            self.vm.generate_beads({0: reference_item})
+            return
+
+        dialog = CycleAssignmentWidget(files_for_assignment, self)
+        if dialog.exec():
+            assignments_from_dialog = dialog.get_assignments()
+            if assignments_from_dialog is None:
+                self.show_error("Each file must be assigned to exactly one cycle.")
+                return
+
+            # final_assignments = {0: reference_item}
+            # final_assignments.update(assignments_from_dialog)
+
+            self.progress_bar.setVisible(True)
+            self.status_label.setVisible(True)
+            self.cancel_button.setVisible(True)
+            self.cancel_button.clicked.disconnect()
+            self.cancel_button.clicked.connect(self.cancel_bead_generation)
+            self.vm.generate_beads(assignments_from_dialog)
 
     def update_progress(self, value, message):
         if not self.progress_bar.isVisible():
@@ -475,3 +561,14 @@ class SideGrip(QWidget):
 
     def mouseReleaseEvent(self, event):
         self.mousePos = None
+
+
+def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_columns):
+    # for each column oin merge column, convert to int in both dataframes
+    for col in merge_columns:
+        bead_data[col] = bead_data[col].astype(int)
+        protein_profile[col] = protein_profile[col].astype(int)
+    bead_data = bead_data.merge(protein_profile, how="left", on=merge_columns)
+    bead_data.fillna("Invalid", inplace=True)
+    mean_rows_per_protein = bead_data.groupby("Protein name")
+    return bead_data, mean_rows_per_protein

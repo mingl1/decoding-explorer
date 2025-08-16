@@ -1,5 +1,7 @@
 from os import error
+from typing import Optional
 
+import pandas as pd
 from PyQt6.QtCore import QObject, pyqtSignal
 from pytools import F
 
@@ -12,12 +14,15 @@ class MetadataVM(QObject):
     update_metadata_view_sig = pyqtSignal(list)
     shading_correction_sig = pyqtSignal(bool)
     align_channels_sig = pyqtSignal(bool)
-    inspect_beads_sig = pyqtSignal(FileItem)
+    inspect_beads_sig = pyqtSignal(FileItem, pd.DataFrame)
     error_sig = pyqtSignal(str)
+    statistics_updated = pyqtSignal(dict)
+    update_overview_sig = pyqtSignal(pd.DataFrame)
 
     def __init__(self):
         super().__init__()
         self.selected_files = []
+        self.protein_df = pd.DataFrame()
 
     def update_selected_items(self, metadata_list: list[FileItem]):
         """Display metadata from selected items."""
@@ -43,4 +48,15 @@ class MetadataVM(QObject):
             return
         elif len(self.selected_files) > 1:
             self.error_sig.emit("You should select the reference file only.")
-        self.inspect_beads_sig.emit(self.selected_files[0])
+        self.inspect_beads_sig.emit(self.selected_files[0], self.protein_df)
+
+    def set_protein_files(self, files: list[str]):
+        pp = [pd.read_csv(f) if f.endswith(".csv") else pd.read_excel(f) for f in files]
+        pp = pd.concat(pp).drop_duplicates().reset_index(drop=True)
+        cols = pp.columns.tolist()
+        renamed = {}
+        for i in range(1, len(cols)):
+            renamed[cols[i]] = "cy" + str(i - 1)
+        pp.rename(columns=renamed, inplace=True)
+        self.protein_df = pp
+        self.update_overview_sig.emit(pp)

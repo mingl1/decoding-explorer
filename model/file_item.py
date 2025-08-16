@@ -1,9 +1,11 @@
 # models/file_item.py
-from dataclasses import dataclass
+
+from dataclasses import dataclass, field
 from sys import prefix
+from typing import Optional
 
 from numpy.typing import NDArray
-from pandas import DataFrame
+from pandas import DataFrame, Series
 
 from model.status_enum import FileStatus
 
@@ -25,9 +27,17 @@ class MetaData:
 @dataclass
 class FileItem:
     path: str
-    metadata: MetaData = MetaData()
+    metadata: MetaData = field(default_factory=MetaData)
     status: FileStatus = FileStatus.RAW
-    working_image: NDArray | None = None
+    working_image: Optional[NDArray] = None
     shape: tuple = ()
     dtype: str = ""
-    beads: DataFrame | None = None
+    beads: Optional[DataFrame] = None
+    cycles: Optional[dict[str, NDArray]] = None
+    bboxs: Optional[Series] = None
+    labeled_image: Optional[NDArray] = None
+    reference_item: Optional["FileItem"] = None
+    protein_profile: Optional[DataFrame] = None
+    cycle_files: Optional[dict[int, "FileItem"]] = (
+        None  # mapping cycle number to file item to retrieve brightfield images
+    )

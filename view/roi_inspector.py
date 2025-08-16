@@ -26,13 +26,32 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QSlider,
+    QSplitter,
     QVBoxLayout,
 )
 
 from utils import adjust_contrast, to_uint8
+
+
+def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_columns):
+    # for each column in merge column, convert to int in both dataframes
+    for col in merge_columns:
+        bead_data[col] = bead_data[col].astype(int)
+        protein_profile[col] = protein_profile[col].astype(int)
+    bead_data = bead_data.merge(protein_profile, how="left", on=merge_columns)
+    bead_data.fillna("Invalid", inplace=True)
+    # convert x, y to float then round to int
+    bead_data["x"] = bead_data["x"].astype(float).round().astype(int)
+    bead_data["y"] = bead_data["y"].astype(float).round().astype(int)
+    mean_rows_per_protein = bead_data.groupby("Protein name")
+    # count 254, 255 and non-combinations
+    bead_data.loc[bead_data["cy1"] >= 254, "Protein name"] = "Filtered"
+    return bead_data, mean_rows_per_protein
 
 
 class NullableIntValidator(QIntValidator):
@@ -105,6 +124,32 @@ class ROI_Inspector(QDialog):
         self.cycles = snapshot_data.get("cycles", None)
         self.bboxs = snapshot_data.get("bboxs", None)
         self.labeled_image = snapshot_data.get("labeled_image", None)
+        self.protein_profile = snapshot_data.get("protein_profile", None)
+        self.bright_fields = snapshot_data.get("bright_fields", None)
+        merge_columns = []
+        if self.protein_profile is not None and self.beads is not None:
+            merge_columns = [
+                i for i in self.protein_profile.columns if i in self.beads.columns
+            ]
+        print(merge_columns)
+        # Merge bead data with protein profile if both are provided
+        if (
+            self.beads is not None
+            and self.protein_profile is not None
+            and merge_columns
+        ):
+            self.merged_bead_data, self.mean_rows_per_protein = (
+                merge_bead_data_with_protein_profile(
+                    self.beads.copy(), self.protein_profile.copy(), merge_columns
+                )
+            )
+            print(self.merged_bead_data.head())
+        else:
+            self.merged_bead_data = None
+            self.mean_rows_per_protein = None
+
+        if self.labeled_image is not None and len(self.labeled_image) == 0:
+            self.labeled_image = None
         # adjust cycles contrast:
         if self.beads is None:
             print("Warning: No beads data provided.")
@@ -116,18 +161,129 @@ class ROI_Inspector(QDialog):
 
     def _setup_ui(self):
         self.setWindowTitle(f"Bead Data Analysis")
-        self.resize(1000, 800)
-        main_layout = QVBoxLayout(self)
+        self.resize(1400, 800)  # Increased width to accommodate sidebar
+
+        # Main splitter to separate sidebar from main content
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        if self.merged_bead_data is not None:
+            # Create sidebar for invalid beads
+            self._setup_sidebar()
+            main_splitter.addWidget(self.sidebar_widget)
+
+        # Main content widget
+        main_content_widget = self._create_main_content_widget()
+        main_splitter.addWidget(main_content_widget)
+
+        # Set splitter proportions (sidebar takes ~20% of space)
+        main_splitter.setSizes([280, 1120])
+
+        # Set main layout
+        main_layout = QHBoxLayout(self)
+        main_layout.addWidget(main_splitter)
+        self.setLayout(main_layout)
+
+    def _setup_sidebar(self):
+        assert self.merged_bead_data is not None
+        """Create sidebar with list of invalid beads and resample button."""
+        self.sidebar_widget = QGroupBox("Invalid Beads")
+        sidebar_layout = QVBoxLayout()
+
+        # List widget for invalid beads
+        self.invalid_beads_list = QListWidget()
+        self.invalid_beads_list.itemClicked.connect(self._on_invalid_bead_selected)
+
+        # Resample button
+        self.resample_button = QPushButton("Resample")
+        self.resample_button.clicked.connect(self._populate_invalid_beads_list)
+
+        # Add count label
+        invalid_count = len(
+            self.merged_bead_data[self.merged_bead_data["Protein name"] == "Invalid"]
+        )
+        filtered_count = len(
+            self.merged_bead_data[self.merged_bead_data["Protein name"] == "Filtered"]
+        )
+        self.invalid_count_label = QLabel(
+            f"Invalid Beads: {invalid_count}; Filtered: {filtered_count}"
+        )
+
+        sidebar_layout.addWidget(self.invalid_count_label)
+        sidebar_layout.addWidget(self.invalid_beads_list)
+        sidebar_layout.addWidget(self.resample_button)
+        sidebar_layout.addStretch()  # Push everything to top
+
+        self.sidebar_widget.setLayout(sidebar_layout)
+        self.sidebar_widget.setMaximumWidth(300)
+        self.sidebar_widget.setMinimumWidth(250)
+        # Populate the list with invalid beads
+        self._populate_invalid_beads_list()
+
+    def _populate_invalid_beads_list(self):
+        """Populate the sidebar list with a random selection of 10 invalid beads."""
+        if self.merged_bead_data is not None:
+            invalid_beads = self.merged_bead_data[
+                self.merged_bead_data["Protein name"] == "Invalid"
+            ]
+
+            # Randomly sample 10 rows (or fewer if less than 10)
+            sampled_beads = invalid_beads.sample(
+                n=min(10, len(invalid_beads)), random_state=None
+            )
+
+            self.invalid_beads_list.clear()  # Clear previous items if any
+
+            for idx, row in sampled_beads.iterrows():
+                x, y = int(row["x"]), int(row["y"])
+                item_text = f"Bead {idx}: ({x}, {y})"
+                item = QListWidgetItem(item_text)
+                item.setData(Qt.ItemDataRole.UserRole, (idx, x, y))
+                self.invalid_beads_list.addItem(item)
+
+    def _on_invalid_bead_selected(self, item):
+        """Handle selection of an invalid bead from the sidebar list."""
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data:
+            idx, x, y = data
+            # Set the coordinates in the input fields
+            self.x_input.setText(str(x))
+            self.y_input.setText(str(y))
+            # Call inspect_roi with None event to trigger inspection
+            self.inspect_roi(None)
+            # Enable resample button
+            self.resample_button.setEnabled(True)
+
+    def _resample_selected_bead(self):
+        """Handle resampling of selected invalid bead."""
+        current_item = self.invalid_beads_list.currentItem()
+        if current_item:
+            data = current_item.data(Qt.ItemDataRole.UserRole)
+            if data:
+                idx, x, y = data
+                # Here you would implement your resampling logic
+                # For now, just show a message
+                QMessageBox.information(
+                    self,
+                    "Resample Bead",
+                    f"Resampling bead {idx} at coordinates ({x}, {y})\n"
+                    "This would trigger your resampling algorithm.",
+                )
+
+    def _create_main_content_widget(self):
+        """Create the main content widget with image view and controls."""
+        main_widget = QGroupBox()
+        main_layout = QVBoxLayout(main_widget)
+
         self.enhance_contrast_checkbox = QCheckBox("Enhance Contrast")
         self.enhance_contrast_checkbox.setChecked(self.adjust_contrast)
         self.enhance_contrast_checkbox.stateChanged.connect(
             self._on_contrast_checkbox_changed
         )
+
         instruction_text = "Double-click image to inspect ROI"
         self.preview_label = QLabel(instruction_text)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.image_view = ZoomableImageView(self)
+        self.image_view = ZoomableImageView()
         self.image_view.setMinimumSize(800, 500)
 
         self.control_layout = QHBoxLayout()
@@ -140,7 +296,8 @@ class ROI_Inspector(QDialog):
         main_layout.addWidget(self.image_view)
         main_layout.addLayout(self.control_layout)
         main_layout.addLayout(self.button_layout)
-        self.setLayout(main_layout)
+
+        return main_widget
 
     def _on_contrast_checkbox_changed(self, state):
         self.adjust_contrast = self.enhance_contrast_checkbox.isChecked()
@@ -153,19 +310,19 @@ class ROI_Inspector(QDialog):
         trans_layout = QHBoxLayout()
         int_validator = NullableIntValidator(-99999, 99999)
 
-        self.dx_input = QLineEdit("0")
-        self.dx_input.setValidator(int_validator)
-        self.dx_input.setFixedWidth(50)
+        self.x_input = QLineEdit("0")
+        self.x_input.setValidator(int_validator)
+        self.x_input.setFixedWidth(50)
 
-        self.dy_input = QLineEdit("0")
-        self.dy_input.setValidator(int_validator)
-        self.dy_input.setFixedWidth(50)
+        self.y_input = QLineEdit("0")
+        self.y_input.setValidator(int_validator)
+        self.y_input.setFixedWidth(50)
 
         self.apply_trans_button = QPushButton("Inspect")
         trans_layout.addWidget(QLabel("x:"))
-        trans_layout.addWidget(self.dx_input)
+        trans_layout.addWidget(self.x_input)
         trans_layout.addWidget(QLabel("y:"))
-        trans_layout.addWidget(self.dy_input)
+        trans_layout.addWidget(self.y_input)
         trans_layout.addWidget(self.apply_trans_button)
         trans_group.setLayout(trans_layout)
 
@@ -193,9 +350,6 @@ class ROI_Inspector(QDialog):
         roi_mode_group.setLayout(roi_mode_layout)
         self.roi_mode_input.clicked.connect(lambda _: self.create_direct_overlay())
         self.apply_trans_button.clicked.connect(self.inspect_roi)
-        # self.dx_input.returnPressed.connect(self.apply_manual_translation)
-        # self.dy_input.returnPressed.connect(self.apply_manual_translation)
-        # self.rotation_input.returnPressed.connect(self.apply_rotation)
 
         self.reset_button = QPushButton("Reset Zoom")
         self.reset_button.clicked.connect(self.reset_zoom)
@@ -218,8 +372,8 @@ class ROI_Inspector(QDialog):
         x, y = None, None
         if event is None or not hasattr(event, "position"):
             try:
-                xtext = self.dx_input.text()
-                ytext = self.dy_input.text()
+                xtext = self.x_input.text()
+                ytext = self.y_input.text()
                 if xtext == "":
                     xtext = "0"
                 if ytext == "":
@@ -238,10 +392,9 @@ class ROI_Inspector(QDialog):
             scene_pos = self.image_view.mapToScene(int(pos.x()), int(pos.y()))
             x = int(scene_pos.x())
             y = int(scene_pos.y())
-            self.dx_input.setText(str(x))
-            self.dy_input.setText(str(y))
+            self.x_input.setText(str(x))
+            self.y_input.setText(str(y))
             print(f"Double-click at scene position ({x}, {y})")
-            # MOVE TO CENTER
 
         self.image_view.centerOn(x, y)
 
@@ -276,8 +429,13 @@ class ROI_Inspector(QDialog):
             2 * radius * scale,
             Qt.AspectRatioMode.KeepAspectRatio,
         )
-        assert isinstance(self.beads, pd.DataFrame)
-        output = self.beads.query(f"x=={x} & y=={y}")
+
+        # Use merged data instead of original beads data
+        data_to_query = (
+            self.merged_bead_data if self.merged_bead_data is not None else self.beads
+        )
+        assert isinstance(data_to_query, pd.DataFrame)
+        output = data_to_query.query(f"x=={x} & y=={y}")
         bbox = None
         idx = None
         if not output.empty:
@@ -297,6 +455,7 @@ class ROI_Inspector(QDialog):
         assert isinstance(x, int) and isinstance(y, int)
         print(f"Inspecting ROI at ({x}, {y}) with radius {radius} and scale {scale}")
         rois = {}
+        bright_field_roi = {}
         for key, cycle in (self.cycles or {}).items():
             if cycle.ndim == 3:
                 h, w = cycle.shape[1], cycle.shape[2]
@@ -306,9 +465,9 @@ class ROI_Inspector(QDialog):
                 print(f"Cycle {key} has unexpected shape {cycle.shape}")
                 continue
             x0 = max(0, x - int(radius * scale))
-            x1 = min(w, x + int(radius * scale))
+            x1 = min(w, x + int(radius * scale) + 1)
             y0 = max(0, y - int(radius * scale))
-            y1 = min(h, y + int(radius * scale))
+            y1 = min(h, y + int(radius * scale) + 1)
             if bbox is not None:
                 x0, y0, x1, y1 = expand_bbox(bbox, scale)
             if cycle.ndim == 3:
@@ -316,11 +475,15 @@ class ROI_Inspector(QDialog):
             else:
                 roi = cycle[y0:y1, x0:x1]
             rois[key] = roi
+            if self.bright_fields is not None and key in self.bright_fields:
+                bright_field_roi[key] = self.bright_fields[key][y0:y1, x0:x1]
             print(
                 f"Cycle {key}: extracted ROI shape {roi.shape} at ({x0}:{x1}, {y0}:{y1})"
             )
 
-        popup = ROI_Grid_Display(rois, (x, y), radius, scale, bbox, output)
+        popup = ROI_Grid_Display(
+            rois, (x, y), radius, scale, bbox, output, bright_field_roi
+        )
         popup.exec()  # modal dialog to display ROIs
 
     def reset_zoom(self, event=None):
@@ -353,32 +516,31 @@ class ROI_Inspector(QDialog):
         # assert isinstance(rgb_image, np.ndarray)
         h, w = rgb_image.shape[:-1]
 
-        # Draw red centers
-        if self.beads is not None and not self.beads.empty:
-            xs = self.beads["x"].astype(int).to_numpy()
-            ys = self.beads["y"].astype(int).to_numpy()
-
+        # Draw red centers - use merged data if available
+        data_to_use = (
+            self.merged_bead_data if self.merged_bead_data is not None else self.beads
+        )
+        # Color invalid beads differently (e.g., yellow instead of red)
+        assert isinstance(data_to_use, pd.DataFrame)
+        if self.merged_bead_data is not None:
+            xs = data_to_use["x"].astype(float).round().astype(int).to_numpy()
+            ys = data_to_use["y"].astype(float).round().astype(int).to_numpy()
             valid = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
             xs, ys = xs[valid], ys[valid]
+            protein_names = data_to_use.loc[valid, "Protein name"].to_numpy()
 
-            rgb_image[ys, xs] = [255, 0, 0]  # RE
-        # for bbox_str in self.bboxs:
-        #     # Parse numbers from string "(x1, y1, x2, y2)"
-        #     y1, x1, y2, x2 = map(int, re.findall(r"-?\d+", bbox_str))
+            # Boolean masks for invalid/valid
+            invalid_mask = protein_names == "Invalid"
+            valid_mask = ~invalid_mask
 
-        #     # Clip to image bounds
-        #     x1 = np.clip(x1, 0, w - 1)
-        #     x2 = np.clip(x2, 0, w - 1)
-        #     y1 = np.clip(y1, 0, h - 1)
-        #     y2 = np.clip(y2, 0, h - 1)
-
-        #     # Draw rectangle edges in white
-        #     rgb_image[y1, x1:x2+1] = [255, 255, 255]  # Top
-        #     rgb_image[y2, x1:x2+1] = [255, 255, 255]  # Bottom
-        #     rgb_image[y1:y2+1, x1] = [255, 255, 255]  # Left
-        #     rgb_image[y1:y2+1, x2] = [255, 255, 255]  # Right
-        # draw bounding box white outline
-        # self.bbox, same length as self.beads, indexed same
+            # Yellow for invalid
+            rgb_image[ys[invalid_mask], xs[invalid_mask]] = [255, 255, 0]
+            # Red for valid
+            rgb_image[ys[valid_mask], xs[valid_mask]] = [255, 0, 0]
+        else:
+            xs = data_to_use["x"].astype(float).round().astype(int).to_numpy()
+            ys = data_to_use["y"].astype(float).round().astype(int).to_numpy()
+            rgb_image[ys, xs] = [255, 0, 0]  # Red
 
         # Convert to QImage and show
         rgb_image = np.ascontiguousarray(rgb_image)
@@ -397,6 +559,7 @@ class ROI_Grid_Display(QDialog):
         scale: float,
         bbox,
         output: pd.DataFrame | None = None,
+        bright_field_roi: dict | None = None,
     ):
         super().__init__(None)
         self.setWindowTitle("ROI Grid Display")
@@ -414,29 +577,57 @@ class ROI_Grid_Display(QDialog):
         # channels are columns
         # rows are cycles
         num_channels = len(rois.get("cy0", np.array([])))
+        offset = 1
+        if bright_field_roi is not None and len(bright_field_roi):
+            bf_label = QLabel("Bright Field")
+            grid_layout.addWidget(bf_label, 0, offset)
+            offset += 1
         for i in range(len(rois)):
             cycle_label = QLabel(f"Cycle {i}")
             grid_layout.addWidget(cycle_label, i + 1, 0)
         for i in range(num_channels):
             channel_label = QLabel(f"Channel {i}")
-            grid_layout.addWidget(channel_label, 0, i + 1)
+            grid_layout.addWidget(channel_label, 0, i + offset)
         if output is not None and len(output):
             out_label = QLabel(f"Output")
-            grid_layout.addWidget(out_label, 0, num_channels + 1)
-
+            grid_layout.addWidget(out_label, 0, num_channels + offset)
+        # add grayscale bright field images if provided
+        starting_col = 1
+        if bright_field_roi is not None and len(bright_field_roi):
+            for key, bf_roi in bright_field_roi.items():
+                if bf_roi.ndim == 2:
+                    bf_img = to_uint8(bf_roi)
+                    bf_img = QImage(
+                        bf_img.data,
+                        bf_img.shape[1],
+                        bf_img.shape[0],
+                        bf_img.strides[0],
+                        QImage.Format.Format_Grayscale8,
+                    )
+                    bf_pixmap = QPixmap.fromImage(bf_img)
+                    bf_label = OverlayLabel(
+                        bf_pixmap.scaled(50, 50, Qt.AspectRatioMode.KeepAspectRatio),
+                        bbox,
+                    )
+                    grid_layout.addWidget(bf_label, row, starting_col)
+                row += 1
+            starting_col += 1
+        row = 1
         for key, roi in rois.items():
-            col = 1
+            col = starting_col
             if roi.ndim == 3:
                 # Multi-channel
                 for c in range(roi.shape[0]):
-                    roi_colorized = colorize_grayscale(to_uint8(roi[c]), c)
+                    roi_colorized = colorize_grayscale(to_uint8(roi[c]), c % 4)
                     roi_label = OverlayLabel(
                         roi_colorized.scaled(
                             50, 50, Qt.AspectRatioMode.KeepAspectRatio
                         ),
                         bbox,
+                        roi=roi[c],
                     )
                     grid_layout.addWidget(roi_label, row, col)
+
                     col += 1
             elif roi.ndim == 2:
                 # Single channel
@@ -445,6 +636,8 @@ class ROI_Grid_Display(QDialog):
                 pixmap_label.setPixmap(
                     pixmap.scaled(50, 50, Qt.AspectRatioMode.KeepAspectRatio)
                 )
+                grid_layout.addWidget(pixmap_label, row, col)
+                col += 1
             if output is not None and len(output):
                 try:
                     pred = output[key]
@@ -456,6 +649,7 @@ class ROI_Grid_Display(QDialog):
                     pred = str(pred.iloc[0])
                 output_label = QLabel(pred)
                 grid_layout.addWidget(output_label, row, col)
+
             row += 1
 
         layout.addLayout(grid_layout, 6)
@@ -469,31 +663,65 @@ class ROI_Grid_Display(QDialog):
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QLabel
+from scipy.signal import correlate2d
 
 
 class OverlayLabel(QLabel):
-    def __init__(self, pixmap, bbox, parent=None):
+    def __init__(self, pixmap, bbox=None, parent=None, roi=None):
         super().__init__(parent)
-        self.setPixmap(pixmap)
-        # self.setFixedSize(pixmap.size())
+        self.pixmap_to_draw = pixmap
+        self.rect_to_draw = bbox_to_qrectf(bbox) if bbox else None
+        if roi is not None:
+            # calculate template matching score with roi
+            print(roi.shape)
+            self.overlay_text = f"{calculate_template_match(roi):.2f}"
 
-        if bbox is not None:
-            self.rect_to_draw = bbox_to_qrectf(bbox)
-        else:
-            self.rect_to_draw = None
+        # Resize label to fit pixmap + text
+        self.setFixedSize(
+            self.pixmap_to_draw.width(),
+            self.pixmap_to_draw.height() + 20,  # space for text
+        )
 
     def paintEvent(self, event):
-        super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        pen = QPen(QColor("white"))
-        pen.setWidthF(0.5)
-        painter.setPen(pen)
-        if self.rect_to_draw is not None:
+        # Draw the pixmap
+        painter.drawPixmap(0, 0, self.pixmap_to_draw)
+
+        # Draw the rectangle overlay if needed
+        if self.rect_to_draw:
+            pen = QPen(QColor("white"))
+            pen.setWidthF(0.5)
+            painter.setPen(pen)
             painter.drawRect(self.rect_to_draw)
 
+        # Draw the text below the pixmap
+        if hasattr(self, "overlay_text"):
+            text_rect = QRectF(0, self.pixmap_to_draw.height(), self.width(), 20)
+            painter.setPen(QPen(QColor("white")))
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, self.overlay_text)
+
         painter.end()
+
+
+def calculate_template_match(roi):
+    gaussian_5x5 = np.array(
+        [
+            [0, 4, 7, 4, 0],
+            [0, 16, 26, 16, 4],
+            [7, 26, 41, 26, 7],
+            [0, 16, 26, 16, 4],
+            [0, 4, 7, 4, 0],
+        ],
+        dtype=np.float32,
+    )
+
+    # Normalize so sum = 1
+    gaussian_5x5 /= gaussian_5x5.sum()
+    roi = adjust_contrast(roi.astype(np.float32), 10, 90)
+    score = correlate2d(roi.astype(np.float32), gaussian_5x5, mode="same")
+    return np.max(score)
 
 
 def bbox_to_qrectf(bbox):
@@ -515,7 +743,16 @@ def readable_matrix_string(matrix: np.ndarray) -> str:
     return f"Translation: ({tx:.2f}, {ty:.2f}), Rotation: {angle_deg:.2f}°, Scale: (x: {scale_x:.2f}, y: {scale_y:.2f})"
 
 
-colors = [(27, 158, 119), (217, 95, 2), (117, 112, 179), (231, 41, 138)]
+colors = [
+    (27, 158, 119),
+    (217, 95, 2),
+    (117, 112, 179),
+    (231, 41, 138),
+    (102, 166, 30),
+    (230, 171, 2),
+    (166, 118, 29),
+    (102, 102, 102),
+]
 
 
 def colorize_grayscale(gray_img: np.ndarray, color_indx: int) -> QPixmap:

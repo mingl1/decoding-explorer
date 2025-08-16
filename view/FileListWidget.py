@@ -116,7 +116,7 @@ class FileTableWidget(QTableWidget):
                     item.setBackground(QColor(file_item.status.color))
                     item.setText(file_item.status.name)
                     filename_item.setData(Qt.ItemDataRole.UserRole, file_item)
-                    print(f"Updated status for {file_path} to {file_item.status}")
+                    print(f"Updated FileItem Information for {file_path}")
 
     def get_selected_files(self) -> List[FileItem]:
         selected_items = self.selectedItems()
@@ -126,8 +126,7 @@ class FileTableWidget(QTableWidget):
                 file_item = item.data(Qt.ItemDataRole.UserRole)
                 if isinstance(file_item, FileItem):
                     selected_files.append(file_item)
-        # sort by path to have consistent order
-        selected_files.sort(key=lambda x: x.path)
+
         # remove reference file if selected:
         selected_files = [f for f in selected_files]
         return selected_files
