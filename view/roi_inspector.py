@@ -112,7 +112,7 @@ class ZoomableImageView(QGraphicsView):
             assert dot is not None
             dot.setZValue(1)  # Make sure it appears above the image
 
-
+from image_processing import gaussian_kernel
 class ROI_Inspector(QDialog):
     show_bead_signal = pyqtSignal(np.ndarray)
 
@@ -719,9 +719,10 @@ def calculate_template_match(roi):
 
     # Normalize so sum = 1
     gaussian_5x5 /= gaussian_5x5.sum()
+    gaussian_5x5 = gaussian_kernel(5)
     roi = adjust_contrast(roi.astype(np.float32), 10, 90)
-    score = correlate2d(roi.astype(np.float32), gaussian_5x5, mode="same")
-    return np.max(score)
+    score = correlate2d(roi.astype(np.float32), gaussian_5x5, mode="valid")
+    return np.median(score)
 
 
 def bbox_to_qrectf(bbox):

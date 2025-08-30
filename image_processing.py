@@ -1,9 +1,11 @@
 import concurrent.futures
 import itertools
 import os
+from random import gauss
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List
 
 import cv2
 import diplib as dip
@@ -313,7 +315,6 @@ import tempfile
 # ---- Main beadfinding ----
 def beadfinding(
     brightfield,
-    preferred_thresholding,
     num_tiles=10,
     px_overlap=100,
     workers=10,
@@ -775,9 +776,57 @@ def edge_bead_filtering(radius, max_size):
 
 from scipy.signal import convolve2d, correlate2d
 
+import numpy as np
+from scipy.signal import correlate2d
+
+
+def gaussian_kernel(size: int, sigma: float = None) -> np.ndarray:
+    """
+    Generate a normalized 2D Gaussian kernel.
+    Args:
+        size (int): Odd kernel size
+        sigma (float): Standard deviation. Defaults to size/6.
+    """
+    if size % 2 == 0:
+        raise ValueError("Size must be odd")
+    if sigma is None:
+        sigma = size / 6.0
+
+    ax = np.arange(-(size // 2), size // 2 + 1)
+    xx, yy = np.meshgrid(ax, ax)
+    kernel = np.exp(-(xx**2 + yy**2) / (2.0 * sigma**2))
+    return kernel / np.sum(kernel)
+
+
+def extract_bead_rois(flor_layer: np.ndarray, beads_batch: np.ndarray, radius: int):
+    """
+    Extract same-shaped, padded ROIs for beads.
+    Returns shape: (N, 2r+1, 2r+1)
+    """
+    H, W = flor_layer.shape
+    pad = radius
+    padded = np.pad(flor_layer, pad_width=pad, mode="constant", constant_values=0)
+
+    beads_batch = np.rint(beads_batch).astype(int)
+    beads_batch_padded = beads_batch + pad
+
+    roi_size = 2 * radius + 1
+    bead_rois = np.empty((len(beads_batch), roi_size, roi_size), dtype=flor_layer.dtype)
+
+    for i, (x, y) in enumerate(beads_batch_padded):
+        bead_rois[i] = padded[y-radius:y+radius+1, x-radius:x+radius+1]
+
+    return bead_rois
+
 
 def process_bead_batch(args):
-    """Process a batch of beads for a single layer"""
+    """
+    Process a batch of beads for a single fluorescence layer.
+    Returns:
+        layer_specific_data (uint16): brightness per bead
+        sig_noise_data (float): signal-to-noise ratio
+        layer_threshold_data (float): thresholded brightness
+    """
     (
         flor_layer,
         beads_batch,
@@ -789,63 +838,46 @@ def process_bead_batch(args):
     ) = args
 
     batch_size = end_idx - start_idx
-    layer_specific_data = np.zeros(batch_size, dtype="uint16")
-    sig_noise_data = np.zeros(batch_size, dtype="float")
-    layer_threshold_data = np.zeros(batch_size, dtype="float")
+    layer_specific_data = np.zeros(batch_size, dtype="float32")
+    sig_noise_data = np.zeros(batch_size, dtype="float32")
+    layer_threshold_data = np.zeros(batch_size, dtype="uint8")
 
-    # Process each bead in the batch
+    # --- ROI extraction ---
     if roi_coords_batch is not None:
-        # Use provided ROI coordinates
-        bead_rois = [
-            flor_layer[coords[:, 0], coords[:, 1]] for coords in roi_coords_batch
-        ]
+        # custom ROI coords (list of arrays of pixel indices)
+        bead_rois = [flor_layer[coords[:, 0], coords[:, 1]] for coords in roi_coords_batch]
     else:
-        # Use circular ROI around bead coordinates
-        # ensure bead coordinates are within bounds
-        beads_batch = np.rint(beads_batch).astype(int)
-        bead_rois = [
-            flor_layer[
-                max(0, y - radius) : min(flor_layer.shape[0], y + radius),
-                max(0, x - radius) : min(flor_layer.shape[1], x + radius),
-            ]
-            for x, y in beads_batch
-        ]
+        bead_rois = extract_bead_rois(flor_layer, beads_batch, radius)
 
-    percentile_map = [np.percentile(region_vals, 10) for region_vals in bead_rois]
-    weight = np.array([[0, 2, 0], [2, 3, 2], [0, 2, 0]], dtype="float32")
-    weight /= weight.sum()
-    for b_i, bead in enumerate(beads_batch):
-        roi = bead_rois[b_i]
-        # correlate with 3x3 gaussian filter that values center more
-        filtered_roi = correlate2d(roi, weight, mode="valid")
+    bead_rois = np.asarray(bead_rois)
+
+    # --- Background percentile (vectorized) ---
+    percentile_map = np.percentile(bead_rois.reshape(batch_size, -1), 10, axis=1)
+
+    # --- Gaussian kernel ---
+    kernel_size = 5
+    gaussian = gaussian_kernel(kernel_size)
+
+    # --- Process each ROI ---
+    for b_i, roi in enumerate(bead_rois):
+        filtered_roi = correlate2d(roi, gaussian, mode="valid")
         brightness = np.max(filtered_roi)
-        flor_layer_background_intensity_local = percentile_map[b_i]
+        background = percentile_map[b_i]
 
-        if flor_layer_background_intensity_local > 0:
-            signal_noise_ratio = (
-                brightness - flor_layer_background_intensity_local
-            ) / flor_layer_background_intensity_local
+        if background > 0:
+            snr = (brightness - background) / background
         else:
-            signal_noise_ratio = 0
+            snr = 0.0
 
         layer_specific_data[b_i] = brightness
-        sig_noise_data[b_i] = signal_noise_ratio
-        layer_threshold_data[b_i] = brightness > layer_threshold
+        sig_noise_data[b_i] = snr
+        layer_threshold_data[b_i] = brightness > 0.3
 
     return layer_specific_data, sig_noise_data, layer_threshold_data
 
 
 # def calculate_template_match(roi):
-#     gaussian_5x5 = np.array(
-#         [
-#             [0, 4, 7, 4, 0],
-#             [0, 16, 26, 16, 4],
-#             [7, 26, 41, 26, 7],
-#             [0, 16, 26, 16, 4],
-#             [0, 4, 7, 4, 0],
-#         ],
-#         dtype=np.float32,
-#     )
+
 
 
 #     # Normalize so sum = 1
@@ -887,6 +919,48 @@ def calculate_template_match(roi):
     score = correlate2d(roi.astype(np.float32), gaussian_9x9, mode="same")
     return np.max(score)
 
+def gaussian_kernel(size: int, sigma= None) -> np.ndarray:
+    """
+    Generate a normalized 2D Gaussian kernel.
+
+    Args:
+        size (int): Kernel size (must be odd).
+        sigma (float): Standard deviation. If None, defaults to size/6.
+
+    Returns:
+        np.ndarray: (size, size) Gaussian kernel normalized to sum=1
+    """
+    if size % 2 == 0:
+        raise ValueError("Size must be odd.")
+
+    if sigma is None:
+        sigma = size / 6.0  # heuristic so Gaussian spans kernel nicely
+
+    ax = np.arange(-(size // 2), size // 2 + 1)
+    xx, yy = np.meshgrid(ax, ax)
+    kernel = np.exp(-(xx**2 + yy**2) / (2.0 * sigma**2))
+
+    return kernel / np.sum(kernel)
+
+def extract_bead_rois(flor_layer, beads_batch, radius):
+    """Extract same-shaped, padded ROIs for each bead."""
+    H, W = flor_layer.shape
+    pad = radius
+    padded = np.pad(flor_layer, pad_width=pad, mode="constant", constant_values=0)
+
+    # Shift bead coords to match padded indexing
+    beads_batch = np.rint(beads_batch).astype(int)
+    beads_batch_padded = beads_batch + pad
+
+    # Preallocate consistent ROI array
+    roi_size = 2 * radius + 1
+    bead_rois = np.empty((len(beads_batch), roi_size, roi_size), dtype=flor_layer.dtype)
+
+    for i, (x, y) in enumerate(beads_batch_padded):
+        bead_rois[i] = padded[y-radius:y+radius+1, x-radius:x+radius+1]
+
+    return bead_rois
+
 
 def extract_padded_rois(img, coords, channels, radius=2):
     """
@@ -923,8 +997,391 @@ def extract_padded_rois(img, coords, channels, radius=2):
             rois[b_idx, c_idx, dy1:dy2, dx1:dx2] = img[ch, sy1:sy2, sx1:sx2]
 
     return rois
+import cv2
+import numpy as np
+import time
+import numexpr as ne
+from skimage import filters, measure, segmentation
+from skimage.segmentation import watershed
+from skimage.feature import peak_local_max
+from scipy import ndimage as ndi
+import utils
+def print_timing_summary(timings):
+    """Print a formatted summary of timing results."""
+    print("\n=== Watershed Segmentation Timing Summary ===")
+    print(f"{'Step':<25} {'Time (ms)':<12} {'Percentage':<12}")
+    print("-" * 50)
+    
+    total_time = timings['total']
+    for step, time_val in timings.items():
+        if step != 'total':
+            percentage = (time_val / total_time) * 100
+            print(f"{step:<25} {time_val*1000:>8.2f} ms {percentage:>8.1f}%")
+    
+    print("-" * 50)
+    print(f"{'TOTAL':<25} {total_time*1000:>8.2f} ms {100.0:>8.1f}%")
+    print("=" * 50)
+# def watershed_segmentation_cv2(img, border=1, marker_low=30/255.0, marker_high=40/255.0, 
+#                               use_numexpr=True, bg=None, visualize=False, 
+#                               bg_percentile_low=20, bg_percentile_high=80, histogram_cutoffs=None,background_mask=None):
+#     """
+#     Watershed segmentation with optional numexpr preprocessing, logging for timing,
+#     and visualization of labeled regions.
+    
+#     Parameters:
+#     -----------
+#     img : numpy.ndarray
+#         Input image (grayscale)
+#     border : int
+#         Border size for marker placement
+#     marker_low : float
+#         Lower threshold for foreground markers (when bg=None)
+#     marker_high : float
+#         Upper threshold for background markers (when bg=None)
+#     use_numexpr : bool
+#         Whether to use numexpr for preprocessing
+#     bg : numpy.ndarray, optional
+#         Background image for localized thresholding
+#     visualize : bool
+#         Whether to return annotated visualization
+#     bg_percentile_low : int
+#         Lower percentile for background-based thresholding
+#     bg_percentile_high : int
+#         Upper percentile for background-based thresholding
+    
+#     Returns:
+#     --------
+#     segmentation_coins : numpy.ndarray
+#         Binary mask of segmented regions
+#     labeled_coins : numpy.ndarray
+#         Integer labels for connected components
+#     image_out : numpy.ndarray (optional)
+#         Annotated image with circles and labels (if visualize=True)
+#     timings : dict
+#         Dictionary containing timing information for each step
+#     """
+#     timings = {}
+    
+#     # Step 1: Convert to float
+#     t0 = time.time()
+#     img_float = img.astype(np.float64)
+#     timings['convert_to_float'] = time.time() - t0
+    
+#     # Step 2: Optional normalization using numexpr
+#     t1 = time.time()
+#     if use_numexpr:
+#         img_min = img_float.min()
+#         img_max = img_float.max()
+#         img_float = ne.evaluate("(img_float - img_min) / (img_max - img_min)")
+#     timings['numexpr_preprocessing'] = time.time() - t1
+    
+#     # Step 3: Compute elevation map using Sobel
+#     t2 = time.time()
+#     elevation_map = filters.sobel(img_float)
+#     timings['sobel'] = time.time() - t2
+    
+#     # Step 4: Create markers
+#     t3 = time.time()
+#     markers = np.zeros_like(img, dtype=np.int32)
+    
+#     if bg is None or histogram_cutoffs is not None:
+#         # Original threshold-based approach
+#         if histogram_cutoffs is not None:
+#             if background_mask is None:
+#                 markers = np.digitize(img_float, histogram_cutoffs).astype(np.int32)
+#             else:
+#                 markers = np.digitize(img_float, histogram_cutoffs).astype(np.int32)
+#                 markers[background_mask] = 1
+#                 # markers[img_float>histogram_cutoffs[1]] = 2
+#                 # markers = np.digitize(img_float, [0]+histogram_cutoffs).astype(np.int32)
+#             print(markers.dtype, markers.shape)
+#         else:
+#             markers[img_float < marker_low] = 1  # Background
+#             markers[img_float > marker_high] = 2  # Foreground
+#     else:
+#         # Background-based localized thresholding
+#         # Edit the background array using localized percentiles
+#         if bg.shape != img.shape:
+#             raise ValueError("Background image must have same shape as input image")
+        
+#         # Normalize background image
+#         bg_float = bg.astype(np.float64)
+#         bg_float = (bg_float - bg_float.min()) / (bg_float.max() - bg_float.min())
+        
+#         # Create localized background correction using percentiles
+#         # Use a sliding window approach for local percentile calculation
+#         from scipy.ndimage import generic_filter
+        
+#         # Define local window size (should be larger than expected objects)
+#         window_size = min(img.shape) // 8  # Adaptive window size
+        
+#         # Calculate local percentiles of the background
+#         def local_percentile_low(arr):
+#             return np.percentile(arr, bg_percentile_low)
+        
+#         def local_percentile_high(arr):
+#             return np.percentile(arr, bg_percentile_high)
+        
+#         # Apply local percentile filtering to background
+#         bg_local_low = generic_filter(bg_float, local_percentile_low, size=window_size)
+#         bg_local_high = generic_filter(bg_float, local_percentile_high, size=window_size)
+        
+#         # Create adaptive thresholds based on local background statistics
+#         # Markers are based on how the image compares to local bg percentiles
+#         markers[img_float < bg_local_low] = 1   # Below local background low percentile
+#         markers[img_float > bg_local_high] = 2  # Above local background high percentile
+#     # Add border markers to ensure proper segmentation
+#     # markers[:border, :] = 1
+#     # markers[-border:, :] = 1
+#     # markers[:, :border] = 1
+#     # markers[:, -border:] = 1
+    
+#     timings['marker_creation'] = time.time() - t3
+    
+#     # Step 5: Watershed segmentation
+#     t4 = time.time()
+#     # Convert elevation map to CV2 format (3-channel uint8)
+#     elevation_map_cv = cv2.cvtColor((elevation_map * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    
+#     # Apply watershed
+#     labeled_markers = cv2.watershed(elevation_map_cv, markers.copy())
+#     timings['watershed'] = time.time() - t4
+    
+#     # Step 6: Post-process results
+#     t5 = time.time()
+#     # Create binary segmentation (foreground regions)
+#     segmentation_coins = (labeled_markers >= 2).astype(np.uint8)
 
+#     if border > 0:
+#         segmentation_coins = ndi.binary_erosion(segmentation_coins, iterations=border)
+    
+#     # Create connected component labels for individual objects
+#     labeled_coins ,_= ndi.label(segmentation_coins)
+    
+#     # Remove small components (noise reduction)
+#     # min_size = 10
+#     # labeled_coins = ski.morphology.remove_small_objects(labeled_coins, min_size=min_size)
+    
+#     # Update binary mask to match cleaned labels
+#     segmentation_coins = (labeled_coins > 0).astype(np.uint8)
+    
+#     timings['post_processing'] = time.time() - t5
+#     timings['total'] = time.time() - t0
+    
+    
+#     return segmentation_coins, labeled_coins, timings
+def watershed_segmentation_cv2(img, border=1, marker_low=30/255.0, marker_high=40/255.0, 
+                              use_numexpr=True, bg=None, visualize=False, 
+                              bg_percentile_low=20, bg_percentile_high=80, histogram_cutoffs=None,background_mask=None):
+    """
+    Watershed segmentation with optional numexpr preprocessing, logging for timing,
+    and visualization of labeled regions.
+    
+    Parameters:
+    -----------
+    img : numpy.ndarray
+        Input image (grayscale)
+    border : int
+        Border size for marker placement
+    marker_low : float
+        Lower threshold for foreground markers (when bg=None)
+    marker_high : float
+        Upper threshold for background markers (when bg=None)
+    use_numexpr : bool
+        Whether to use numexpr for preprocessing
+    bg : numpy.ndarray, optional
+        Background image for localized thresholding
+    visualize : bool
+        Whether to return annotated visualization
+    bg_percentile_low : int
+        Lower percentile for background-based thresholding
+    bg_percentile_high : int
+        Upper percentile for background-based thresholding
+    
+    Returns:
+    --------
+    segmentation_coins : numpy.ndarray
+        Binary mask of segmented regions
+    labeled_coins : numpy.ndarray
+        Integer labels for connected components
+    image_out : numpy.ndarray (optional)
+        Annotated image with circles and labels (if visualize=True)
+    timings : dict
+        Dictionary containing timing information for each step
+    """
+    timings = {}
+    
+    # Step 1: Convert to float
+    t0 = time.time()
+    img_float = img.astype(np.float64)
+    timings['convert_to_float'] = time.time() - t0
+    
+    # Step 2: Optional normalization using numexpr
+    t1 = time.time()
+    if use_numexpr:
+        img_min = img_float.min()
+        img_max = img_float.max()
+        img_float = ne.evaluate("(img_float - img_min) / (img_max - img_min)")
+    timings['numexpr_preprocessing'] = time.time() - t1
+    
+    # Step 3: Compute elevation map using Sobel
+    t2 = time.time()
+    elevation_map = filters.sobel(img_float)
+    timings['sobel'] = time.time() - t2
+    
+    # Step 4: Create markers
+    t3 = time.time()
+    markers = np.zeros_like(img, dtype=np.int32)
+    
+    if bg is None or histogram_cutoffs is not None:
+        # Original threshold-based approach
+        if histogram_cutoffs is not None:
+            if background_mask is None:
+                markers = np.digitize(img_float, histogram_cutoffs).astype(np.int32)
+            else:
+                markers = np.digitize(img_float, histogram_cutoffs).astype(np.int32)
+                markers[background_mask] = 1
+                # markers[img_float>histogram_cutoffs[1]] = 2
+                # markers = np.digitize(img_float, [0]+histogram_cutoffs).astype(np.int32)
+            print(markers.dtype, markers.shape)
+        else:
+            markers[img_float < marker_low] = 1  # Background
+            markers[img_float > marker_high] = 2  # Foreground
+    else:
+        # Background-based localized thresholding
+        # Edit the background array using localized percentiles
+        if bg.shape != img.shape:
+            raise ValueError("Background image must have same shape as input image")
+        
+        # Normalize background image
+        bg_float = bg.astype(np.float64)
+        bg_float = (bg_float - bg_float.min()) / (bg_float.max() - bg_float.min())
+        
+        # Create localized background correction using percentiles
+        # Use a sliding window approach for local percentile calculation
+        from scipy.ndimage import generic_filter
+        
+        # Define local window size (should be larger than expected objects)
+        window_size = min(img.shape) // 8  # Adaptive window size
+        
+        # Calculate local percentiles of the background
+        def local_percentile_low(arr):
+            return np.percentile(arr, bg_percentile_low)
+        
+        def local_percentile_high(arr):
+            return np.percentile(arr, bg_percentile_high)
+        
+        # Apply local percentile filtering to background
+        bg_local_low = generic_filter(bg_float, local_percentile_low, size=window_size)
+        bg_local_high = generic_filter(bg_float, local_percentile_high, size=window_size)
+        
+        # Create adaptive thresholds based on local background statistics
+        # Markers are based on how the image compares to local bg percentiles
+        markers[img_float <= bg_local_low] = 1   # Below local background low percentile
+        markers[img_float > bg_local_high] = 2  # Above local background high percentile
+    # Add border markers to ensure proper segmentation
+    markers[:border, :] = 1
+    markers[-border:, :] = 1
+    markers[:, :border] = 1
+    markers[:, -border:] = 1
+    
+    timings['marker_creation'] = time.time() - t3
+    
+    # Step 5: Watershed segmentation
+    t4 = time.time()
+    # Convert elevation map to CV2 format (3-channel uint8)
+    elevation_map_cv = cv2.cvtColor((elevation_map * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    
+    # Apply watershed
+    labeled_markers = cv2.watershed(elevation_map_cv, markers.copy())
+    timings['watershed'] = time.time() - t4
+    
+    # Step 6: Post-process results
+    t5 = time.time()
+    # Create binary segmentation (foreground regions)
+    segmentation_coins = (labeled_markers >= 2).astype(np.uint8)
+    segmentation_coins = ndi.binary_fill_holes(segmentation_coins)
 
+    if border > 0:
+        segmentation_coins = ndi.binary_erosion(segmentation_coins, iterations=border)
+    
+    # Create connected component labels for individual objects
+    labeled_coins = measure.label(segmentation_coins)
+    
+    # Remove small components (noise reduction)
+    # min_size = 10
+    # labeled_coins = ski.morphology.remove_small_objects(labeled_coins, min_size=min_size)
+    
+    # Update binary mask to match cleaned labels
+    segmentation_coins = (labeled_coins > 0).astype(np.uint8)
+    
+    timings['post_processing'] = time.time() - t5
+    timings['total'] = time.time() - t0
+    return segmentation_coins, labeled_coins, timings
+    
+    
+from skimage.exposure import equalize_adapthist
+from skimage.restoration import rolling_ball
+def get_labels_from_cycles(cycles, cycles_metadata:List[MetaData]):
+    cycle_labels = []
+    for i, cycle in enumerate(cycles):
+        flor_layers = cycles_metadata[i].flors_layers
+        assert flor_layers is not None, "forgot to initialize flors layer idx"
+        max_size = cycles_metadata[i].max_size
+        labels = []
+        for layer_idx in flor_layers:
+            img = cycle[layer_idx][:max_size,:max_size]
+            img = ((img - img.min()) / (img.max() - img.min()))
+            # img = equalize_adapthist(img,kernel_size=9)
+            bg = rolling_ball(img, radius=15, num_threads=8)
+            img -= bg
+            seg,label,timing = watershed_segmentation_cv2(img, use_numexpr=False, border=1, marker_low=0, marker_high=0.00001)
+            print_timing_summary(timing)
+            labels.append(label)
+        cycle_labels.append(labels)
+    return cycle_labels
+            
+import numpy as np
+from tqdm import tqdm
+
+def assign_beads_labels(bead_data, cycle_labels):
+    bead_data = bead_data.copy()
+    for i, cycle_label in enumerate(cycle_labels):
+        # Build one big array of shape (n_flour, H, W)
+        labs = np.array(cycle_label)  # shape (n_flour, H, W)
+        print(labs.shape)
+        # Round coords and clip to bounds
+        xs = np.rint(bead_data['x'].to_numpy()).astype(int)
+        ys = np.rint(bead_data['y'].to_numpy()).astype(int)
+        # xs = np.clip(xs, 0, labs.shape[-1]-1)
+        # ys = np.clip(ys, 0, labs.shape[-2]-1)
+
+        # Fancy index: take values at (flour, y, x)
+        # shape (n_points, n_flour)
+        print(len(xs))
+        values = labs[:, ys, xs].T
+        print(len(values))
+
+        # Replace zeros with 0, keep as float
+        arr = values.astype(int)
+        arr[arr == 0] = 0   # redundant, but ensures float
+        arr = np.nan_to_num(arr, nan=0)
+
+        # argmax along columns
+        # argmaxes = np.argmax(arr, axis=1)
+
+        # Build column names and assign
+        for flour in range(arr.shape[1]):
+            bead_data[f'cy{i}_{flour}'] = arr[:, flour]
+
+        # bead_data[f'cy{i}_argmax'] = argmaxes
+
+    return bead_data
+def get_assignment(row, cols):
+    col = [c for c in cols if row[c]>0]
+    # assert len(col) == 1
+    col = col[0]
+    return int(col.split("_")[-1])  # layer number
 def get_excel(
     beads,
     signal_to_noise_cutoff,
@@ -961,114 +1418,179 @@ def get_excel(
     total_beads = len(beads)
     total_cycles = len(tif_metadata)
     total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
+    beads = pd.DataFrame(beads[:,:2],columns=['x','y'],dtype=np.float32)
+    labels = get_labels_from_cycles(tif_images,tif_metadata)
+    df = assign_beads_labels(beads, labels)
+    cycle_layer_columns = {}
+    
+    for i in range(total_cycles):
+        cols = []
+        for j in range(total_layers):
+            cycle_layer_columns[(i,j)] = f"cy{i}_{j}"
+            cols.append(cycle_layer_columns[(i,j)])
+        df[f"cy{i}_count"] = (df[cols]>0).sum(axis=1)
+    count_cols = [f"cy{i}_count" for i in range(total_cycles)]
+
+    both_assignment = (df[count_cols] == 1).all(axis=1)
+    no_assignment   = (df[count_cols] == 0).any(axis=1)
+
+    counts = {
+        "no_assignment":no_assignment.sum(),
+        'both_single':both_assignment.sum()
+    }
+
+    print(counts)
+    need_correction = df[~both_assignment & ~no_assignment]
+    template = gaussian_kernel(5).astype(np.float32)
+    # Zero-pad cycles
+    pad = 2
+    tif_images = np.pad(np.array(tif_images),((0,),(0,),(2,),(2,)))
+
+    # doesn't change actual coords, only for calculations
+    x_coords = np.rint(need_correction['x'].to_numpy() + pad).astype(np.int32)
+    y_coords = np.rint(need_correction['y'].to_numpy() + pad).astype(np.int32)
+    columns = [f"cy{i}" for i in range(len(tif_images))]
+    final_df = df[['x','y']].copy()
+    final_df[columns] = 255
+    def assignment_row(row):
+        return [
+            get_assignment(
+                row,
+                [f"{col}_{i}" for i in range(len(tif_metadata[0].flors_layers))]
+            )
+            for col in columns
+        ]
+    singles_vals = df.loc[both_assignment].apply(assignment_row, axis=1, result_type="expand")
+    final_df.loc[both_assignment, columns] = singles_vals.values
+    cycle_values = []
+    for i, (x, y) in tqdm(enumerate(zip(x_coords, y_coords))):
+        # Extract 5x5 patches for all channels except channel 0
+        row_cycles_val = []
+        for cycle_idx in range(len(tif_images)):
+            flors_layers = tif_metadata[cycle_idx].flors_layers
+            
+            patches = tif_images[cycle_idx][flors_layers,y-2:y+3,x-2:x+3]
+            patches = utils.adjust_contrast(patches.astype(np.float32),10,90)
+            flor_assignments = np.array([cv2.matchTemplate(patch, template, cv2.TM_CCORR_NORMED).mean() 
+                            for patch in patches])
+            max_flor_layer = np.argmax(flor_assignments)
+            row_cycles_val.append(max_flor_layer)
+        cycle_values.append(row_cycles_val)
+    cycle_values = np.array(cycle_values)
+    final_df.loc[need_correction.index, columns] = cycle_values
+    
+    # corrected = corrected[['x','y']+columns]
+    # final_df = pd.concat([singles,corrected],axis=0)
+    return final_df, tif_images
+    
 
     # Histogram matching to first cycle's first flor layer
-    for i, md in enumerate(tif_metadata):
-        reference = tif_images[i][md.flors_layers[0]]
-        for layer in md.flors_layers[1:]:
-            img16 = match_histograms(tif_images[i][layer], reference)
-            img8 = np.zeros_like(img16, dtype=np.uint8)
-            img8 = cv2.normalize(img16, img8, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-            img_eq = cv2.equalizeHist(img8)
-            tif_images[i][layer] = img_eq
+    # for i, md in enumerate(tif_metadata):
+    #     reference = tif_images[i][md.flors_layers[0]]
+    #     for layer in md.flors_layers[1:]:
+    #         img16 = match_histograms(tif_images[i][layer], reference)
+    #         img8 = np.zeros_like(img16, dtype=np.uint8)
+    #         img8 = cv2.normalize(img16, img8, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+    #         img_eq = cv2.equalizeHist(img8)
+    #         tif_images[i][layer] = img_eq
 
-    bounding_boxes = np.zeros((total_beads, 4), dtype=int)
-    if roi_coords:
-        coords_array = [np.array(region) for region in roi_coords]
-        # Ensure bounding boxes are square (max width/height)
-        bounding_boxes = np.array(
-            [(*region.max(axis=0), *region.max(axis=0)) for region in coords_array]
-        )
+    # bounding_boxes = np.zeros((total_beads, 4), dtype=int)
+    # if roi_coords:
+    #     coords_array = [np.array(region) for region in roi_coords]
+    #     # Ensure bounding boxes are square (max width/height)
+    #     bounding_boxes = np.array(
+    #         [(*region.max(axis=0), *region.max(axis=0)) for region in coords_array]
+    #     )
 
     # Calculate batch size and number of batches reliably
-    batch_size = max(1, total_beads // max(1, n_workers))
+    # batch_size = max(1, total_beads // max(1, n_workers))
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
-        for cycle_idx, md in enumerate(tif_metadata):
-            if not is_running():
-                return None
+    # with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
+    #     for cycle_idx, md in enumerate(tif_metadata):
+    #         if not is_running():
+    #             return None
 
-            cycle_data = np.zeros((total_beads, len(md.flors_layers)), dtype="uint16")
-            cycle_snr = np.zeros((total_beads, len(md.flors_layers)), dtype="float")
-            cycle_threshold = np.zeros(
-                (total_beads, len(md.flors_layers)), dtype="float"
-            )
+    #         cycle_data = np.zeros((total_beads, len(md.flors_layers)), dtype="uint16")
+            # cycle_snr = np.zeros((total_beads, len(md.flors_layers)), dtype="float")
+            # cycle_threshold = np.zeros(
+            #     (total_beads, len(md.flors_layers)), dtype="float"
+            # )
 
-            for layer_idx, layer in enumerate(md.flors_layers):
-                if not is_running():
-                    return None
+            # for layer_idx, layer in enumerate(md.flors_layers):
+            #     if not is_running():
+            #         return None
 
-                flor_layer = tif_images[cycle_idx][layer]
-                layer_threshold = layer_threshold_dict.get(layer, 0)
+            #     flor_layer = tif_images[cycle_idx][layer]
+            #     layer_threshold = layer_threshold_dict.get(layer, 0)
 
-                n_batches = (total_beads + batch_size - 1) // batch_size
-                batch_args = []
+            #     n_batches = (total_beads + batch_size - 1) // batch_size
+            #     batch_args = []
 
-                for batch_idx in range(n_batches):
-                    start = batch_idx * batch_size
-                    end = min(start + batch_size, total_beads)
-                    beads_batch = beads[start:end]
-                    roi_batch = roi_coords[start:end] if roi_coords else None
-                    batch_args.append(
-                        (
-                            flor_layer,
-                            beads_batch,
-                            radius,
-                            layer_threshold,
-                            roi_batch,
-                            start,
-                            end,
-                        )
-                    )
+            #     for batch_idx in range(n_batches):
+            #         start = batch_idx * batch_size
+            #         end = min(start + batch_size, total_beads)
+            #         beads_batch = beads[start:end]
+            #         roi_batch = roi_coords[start:end] if roi_coords else None
+            #         batch_args.append(
+            #             (
+            #                 flor_layer,
+            #                 beads_batch,
+            #                 radius,
+            #                 layer_threshold,
+            #                 roi_batch,
+            #                 start,
+            #                 end,
+            #             )
+            #         )
 
-                # Map batches to worker function
-                batch_results = list(executor.map(process_bead_batch, batch_args))
+            #     # Map batches to worker function
+            #     batch_results = list(executor.map(process_bead_batch, batch_args))
 
-                # Collect batch results into cycle arrays
-                for batch_idx, (data, snr_data, threshold_data) in enumerate(
-                    batch_results
-                ):
-                    start = batch_idx * batch_size
-                    end = min(start + batch_size, total_beads)
-                    cycle_data[start:end, layer_idx] = data
-                    cycle_snr[start:end, layer_idx] = snr_data
-                    cycle_threshold[start:end, layer_idx] = threshold_data
+            #     # Collect batch results into cycle arrays
+            #     for batch_idx, (data, snr_data, threshold_data) in enumerate(
+            #         batch_results
+            #     ):
+            #         start = batch_idx * batch_size
+            #         end = min(start + batch_size, total_beads)
+            #         cycle_data[start:end, layer_idx] = data
+            #         # cycle_snr[start:end, layer_idx] = snr_data
+            #         # cycle_threshold[start:end, layer_idx] = threshold_data
 
-                # Update progress after each layer
-                progress = (
-                    ((cycle_idx * total_layers) + (layer_idx + 1))
-                    / (total_cycles * total_layers)
-                    * 100
-                )
-                update_progress(
-                    progress,
-                    f"Processing cycle {cycle_idx + 1}/{total_cycles}, layer {layer_idx + 1}/{total_layers}",
-                )
+            #     # Update progress after each layer
+            #     progress = (
+            #         ((cycle_idx * total_layers) + (layer_idx + 1))
+            #         / (total_cycles * total_layers)
+            #         * 100
+            #     )
+            #     update_progress(
+            #         progress,
+            #         f"Processing cycle {cycle_idx + 1}/{total_cycles}, layer {layer_idx + 1}/{total_layers}",
+            #     )
 
-            # Find brightest layers per bead
-            brightest_layers = np.argmax(cycle_data, axis=1)
-            export_to_excel[:, cycle_idx] = brightest_layers
+            # # Find brightest layers per bead
+            # brightest_layers = np.argmax(cycle_data, axis=1)
+            # export_to_excel[:, cycle_idx] = brightest_layers
 
             # Apply filters
-            for i, snr_row in enumerate(cycle_snr):
-                if np.min(snr_row) > 1 - ColorThreshold:
-                    export_to_excel[i, cycle_idx] = 254
-                    # print("Sig noise filtered:", beads[i])
+            # for i, snr_row in enumerate(cycle_snr):
+            #     if np.min(snr_row) > 1 - ColorThreshold:
+            #         export_to_excel[i, cycle_idx] = 254
+            #         # print("Sig noise filtered:", beads[i])
 
-            for i, thresh_row in enumerate(cycle_threshold):
-                if np.all(thresh_row == 0):
-                    export_to_excel[i, cycle_idx] = 255
+            # for i, thresh_row in enumerate(cycle_threshold):
+            #     if np.all(thresh_row == 0):
+            #         export_to_excel[i, cycle_idx] = 255
                     # print("Threshold filtered:", beads[i])
 
-    bounding_boxes_str = np.array(
-        [
-            f"({x1}, {y1}, {max(x2 - x1, y2 - y1) + x1}, {max(x2 - x1, y2 - y1) + y1})"
-            for x1, y1, x2, y2 in bounding_boxes
-        ]
-    ).reshape(-1, 1)
+    # bounding_boxes_str = np.array(
+    #     [
+    #         f"({x1}, {y1}, {max(x2 - x1, y2 - y1) + x1}, {max(x2 - x1, y2 - y1) + y1})"
+    #         for x1, y1, x2, y2 in bounding_boxes
+    #     ]
+    # ).reshape(-1, 1)
 
-    export_to_excel = np.hstack((beads[:, :2], export_to_excel, bounding_boxes_str))
-    columns = ["x", "y"] + [f"cy{i}" for i in range(len(tifs))] + ["bbox"]
+    export_to_excel = np.hstack((beads[:, :2], export_to_excel))
+    columns = ["x", "y"] + [f"cy{i}" for i in range(len(tifs))]
     df = pd.DataFrame(export_to_excel, columns=columns)
     count_table = (
         df.groupby([f"cy{i}" for i in range(len(tifs))])
@@ -1570,7 +2092,7 @@ def process_beads(
 
     log("Initial bead detection...")
     beads, roi_coords = beadfinding(
-        brightfield, thresholding, is_running_callback=is_running
+        brightfield, is_running_callback=is_running
     )
     if beads is None:
         return None
@@ -1607,7 +2129,7 @@ def process_beads(
         max_size,
         progress_callback=progress_callback,
         is_running_callback=is_running,
-        roi_coords=None,
+        roi_coords=roi_coords,
     )
     if ex_res is None:
         return None

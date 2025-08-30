@@ -11,7 +11,8 @@ from skimage.exposure import match_histograms
 
 from utils import adjust_contrast, to_uint8
 from view import roi_inspector
-
+from skimage.exposure import adjust_sigmoid
+from skimage.morphology import erosion, isotropic_erosion
 
 def best_split_df_max_avg_gap(df, count_col):
     # Sort by counts
@@ -83,7 +84,7 @@ if __name__ == "__main__":
 
     #
     # df = pd.read_csv("./test_outputs/max_length_roi_tile_based_output.csv")
-    df = pd.read_csv("example.csv")
+    df = pd.read_csv("example2.csv")
     # df = pd.read_csv("better_batching.csv")
     # df = pd.read_csv("./new_test/new_beads2.csv")
     # round first two columns to int
@@ -138,24 +139,26 @@ if __name__ == "__main__":
     bright_fields = {}
     bright_fields["cy0"] = bf1
     bright_fields["cy1"] = bf2
-    # num_layers = cycle1.shape[0]
-    # # match each cycle's histograms to their first layer then equalize them
-    # for i, cycle in enumerate([cycle1, cycle2]):
-    #     reference_layer = cycle[0]  # First layer as reference
-    #     matched_and_equalized = []
-    #     for j in range(num_layers):
-    #         img16 = cycle[j]
-    #         # Match histogram to reference layer
-    #         matched_img = match_histograms(img16, reference_layer)
-    #         # Convert to 8-bit and equalize
-    #         img8 = np.zeros_like(img16, dtype=np.uint8)
-    #         cv2.normalize(matched_img, img8, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-    #         img_eq = cv2.equalizeHist(img8)
-    #         matched_and_equalized.append(img_eq)
-    #     if i == 0:
-    #         cycle1 = np.vstack((cycle1, np.array(matched_and_equalized)))
-    #     else:
-    #         cycle2 = np.vstack((cycle2, np.array(matched_and_equalized)))
+    num_layers = cycle1.shape[0]
+    # match each cycle's histograms to their first layer then equalize them
+    for i, cycle in enumerate([cycle1, cycle2]):
+        reference_layer = cycle[0]  # First layer as reference
+        matched_and_equalized = []
+        for j in range(num_layers-1, -1,-1):
+            img16 = cycle[j]
+            # Match histogram to reference layer
+            matched_img = match_histograms(img16, reference_layer)
+            # Convert to 8-bit and equalize
+            # img8 = np.zeros_like(img16, dtype=np.uint8)
+            # img8 = cv2.normalize(matched_img, img8, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+            # img_eq = cv2.equalizeHist(img8)
+            img_eq = adjust_sigmoid(cycle[j],0.2)
+            img_eq = erosion(img_eq)
+            matched_and_equalized.insert(0,img_eq)
+        if i == 0:
+            cycle1 = np.vstack((cycle1, np.array(matched_and_equalized)))
+        else:
+            cycle2 = np.vstack((cycle2, np.array(matched_and_equalized)))
     # # get low probability cycle combinations from dataframe
     # low_prob_cycles = df.groupby(["cy0", "cy1"]).size().reset_index(name="counts")
     # (invalid_beads, valid_beads), best_gap = best_split_df_max_avg_gap(
