@@ -272,7 +272,6 @@ def process_tile(idx, bounds, px_overlap, tile_size, brightfield_path):
         [roi_coords_adjusted[i] for i in np.where(mask_edge)[0]],
     )
 
-
 def merge_edge_pairs(beads1, rois1, beads2, rois2, radius=1):
     if len(beads1) == 0 or len(beads2) == 0:
         return beads1, rois1, beads2, rois2
@@ -320,70 +319,88 @@ def beadfinding(
     workers=10,
     is_running_callback=None,
 ):
-    # Memory-map the brightfield to avoid huge pickle overhead
+    # New implementation: preprocess tiles with quadtree_threshold, stitch masks, then find beads from the stitched mask.
     brightfield_path = "./tmp/brightfield_memmap.npy"
     if not os.path.exists("./tmp"):
         os.makedirs("./tmp")
-    np.save(brightfield_path, brightfield)  # saved in .npy format for mmap use
+    np.save(brightfield_path, brightfield)
 
     try:
         tileset = TileMap("tm", brightfield, px_overlap, num_tiles)
-        tile_size = tileset.tile_size
+        stitched_mask = np.zeros_like(brightfield, dtype=bool)
 
-        core_beads_map = {}
-        core_rois_map = {}
-        edge_beads_map = {}
-        edge_rois_map = {}
+        def get_mask_from_tile(tile_and_bounds):
+            if is_running_callback and not is_running_callback():
+                return None
 
-        # ---- Parallel tile processing ----
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = [
-                executor.submit(
-                    process_tile, idx, bounds, px_overlap, tile_size, brightfield_path
-                )
-                for idx, (tile, bounds) in enumerate(tileset)
-            ]
+            tile, bounds = tile_and_bounds
+            mask = quadtree_threshold(tile)
+
+            center = bounds["center"]
+            tile_half_width = tileset.tile_size
+            tile_size_with_overlap = round(tile_half_width) + px_overlap
+
+            ymin = int(round(center[1] - tile_size_with_overlap))
+            ymax = int(round(center[1] + tile_size_with_overlap))
+            xmin = int(round(center[0] - tile_size_with_overlap))
+            xmax = int(round(center[0] + tile_size_with_overlap))
+
+            img_h, img_w = brightfield.shape[:2]
+
+            crop_ymin = max(0, ymin)
+            crop_ymax = min(img_h, ymax)
+            crop_xmin = max(0, xmin)
+            crop_xmax = min(img_w, xmax)
+
+            pad_top = max(0, -ymin)
+            pad_bottom = max(0, ymax - img_h)
+            pad_left = max(0, -xmin)
+            pad_right = max(0, xmax - img_w)
+
+            h, w = mask.shape
+            unpadded_mask = mask[pad_top : h - pad_bottom, pad_left : w - pad_right]
+
+            return unpadded_mask, (crop_ymin, crop_ymax, crop_xmin, crop_xmax)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(get_mask_from_tile, tb) for tb in tileset]
+
             for future in tqdm(
                 as_completed(futures), total=len(futures), desc="Processing tiles"
             ):
                 if is_running_callback and not is_running_callback():
                     executor.shutdown(wait=False)
                     return None, None
-                idx, core_b, core_r, edge_b, edge_r = future.result()
-                core_beads_map[idx] = core_b
-                core_rois_map[idx] = core_r
-                edge_beads_map[idx] = edge_b
-                edge_rois_map[idx] = edge_r
 
-        # ---- Neighbor-only merging ----
-        neighbor_pairs = (
-            tileset.get_neighbor_pairs()
-        )  # you’d implement this to return touching tile index pairs
-        for t1, t2 in tqdm(neighbor_pairs, desc="Merging edge overlaps"):
-            if is_running_callback and not is_running_callback():
-                return None, None
-            merged_b1, merged_r1, merged_b2, merged_r2 = merge_edge_pairs(
-                edge_beads_map[t1],
-                edge_rois_map[t1],
-                edge_beads_map[t2],
-                edge_rois_map[t2],
-                radius=1,
-            )
-            edge_beads_map[t1], edge_rois_map[t1] = merged_b1, merged_r1
-            edge_beads_map[t2], edge_rois_map[t2] = merged_b2, merged_r2
+                result = future.result()
+                if result is None:
+                    continue
 
-        # ---- Combine all beads ----
-        final_beads = []
-        final_rois = []
-        for idx in range(len(tileset)):
-            final_beads.extend(core_beads_map[idx])
-            final_rois.extend(core_rois_map[idx])
-            final_beads.extend(edge_beads_map[idx])
-            final_rois.extend(edge_rois_map[idx])
+                unpadded_mask, (ymin, ymax, xmin, xmax) = result
 
-        final_beads = np.array(final_beads)
-        print(f"Final bead count: {final_beads.shape[0]}")
-        return final_beads, final_rois
+                # Stitching with logical OR for overlap regions
+                stitched_mask[ymin:ymax, xmin:xmax] |= unpadded_mask
+
+        # Now, run the rest of find_beads logic on the stitched mask.
+        brighter_regions = np.where(brightfield, stitched_mask, 0)
+
+        bw = closing(brighter_regions, square(1))
+        cleared = clear_border(bw)  # optional
+
+        label_image = label(cleared)
+        centers = []
+        coords = []
+        for region in tqdm(regionprops(label_image, brightfield), desc='Computing centroids'):
+            y, x = region.centroid_weighted
+            coords.append(region.coords)
+            centers.append([x, y])
+
+        centers = np.array(centers)
+        if centers.size > 0:
+            centers = np.rint(centers).astype(np.uint16)
+
+        print(f"Final bead count: {len(centers)}")
+        return centers, coords
     finally:
         if os.path.exists(brightfield_path):
             os.remove(brightfield_path)
@@ -494,10 +511,8 @@ def find_beads(brightfield):
 def scale(arr):
     return ((arr - arr.min()) * (1 / (arr.max() - arr.min()) * 255)).astype("uint8")
 
-
 def preprocess_brightfield(brightfield, max_size):
     return scale(brightfield)[:max_size, :max_size]
-
 
 def adjust_contrast(img, min=2, max=98):
     # pixvals = np.array(img)
@@ -507,12 +522,10 @@ def adjust_contrast(img, min=2, max=98):
     img = ((img - minval) / (maxval - minval)) * 255
     return img.astype(np.uint8)
 
-
 def bead_filter(bead, min, max):
     if bead[0] > min and bead[0] < max and bead[1] > min or bead[0] < max:
         return bead
     return [0, 0]
-
 
 def bead_center(bead_contour):
     M = cv2.moments(bead_contour)
@@ -522,7 +535,6 @@ def bead_center(bead_contour):
 
         return [cX, cY]
     return [0, 0]
-
 
 def thresholding(image):
     def unsharp_mask(image, kernel_size=(5, 5), sigma=1.0, amount=1.0, threshold=0):
@@ -566,7 +578,6 @@ def thresholding(image):
 
     return image_modified
 
-
 def blackout_dots(image, coords):
     image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     for xy in coords:
@@ -575,7 +586,6 @@ def blackout_dots(image, coords):
         # cv2.drawContours(image, [i], -1, (0, 255, 0), 2)
         cv2.circle(image, (cx, cy), 3, (0, 0, 0), -1)
     return image
-
 
 def draw_dots(image, coords):
     image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
@@ -586,13 +596,11 @@ def draw_dots(image, coords):
         cv2.circle(image, (cx, cy), 1, (0, 255, 0), -1)
     return image
 
-
 def abs_threshold(im, p):
     im = im.copy()
     im[im < p] = 0
     im[im >= p] = 255
     return im
-
 
 def second_pass_beadfinding(brightfield, beads):
     beads_found = blackout_dots(brightfield, beads)
@@ -609,7 +617,6 @@ def second_pass_beadfinding(brightfield, beads):
 
     beads = np.unique(beads, axis=0)
     return beads
-
 
 def edge_bead_filtering(radius, max_size):
     def filter_func(bead):
@@ -797,7 +804,6 @@ def gaussian_kernel(size: int, sigma: float = None) -> np.ndarray:
     kernel = np.exp(-(xx**2 + yy**2) / (2.0 * sigma**2))
     return kernel / np.sum(kernel)
 
-
 def extract_bead_rois(flor_layer: np.ndarray, beads_batch: np.ndarray, radius: int):
     """
     Extract same-shaped, padded ROIs for beads.
@@ -817,7 +823,6 @@ def extract_bead_rois(flor_layer: np.ndarray, beads_batch: np.ndarray, radius: i
         bead_rois[i] = padded[y-radius:y+radius+1, x-radius:x+radius+1]
 
     return bead_rois
-
 
 def process_bead_batch(args):
     """
@@ -960,7 +965,6 @@ def extract_bead_rois(flor_layer, beads_batch, radius):
         bead_rois[i] = padded[y-radius:y+radius+1, x-radius:x+radius+1]
 
     return bead_rois
-
 
 def extract_padded_rois(img, coords, channels, radius=2):
     """
@@ -1245,7 +1249,7 @@ def watershed_segmentation_cv2(img, border=1, marker_low=30/255.0, marker_high=4
                 # markers = np.digitize(img_float, [0]+histogram_cutoffs).astype(np.int32)
             print(markers.dtype, markers.shape)
         else:
-            markers[img_float < marker_low] = 1  # Background
+            markers[img_float <= marker_low] = 1  # Background
             markers[img_float > marker_high] = 2  # Foreground
     else:
         # Background-based localized thresholding
@@ -1280,10 +1284,10 @@ def watershed_segmentation_cv2(img, border=1, marker_low=30/255.0, marker_high=4
         markers[img_float <= bg_local_low] = 1   # Below local background low percentile
         markers[img_float > bg_local_high] = 2  # Above local background high percentile
     # Add border markers to ensure proper segmentation
-    markers[:border, :] = 1
-    markers[-border:, :] = 1
-    markers[:, :border] = 1
-    markers[:, -border:] = 1
+    # markers[:border, :] = 1
+    # markers[-border:, :] = 1
+    # markers[:, :border] = 1
+    # markers[:, -border:] = 1
     
     timings['marker_creation'] = time.time() - t3
     
@@ -1300,7 +1304,7 @@ def watershed_segmentation_cv2(img, border=1, marker_low=30/255.0, marker_high=4
     t5 = time.time()
     # Create binary segmentation (foreground regions)
     segmentation_coins = (labeled_markers >= 2).astype(np.uint8)
-    segmentation_coins = ndi.binary_fill_holes(segmentation_coins)
+    # segmentation_coins = ndi.binary_fill_holes(segmentation_coins)
 
     if border > 0:
         segmentation_coins = ndi.binary_erosion(segmentation_coins, iterations=border)
@@ -1333,9 +1337,9 @@ def get_labels_from_cycles(cycles, cycles_metadata:List[MetaData]):
             img = cycle[layer_idx][:max_size,:max_size]
             img = ((img - img.min()) / (img.max() - img.min()))
             # img = equalize_adapthist(img,kernel_size=9)
-            bg = rolling_ball(img, radius=15, num_threads=8)
+            bg = rolling_ball(img, radius=40, num_threads=8)
             img -= bg
-            seg,label,timing = watershed_segmentation_cv2(img, use_numexpr=False, border=1, marker_low=0, marker_high=0.00001)
+            seg,label,timing = watershed_segmentation_cv2(img, use_numexpr=False, border=1, marker_low=0, marker_high=0)
             print_timing_summary(timing)
             labels.append(label)
         cycle_labels.append(labels)
@@ -1471,7 +1475,7 @@ def get_excel(
             
             patches = tif_images[cycle_idx][flors_layers,y-2:y+3,x-2:x+3]
             patches = utils.adjust_contrast(patches.astype(np.float32),10,90)
-            flor_assignments = np.array([cv2.matchTemplate(patch, template, cv2.TM_CCORR_NORMED).mean() 
+            flor_assignments = np.array([cv2.matchTemplate(patch, template, cv2.TM_CCORR_NORMED).max() 
                             for patch in patches])
             max_flor_layer = np.argmax(flor_assignments)
             row_cycles_val.append(max_flor_layer)
@@ -1571,7 +1575,7 @@ def get_excel(
             # brightest_layers = np.argmax(cycle_data, axis=1)
             # export_to_excel[:, cycle_idx] = brightest_layers
 
-            # Apply filters
+            # # Apply filters
             # for i, snr_row in enumerate(cycle_snr):
             #     if np.min(snr_row) > 1 - ColorThreshold:
             #         export_to_excel[i, cycle_idx] = 254
@@ -1803,7 +1807,8 @@ class CellIntensity:
         # Correctly slice and join color codes
         cycle_cols = self.bead_data[:, 2 : 2 + self.params["num_decoding_cycles"]]
         data_modified[:, 2] = np.array(
-            [int("".join(map(str, map(int, bead)))) for bead in cycle_cols]
+            [int(""
+.join(map(str, map(int, bead)))) for bead in cycle_cols]
         )
         radius_bg = self.params["radius_bg"]
         max_size = self.params["max_size"]
@@ -1914,7 +1919,9 @@ class CellIntensity:
 
         # Create human-readable column headers
         color_code_map = {
-            int("".join(map(str, map(int, row[1:])))): row[0]
+            int(""
+.join(map(str, map(int, row[1:])))):
+                row[0]
             for _, row in self.color_code.iterrows()
         }
         header = ["Global X", "Global Y"] + [
