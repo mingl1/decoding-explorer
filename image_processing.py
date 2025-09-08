@@ -1308,10 +1308,10 @@ from skimage.exposure import equalize_adapthist
 from skimage.restoration import rolling_ball
 
 
-def get_labels_from_cycles(cycles, cycles_metadata: List[MetaData]):
+def get_labels_from_cycles(cycles, cycles_metadata: List[MetaData],max_size):
     cycle_labels = []
     for i in range(len(cycles)):
-        cycles[i] = process_cycle(cycles[i], cycles_metadata[i])
+        cycles[i] = process_cycle(cycles[i], cycles_metadata[i])[:max_size,:max_size]
     
     for i, cycle in enumerate(cycles):
         flor_layers = cycles_metadata[i].flors_layers
@@ -1453,7 +1453,7 @@ def get_excel(
     total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
     beads = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
     update_progress(10, "Getting activation regions from cycles")
-    labels = get_labels_from_cycles(tif_images, tif_metadata)
+    labels = get_labels_from_cycles(tif_images, tif_metadata, max_size)
     update_progress(50, "Assigning beads labels")
     df = assign_beads_labels(beads, labels)
     cycle_layer_columns = {}
@@ -2129,7 +2129,7 @@ def process_beads(
     update_progress(10, "Initial bead detection...")
     if not is_running():
         return None
-
+    brightfield = brightfield[:max_size,:max_size]
     log("Initial bead detection...")
     beads, roi_coords, _ = beadfinding(brightfield, is_running_callback=is_running)
     if beads is None:
@@ -2158,7 +2158,6 @@ def process_beads(
     update_progress(40, "Calculating signal-to-noise ratios...")
     if not is_running():
         return None
-
     log(f"Signal-to-noise cutoff: {signal_to_noise_cutoff}")
     ex_res = get_excel(
         beads,
@@ -2189,9 +2188,9 @@ def process_beads(
     except:
         bboxs = None
     cycles = {}
-    for i in range(len(tif_images)):
-        cycles[f"cy{i}"] = tif_images[i]
-        print(f"Cycle {i} image shape: {tif_images[i].shape}")
+    for i in range(len(tifs)):
+        cycles[f"cy{i}"] = tifs[i][0]
+        print(f"Cycle {i} image shape: {tifs[i][0].shape}")
     results["beads"] = df
     results["cycles"] = cycles
     results["labeled_image"] = labeled_image
