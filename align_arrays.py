@@ -16,6 +16,7 @@ from image_processing import adjust_contrast
 from utils import calculate_ncc, to_uint8
 
 
+# !TODO: need to add preview after aligning arrays
 class Register(QThread):
     image_ready = pyqtSignal(bool)
     progress = pyqtSignal(int, str)

@@ -20,8 +20,8 @@ from utils import get_memory_usage_mb
 
 
 class BeadGenerationThread(QThread):
-    beads_generated = pyqtSignal(dict)
     progress = pyqtSignal(int, str)
+    bead_generated = pyqtSignal(dict)
 
     def __init__(self, ref_bf, tifs, max_size, signal_to_noise_cutoff):
         super().__init__()
@@ -32,8 +32,7 @@ class BeadGenerationThread(QThread):
         self._is_running = True
 
     def run(self):
-        if not self._is_running:
-            return
+        self._is_running = True
         results = image_processing.process_beads(
             self.ref_bf,
             self.tifs,
@@ -43,8 +42,8 @@ class BeadGenerationThread(QThread):
             is_running_callback=self.is_running,
         )
         if self._is_running:
-            assert results is not None, "Bead generation was cancelled or failed."
-            self.beads_generated.emit(results)
+            self.bead_generated.emit(results)
+        return None
 
     def cancel(self):
         self._is_running = False
@@ -426,7 +425,7 @@ class FileManagerVM(QObject):
             max_size=int(self.reference_item.metadata.max_size),
             signal_to_noise_cutoff=0.1,
         )
-        self.bead_thread.beads_generated.connect(
+        self.bead_thread.bead_generated.connect(
             lambda res: self._on_beads_generated(res, curr_ref_path, cycle_assignments)
         )
         self.bead_thread.progress.connect(self.bead_progress.emit)
@@ -447,6 +446,7 @@ class FileManagerVM(QObject):
         self.files[reference_path].status = FileStatus.BEADS_GENERATED
         self.files[reference_path].cycle_files = cycle_assignments
         self.beads_generated.emit(beads)
+        self.bead_progress.emit(100, "Done generating beads")
         self.file_information_update.emit([self.files[reference_path]])
 
 

@@ -1310,6 +1310,9 @@ from skimage.restoration import rolling_ball
 
 def get_labels_from_cycles(cycles, cycles_metadata: List[MetaData]):
     cycle_labels = []
+    for i in range(len(cycles)):
+        cycles[i] = process_cycle(cycles[i], cycles_metadata[i])
+    
     for i, cycle in enumerate(cycles):
         flor_layers = cycles_metadata[i].flors_layers
         assert flor_layers is not None, "forgot to initialize flors layer idx"
@@ -1329,6 +1332,41 @@ def get_labels_from_cycles(cycles, cycles_metadata: List[MetaData]):
         cycle_labels.append(labels)
     return cycle_labels
 
+import numpy as np
+import cv2
+from skimage.exposure import match_histograms, adjust_sigmoid, equalize_adapthist
+from skimage.morphology import erosion
+from skimage import img_as_float, img_as_uint
+def process_cycle(cycle, metadata: MetaData):
+    """
+    Process one imaging cycle:
+    - Leave channels before reference untouched
+    - Use (reference_channel+1) as reference, equalize it
+    - Match all later channels to the reference, then adjust sigmoid
+    """
+    num_layers = cycle.shape[0]
+    processed = []
+
+    ref_idx = metadata.reference_channel + 1
+
+    # keep all channels before reference
+    processed.extend(cycle[:ref_idx])
+
+    # reference channel
+    ref16 = cycle[ref_idx]
+    ref_float = img_as_float(ref16)
+    ref_adj = adjust_sigmoid(ref_float, cutoff=0.1, gain=1)
+    processed.append(img_as_uint(ref_adj))
+
+    # channels after reference
+    for j in range(ref_idx + 1, num_layers):
+        img16 = cycle[j]
+        matched_float = img_as_float(img16)
+        matched = match_histograms(matched_float, ref_float)
+        matched = adjust_sigmoid(matched, cutoff=0.1, gain=1)
+        processed.append(img_as_uint(matched))
+
+    return np.stack(processed, axis=0)
 
 import numpy as np
 from tqdm import tqdm
@@ -1409,11 +1447,14 @@ def get_excel(
             j for j in range(len(tif_images[i])) if j > int(md.reference_channel)
         ]
 
+
     total_beads = len(beads)
     total_cycles = len(tif_metadata)
     total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
     beads = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
+    update_progress(10, "Getting activation regions from cycles")
     labels = get_labels_from_cycles(tif_images, tif_metadata)
+    update_progress(50, "Assigning beads labels")
     df = assign_beads_labels(beads, labels)
     cycle_layer_columns = {}
 
@@ -1433,7 +1474,6 @@ def get_excel(
         "both_single": both_assignment.sum(),
     }
 
-    print(counts)
     need_correction = df[~both_assignment & ~no_assignment]
     template = gaussian_kernel(5).astype(np.float32)
     # Zero-pad cycles
@@ -1479,7 +1519,7 @@ def get_excel(
         cycle_values.append(row_cycles_val)
     cycle_values = np.array(cycle_values)
     final_df.loc[need_correction.index, columns] = cycle_values
-
+    # update_progress(100, "Done associating beads with cycle activations")
     # corrected = corrected[['x','y']+columns]
     # final_df = pd.concat([singles,corrected],axis=0)
     return final_df, tif_images
@@ -2129,40 +2169,19 @@ def process_beads(
         is_running_callback=is_running,
         roi_coords=roi_coords,
     )
+    log("Done getting excel")
     if ex_res is None:
         return None
     df, tif_images = ex_res
 
-    if not is_running():
-        return None
+    # if not is_running():
+        # return None
 
     update_progress(90, "Filtering out rows with all zeros...")
-    filtered_rows = []
-    # assert roi_coords is not None, "ROI coordinates must be provided for filtering."
-    # for i, row in enumerate(tqdm(bead_data)):
-    #     if not is_running():
-    #         return None
-    #     # 255 indicates brightness threshold filtered, 254 indicates SNR filtered
-    #     # ignore last row because it is bbox
-    #     vals = np.asarray(row[2:-1], dtype=np.uint8)
-    #     if not np.any(np.isin(vals, (254, 255))):
-    #         filtered_rows.append(row)
-    #         filtered_rois.append(roi_coords[i])
-    #     else:
-    #         errored_rows.append(row)
-
-    #         log(f"Filtered out {len(errored_rows)} beads due to brightness or noise.")
-
     labeled_image = np.zeros(brightfield.shape, dtype=np.uint16)
-    filtered_rois = roi_coords if roi_coords is not None else []
-    # for i, roi in enumerate(filtered_rois):
-    #     for coord in roi:
-    #         y, x = coord
-    #         labeled_image[y, x] = i + 1
-    # labeled_image = label2rgb(labeled_image, bg_label=0)
     log(f"Dataframe created with shape: {df.shape}")
 
-    update_progress(100, "Bead generation complete.")
+    update_progress(95, "Bead generation complete.")
 
     results = {}
     bboxs = df.pop("bbox")
