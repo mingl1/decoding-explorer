@@ -2184,14 +2184,17 @@ def process_beads(
     update_progress(95, "Bead generation complete.")
 
     results = {}
-    bboxs = df.pop("bbox")
+    try:
+        bboxs = df.pop("bbox")
+    except:
+        bboxs = None
     cycles = {}
     for i in range(len(tif_images)):
         cycles[f"cy{i}"] = tif_images[i]
         print(f"Cycle {i} image shape: {tif_images[i].shape}")
     results["beads"] = df
     results["cycles"] = cycles
-    results["bboxs"] = bboxs
     results["labeled_image"] = labeled_image
+    
 
     return results
