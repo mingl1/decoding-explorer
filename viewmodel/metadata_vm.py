@@ -31,8 +31,18 @@ class MetadataVM(QObject):
 
     def apply_metadata(self, metadata_changes: dict):
         res = {}
+        use_status_as_prefix = metadata_changes.pop("use_status_as_prefix", False)
+
         for f in self.selected_files:
-            res[f.path] = MetaData(**metadata_changes)
+            current_changes = metadata_changes.copy()
+            if use_status_as_prefix:
+                current_changes["prefix"] = f.status.value.lower()
+
+            # Filter out keys that are not in MetaData
+            valid_keys = {key for key in current_changes if hasattr(MetaData, key)}
+            filtered_changes = {k: current_changes[k] for k in valid_keys}
+
+            res[f.path] = MetaData(**filtered_changes)
         self.metadata_applied_sig.emit(res)
 
     def apply_shading_correction(self):

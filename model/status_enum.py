@@ -3,12 +3,12 @@ from enum import Enum
 
 class FileStatus(Enum):
     RAW = "Raw"
-    SHADE_CORRECTED = "Shade Corrected"
+    SHADE_CORRECTED = "Corrected"
     ALIGNED = "Aligned"
-    BEADS_GENERATED = "Protein Generated"
+    BEADS_GENERATED = "Generated"
     REFERENCE = "Reference"
 
-    _STEP_ORDER = [RAW, SHADE_CORRECTED, ALIGNED, BEADS_GENERATED]
+    # _STEP_ORDER = [RAW, SHADE_CORRECTED, ALIGNED, BEADS_GENERATED]
 
     def __str__(self):
         return f"{self.name}: {self.value}"
