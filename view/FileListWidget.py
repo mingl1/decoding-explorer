@@ -36,6 +36,33 @@ class FileTableWidget(QTableWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.open_context_menu)
         self.svg_renderer = QSvgRenderer(resource_path("assets/upload.svg"))
+        self.cellClicked.connect(self.on_cell_clicked)
+
+    def on_cell_clicked(self, row, column):
+        if column == 1:  # Status column
+            file_item = self.item(row, 0).data(Qt.ItemDataRole.UserRole)
+            if not file_item:
+                return
+
+            menu = QMenu(self)
+            for status in FileStatus:
+                if status.name.startswith("_"):
+                    continue
+                assert isinstance(status.value,str)
+                action = QAction(status.value, self)
+                action.triggered.connect(
+                    lambda checked, s=status: self.change_status(file_item, s)
+                )
+                menu.addAction(action)
+
+            # Show the menu at the cursor's position
+            menu.exec(self.viewport().mapToGlobal(self.visualItemRect(self.item(row, column)).bottomLeft()))
+
+    def change_status(self, file_item, status):
+        if status == FileStatus.REFERENCE:
+            self.vm.set_reference(file_item)
+        else:
+            self.vm.set_status(file_item, status)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -59,7 +86,7 @@ class FileTableWidget(QTableWidget):
         filename_item.setData(Qt.ItemDataRole.UserRole, file_item)
         shape_item = QTableWidgetItem(str(file_item.shape))
         dtype_item = QTableWidgetItem(str(file_item.dtype))
-        status_item = QTableWidgetItem(file_item.status.name)
+        status_item = QTableWidgetItem(file_item.status.value)
         status_item.setForeground(QColor("white"))
         status_item.setBackground(QColor(file_item.status.color))
 
@@ -114,7 +141,7 @@ class FileTableWidget(QTableWidget):
                     and filename_item.text() == os.path.basename(file_path)
                 ):
                     item.setBackground(QColor(file_item.status.color))
-                    item.setText(file_item.status.name)
+                    item.setText(file_item.status.value)
                     filename_item.setData(Qt.ItemDataRole.UserRole, file_item)
                     print(f"Updated FileItem Information for {file_path}")
 

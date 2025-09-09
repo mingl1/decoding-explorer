@@ -16,7 +16,6 @@ import image_processing
 import utils
 from model.file_item import FileItem
 from model.status_enum import FileStatus
-from utils import get_memory_usage_mb
 
 
 class BeadGenerationThread(QThread):
@@ -116,12 +115,14 @@ class FileManagerVM(QObject):
         for cy_name, cy_image in cycles.items():
             bright_fields[cy_name] = cy_image[0]
         # set each cycle to exclude brightfield from decoding
+        flour_cycles = {}
+        flour_channel_start = most_updated_file.metadata.reference_channel + 1
         for cy_name in cycles.keys():
-            cycles[cy_name] = cycles[cy_name][1:]
+            flour_cycles[cy_name] = cycles[cy_name][flour_channel_start:]
         self.inspect_beads_signal.emit(
             bright_fields,
             most_updated_file.beads,
-            cycles,
+            flour_cycles,
             bboxs,
             labeled_image,
             protein_profile,
@@ -156,10 +157,23 @@ class FileManagerVM(QObject):
             return image
         return None
 
+    def _get_status_from_filename(self, file_path: str) -> FileStatus:
+        filename_base = os.path.basename(file_path).lower()
+        for status in FileStatus:
+            if status.name.startswith("_"):
+                continue
+            assert isinstance(status.value,str)
+            prefix = status.value.lower() + "_"
+            print(f"prefix: {prefix}, {status}")
+            if filename_base.startswith(prefix):
+                return status
+        return FileStatus.RAW
+
     def load_folder(self, folder_path):
         to_be_emitted = []
         for file in list_tiff_files(folder_path):
-            self.files[file] = FileItem(path=file)
+            status = self._get_status_from_filename(file)
+            self.files[file] = FileItem(path=file, status=status)
             shape, dtype = get_tif_info(file)
             self.files[file].shape = shape
             self.files[file].dtype = str(dtype)
@@ -170,7 +184,8 @@ class FileManagerVM(QObject):
 
     def load_file(self, file_path):
         if os.path.isfile(file_path):
-            self.files[file_path] = FileItem(path=file_path)
+            status = self._get_status_from_filename(file_path)
+            self.files[file_path] = FileItem(path=file_path, status=status)
 
             try:
                 # Try TIFF-specific metadata extraction
@@ -206,6 +221,7 @@ class FileManagerVM(QObject):
             corrected = utils.shading_correction(bright_field)
             my_f.working_image = corrected
             my_f.status = FileStatus.SHADE_CORRECTED
+            my_f.metadata.prefix = FileStatus.SHADE_CORRECTED.name.lower()
             to_be_updated.append(my_f)
         self.file_information_update.emit(to_be_updated)
 
@@ -294,6 +310,7 @@ class FileManagerVM(QObject):
                 continue
             my_f.working_image = aligned_tifs[i]
             my_f.status = FileStatus.ALIGNED
+            my_f.metadata.prefix = FileStatus.ALIGNED.name.lower()
             to_be_updated.append(my_f)
         self.file_information_update.emit(to_be_updated)
 
@@ -311,6 +328,11 @@ class FileManagerVM(QObject):
     def cancel_bead_generation(self):
         if self.bead_thread:
             self.bead_thread.cancel()
+
+    def set_status(self, file_item: FileItem, status: FileStatus):
+        if file_item.path in self.files:
+            self.files[file_item.path].status = status
+            self.file_information_update.emit([self.files[file_item.path]])
 
     def set_reference(self, file_item: FileItem):
         to_be_updated = []
@@ -366,6 +388,16 @@ class FileManagerVM(QObject):
                     : int(file_item.metadata.max_size),
                 ]
             file_name = os.path.basename(file_item.path)
+
+            # Check for and remove existing status prefixes
+            for status in FileStatus:
+                if status.name.startswith("_"):
+                    continue
+                prefix_to_check = status.value.lower() + "_"
+                if file_name.lower().startswith(prefix_to_check):
+                    file_name = file_name[len(prefix_to_check) :]
+                    break
+
             if file_item.metadata.prefix:
                 file_name = f"{file_item.metadata.prefix}_{file_name}"
 
@@ -444,6 +476,9 @@ class FileManagerVM(QObject):
         self.files[reference_path].labeled_image = labeled_image
         self.files[reference_path].beads = beads
         self.files[reference_path].status = FileStatus.BEADS_GENERATED
+        self.files[reference_path].metadata.prefix = (
+            FileStatus.BEADS_GENERATED.name.lower()
+        )
         self.files[reference_path].cycle_files = cycle_assignments
         self.beads_generated.emit(beads)
         self.bead_progress.emit(100, "Done generating beads")

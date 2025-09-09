@@ -1,7 +1,8 @@
 import os
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -29,6 +30,9 @@ class MetadataView(QWidget):
         self.vm = vm
         # Example fields
         self.prefix_input = QLineEdit()
+        self.prefix_checkbox = QCheckBox("Use status as prefix")
+        self.prefix_checkbox.stateChanged.connect(self.on_prefix_checkbox_changed)
+
         self.channel_input = QLineEdit()
         self.axes_input = QLineEdit("")
         self.unit_input = QLineEdit("")
@@ -76,6 +80,7 @@ class MetadataView(QWidget):
         self.form_layout.addRow(metadata_title)
         self.form_layout.addRow(separator)
         self.form_layout.addRow("File Prefix:", self.prefix_input)
+        self.form_layout.addRow(self.prefix_checkbox)
         self.form_layout.addRow("Axes (e.g. CYX):", self.axes_input)
         self.form_layout.addRow("Unit (e.g. um):", self.unit_input)
         self.form_layout.addRow("PhysicalSizeX:", self.size_x_input)
@@ -119,6 +124,10 @@ class MetadataView(QWidget):
         layout = QVBoxLayout()
         layout.addLayout(self.form_layout)
         self.setLayout(layout)
+        self.update_metadata([])
+
+    def on_prefix_checkbox_changed(self, state):
+        self.prefix_input.setDisabled(state == Qt.CheckState.Checked.value)
 
     def upload_protein_key_files(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -135,18 +144,33 @@ class MetadataView(QWidget):
 
     def update_metadata(self, metadata_list: list[FileItem]):
         """Display metadata from selected items."""
+
         print(f"Setting metadata for {len(metadata_list)} items")
-        if self.all_same_metadata(metadata_list):
-            self.prefix_input.setText(metadata_list[0].metadata.prefix)
-            self.axes_input.setText(metadata_list[0].metadata.axes)
-            self.unit_input.setText(metadata_list[0].metadata.unit)
-            self.size_x_input.setText(str(metadata_list[0].metadata.PhysicalSizeX))
-            self.size_y_input.setText(str(metadata_list[0].metadata.PhysicalSizeY))
-            self.channel_input.setText(str(metadata_list[0].metadata.reference_channel))
-            self.max_size_input.setText(str(metadata_list[0].metadata.max_size))
-            self.num_tiles_input.setText(str(metadata_list[0].metadata.num_tiles))
-            self.overlap_input.setText(str(metadata_list[0].metadata.overlap))
-        else:
+        is_disabled = len(metadata_list) == 0
+
+        input_widgets = [
+            self.prefix_input,
+            self.channel_input,
+            self.axes_input,
+            self.unit_input,
+            self.size_x_input,
+            self.size_y_input,
+            self.max_size_input,
+            self.num_tiles_input,
+            self.overlap_input,
+            self.apply_btn,
+            self.apply_shading_correction_btn,
+            self.align_channels_btn,
+            self.upload_protein_key_btn,
+            self.generate_beads_btn,
+            self.inspect_beads_btn,
+            self.prefix_checkbox,
+        ]
+
+        for widget in input_widgets:
+            widget.setDisabled(is_disabled)
+
+        if is_disabled:
             self.prefix_input.setText("")
             self.axes_input.setText("")
             self.unit_input.setText("")
@@ -156,27 +180,69 @@ class MetadataView(QWidget):
             self.max_size_input.setText("")
             self.num_tiles_input.setText("")
             self.overlap_input.setText("")
+            self.prefix_checkbox.setChecked(False)
+            return
 
-    def all_same_metadata(self, metadata_list: list[FileItem]) -> bool:
-        if not metadata_list:
-            return False
-        first = metadata_list[0].metadata
-        for item in metadata_list[1:]:
-            if item.metadata != first:
-                return False
-        return True
+        def set_field(widget, attribute_name, is_float=False):
+            all_values = [getattr(item.metadata, attribute_name) for item in metadata_list]
+            if is_float:
+                # For floats, round to a certain precision before comparing
+                try:
+                    rounded_values = {round(float(val), 6) for val in all_values}
+                    if len(rounded_values) == 1:
+                        widget.setText(str(all_values[0]))  # show original value
+                    else:
+                        widget.setText("...")
+                except (ValueError, TypeError):
+                    widget.setText("...") # In case of non-float values
+            else:
+                unique_values = set(all_values)
+                if len(unique_values) == 1:
+                    widget.setText(str(unique_values.pop()))
+                else:
+                    widget.setText("...")
+
+        set_field(self.prefix_input, "prefix")
+        set_field(self.axes_input, "axes")
+        set_field(self.unit_input, "unit")
+        set_field(self.size_x_input, "PhysicalSizeX", is_float=True)
+        set_field(self.size_y_input, "PhysicalSizeY", is_float=True)
+        set_field(self.channel_input, "reference_channel")
+        set_field(self.max_size_input, "max_size")
+        set_field(self.num_tiles_input, "num_tiles")
+        set_field(self.overlap_input, "overlap")
+
+        # Handle checkbox state
+        all_prefixes_match_status = all(
+            item.metadata.prefix == item.status.value.lower() for item in metadata_list
+        )
+        all_statuses = {item.status for item in metadata_list}
+
+        if len(all_statuses) == 1 and all_prefixes_match_status:
+            self.prefix_checkbox.setChecked(True)
+        else:
+            self.prefix_checkbox.setChecked(False)
 
     def get_metadata_changes(self):
-        return {
+        # Create a dictionary with all metadata fields
+        metadata_changes = {
             "prefix": self.prefix_input.text(),
             "axes": self.axes_input.text(),
             "unit": self.unit_input.text(),
-            "PhysicalSizeX": float(self.size_x_input.text()),
-            "PhysicalSizeY": float(self.size_y_input.text()),
-            "reference_channel": int(self.channel_input.text()),
-            "max_size": int(self.max_size_input.text()),
-            "num_tiles": int(self.num_tiles_input.text()),
-            "overlap": int(self.overlap_input.text()),
+            "PhysicalSizeX": self.size_x_input.text(),
+            "PhysicalSizeY": self.size_y_input.text(),
+            "reference_channel": self.channel_input.text(),
+            "max_size": self.max_size_input.text(),
+            "num_tiles": self.num_tiles_input.text(),
+            "overlap": self.overlap_input.text(),
+            "use_status_as_prefix": self.prefix_checkbox.isChecked(),
+        }
+
+        # Filter out fields with "..."
+        return {
+            key: value
+            for key, value in metadata_changes.items()
+            if value != "..."
         }
 
     def update_statistics(self, stats: dict):
