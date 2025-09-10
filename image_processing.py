@@ -1024,7 +1024,6 @@ def extract_padded_rois(img, coords, channels, radius=2):
 import time
 
 import cv2
-import numexpr as ne
 import numpy as np
 from scipy import ndimage as ndi
 from skimage import filters, measure, segmentation
@@ -1224,10 +1223,6 @@ def watershed_segmentation_cv2(
 
     # Step 2: Optional normalization using numexpr
     t1 = time.time()
-    if use_numexpr:
-        img_min = img_float.min()
-        img_max = img_float.max()
-        img_float = ne.evaluate("(img_float - img_min) / (img_max - img_min)")
     timings["numexpr_preprocessing"] = time.time() - t1
 
     # Step 3: Compute elevation map using Sobel
