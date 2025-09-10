@@ -14,7 +14,6 @@ pyqt6==6.9.1
 pyqtgraph==0.13.7
 pystackreg==0.2.8
 psutil
-numexpr
 python-whois==0.9.5
 qtrangeslider==0.1.5
 scikit-image==0.24.0
