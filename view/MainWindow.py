@@ -179,8 +179,14 @@ class MainWindow(QMainWindow):
         )
         valid_proteins = counts_table[(counts_table["Protein name"] != "Invalid") & (counts_table["Protein name"] != "Filtered")]
         unique_rows = valid_proteins["row_count"].unique().mean()
-        error_rate = (counts_table[counts_table["Protein name"] == "Invalid"]['row_count']/unique_rows).item()
-        filtered_beads_percentage = (counts_table[counts_table["Protein name"] == "Filtered"]['row_count']/total_beads).item() 
+        try:
+            error_rate = (counts_table[counts_table["Protein name"] == "Invalid"]['row_count']/unique_rows).item()
+        except:
+            error_rate = 0
+        try:
+            filtered_beads_percentage = (counts_table[counts_table["Protein name"] == "Filtered"]['row_count']/total_beads).item() 
+        except:
+            filtered_beads_percentage = 0
         stats = {
             "total_beads": total_beads,
             "filtered_beads_percentage": float(filtered_beads_percentage)*100,

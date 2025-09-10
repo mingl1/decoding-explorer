@@ -1434,6 +1434,23 @@ def get_excel(
 
     tif_metadata = [f.metadata for _, f in tifs]
     tif_images = [np.array(img) for img, _ in tifs]
+    resized_tif_images = []
+    for img in tif_images:
+        if img.shape[-2:] != (max_size, max_size):  # Check last 2 dimensions (height, width)
+            # Resize each channel separately if it's a multi-channel image
+            if img.ndim == 3:
+                resized_channels = []
+                for channel in img:
+                    resized_channel = cv2.resize(channel, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
+                    resized_channels.append(resized_channel)
+                resized_img = np.stack(resized_channels, axis=0)
+            else:  # 2D image
+                resized_img = cv2.resize(img, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
+            resized_tif_images.append(resized_img)
+        else:
+            resized_tif_images.append(img)
+    
+    tif_images = resized_tif_images
 
     # Setup flors_layers for each metadata object
     for i, md in enumerate(tif_metadata):
@@ -1468,6 +1485,7 @@ def get_excel(
         "no_assignment": no_assignment.sum(),
         "both_single": both_assignment.sum(),
     }
+    print(counts)
 
     need_correction = df[~both_assignment & ~no_assignment]
     template = gaussian_kernel(5).astype(np.float32)
@@ -1514,8 +1532,6 @@ def get_excel(
         cycle_values.append(row_cycles_val)
     cycle_values = np.array(cycle_values)
     final_df.loc[need_correction.index, columns] = cycle_values
-    
-        
 
     return final_df, tif_images
 

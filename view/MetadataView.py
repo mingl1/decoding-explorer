@@ -232,12 +232,12 @@ class MetadataView(QWidget):
             "prefix": self.prefix_input.text(),
             "axes": self.axes_input.text(),
             "unit": self.unit_input.text(),
-            "PhysicalSizeX": self.size_x_input.text(),
-            "PhysicalSizeY": self.size_y_input.text(),
-            "reference_channel": self.channel_input.text(),
-            "max_size": self.max_size_input.text(),
-            "num_tiles": self.num_tiles_input.text(),
-            "overlap": self.overlap_input.text(),
+            "PhysicalSizeX": float(self.size_x_input.text()),
+            "PhysicalSizeY": float(self.size_y_input.text()),
+            "reference_channel": int(self.channel_input.text()),
+            "max_size": int(self.max_size_input.text()),
+            "num_tiles": int(self.num_tiles_input.text()),
+            "overlap": int(self.overlap_input.text()),
             "use_status_as_prefix": self.prefix_checkbox.isChecked(),
         }
 

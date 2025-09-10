@@ -33,16 +33,19 @@ class BeadGenerationThread(QThread):
 
     def run(self):
         self._is_running = True
-        results = image_processing.process_beads(
-            self.ref_bf,
-            self.tifs,
-            max_size=self.max_size,
-            signal_to_noise_cutoff=self.signal_to_noise_cutoff,
-            progress_callback=self.progress.emit,
-            is_running_callback=self.is_running,
-        )
-        if self._is_running:
-            self.bead_generated.emit(results)
+        try:
+            results = image_processing.process_beads(
+                self.ref_bf,
+                self.tifs,
+                max_size=self.max_size,
+                signal_to_noise_cutoff=self.signal_to_noise_cutoff,
+                progress_callback=self.progress.emit,
+                is_running_callback=self.is_running,
+            )
+            if self._is_running:
+                self.bead_generated.emit(results)
+        except Exception as e:
+            print(e)
         return None
 
     def cancel(self):
