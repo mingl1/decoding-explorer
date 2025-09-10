@@ -128,13 +128,14 @@ class Register(QThread):
                 if self._handle_cancel():
                     return
                 progress_update = int(((tile_n + 1) / len(inputs)) * 100)
-                self.progress.emit(
-                    progress_update,
-                    str(f"aligning tile {tile_n+1}/{len(inputs)}"),
-                )
+                
 
                 result = self.align_two_img_robust(*tile_set)  # align
-
+                transforms, ymin, xmin, radius, x, y, best_ncc = result
+                self.progress.emit(
+                    progress_update,
+                    str(f"aligning tile {tile_n+1}/{len(inputs)} - NCC: {best_ncc:.2f}"),
+                )
                 if result is None:
                     continue
                 outputs.append(result)

@@ -16,7 +16,8 @@ import image_processing
 import utils
 from model.file_item import FileItem
 from model.status_enum import FileStatus
-
+from view.alignment_preview_dialog import AlignmentPreviewDialog
+from PyQt6.QtWidgets import QDialog
 
 class BeadGenerationThread(QThread):
     progress = pyqtSignal(int, str)
@@ -305,16 +306,38 @@ class FileManagerVM(QObject):
         aligned_tifs: list[np.ndarray],
         selected: list[FileItem],
     ):
-        to_be_updated = []
-        for i, f in enumerate(selected):
-            my_f = self.files.get(f.path)
-            if not my_f:
-                continue
-            my_f.working_image = aligned_tifs[i]
-            my_f.status = FileStatus.ALIGNED
-            my_f.metadata.prefix = FileStatus.ALIGNED.name.lower()
-            to_be_updated.append(my_f)
-        self.file_information_update.emit(to_be_updated)
+        if not self.reference_item:
+            self.align_error.emit("Reference item not set for alignment completion.")
+            return
+
+        target_image = self._get_brightfield_image(self.reference_item)
+        if target_image is None:
+            self.align_error.emit("Could not load reference image for preview.")
+            return
+
+        moving_images = []
+        for i, f_item in enumerate(selected):
+            ref_channel = int(f_item.metadata.reference_channel)
+            if ref_channel < aligned_tifs[i].shape[0]:
+                moving_images.append(aligned_tifs[i][ref_channel])
+            else:
+                # Fallback to first channel if ref_channel is out of bounds
+                moving_images.append(aligned_tifs[i][0])
+
+        dialog = AlignmentPreviewDialog(target_image, moving_images, can_emit=True)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            to_be_updated = []
+            for i, f in enumerate(selected):
+                my_f = self.files.get(f.path)
+                if not my_f:
+                    continue
+                my_f.working_image = aligned_tifs[i]
+                my_f.status = FileStatus.ALIGNED
+                my_f.metadata.prefix = FileStatus.ALIGNED.name.lower()
+                to_be_updated.append(my_f)
+            self.file_information_update.emit(to_be_updated)
+        
 
     def delete_files(self, selected_files: list[FileItem]):
         for f in selected_files:
