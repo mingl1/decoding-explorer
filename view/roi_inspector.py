@@ -618,7 +618,7 @@ class ROI_Inspector(QDialog):
             protein_names = data_to_use.loc[valid, "Protein name"].to_numpy()
 
             # Boolean masks for invalid/valid
-            invalid_mask = protein_names == "Invalid" | protein_names == "Filtered"
+            invalid_mask = (protein_names == "Invalid") | (protein_names == "Filtered")
             valid_mask = ~invalid_mask
 
             # Yellow for invalid
