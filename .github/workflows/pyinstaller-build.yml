@@ -24,7 +24,7 @@ jobs:
 
       - name: Install Visual C++ Redistributable
         if: runner.os=='Windows'
-        run: choco install vcredist2013 vcredist2015 vcredist140 -y
+        run: choco install vcredist2013 vcredist2015 -y
 
       - name: Install dependencies
         run: |
