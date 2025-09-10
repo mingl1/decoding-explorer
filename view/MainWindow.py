@@ -370,7 +370,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Decoding-Explorer")
         if sys.platform == "win32":
             self.setWindowFlags(
-                Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                Qt.WindowType.FramelessWindowHint
             )
         self.resize(1280, 800)
         self.setMinimumSize(1200, 800)
@@ -643,13 +643,6 @@ def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_colum
         # Create the protein profile dataframe
         protein_profile = pd.DataFrame(protein_profile_data)
         
-    
-    # Merge bead_data with protein_profile
-    # Create the filtered row
-    # filtered_row = {col: 255 for col in merge_columns}
-    # filtered_row['Protein name'] = 'Filtered'
-
-    # protein_profile = pd.concat([protein_profile, pd.DataFrame([filtered_row])], ignore_index=True)
     
     bead_data = bead_data.merge(protein_profile, how="left", on=merge_columns)
     
