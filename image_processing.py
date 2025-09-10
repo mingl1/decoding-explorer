@@ -1519,9 +1519,9 @@ def get_excel(
         cycle_values.append(row_cycles_val)
     cycle_values = np.array(cycle_values)
     final_df.loc[need_correction.index, columns] = cycle_values
-    # update_progress(100, "Done associating beads with cycle activations")
-    # corrected = corrected[['x','y']+columns]
-    # final_df = pd.concat([singles,corrected],axis=0)
+    
+        
+
     return final_df, tif_images
 
     # Histogram matching to first cycle's first flor layer
@@ -2101,7 +2101,7 @@ def best_split_df_max_avg_gap(df, count_col):
             best_split = (left, right)
 
     return best_split, best_gap
-
+from utils import find_min_std_partition
 
 def process_beads(
     brightfield,
@@ -2178,6 +2178,8 @@ def process_beads(
 
     update_progress(90, "Filtering out rows with all zeros...")
     labeled_image = np.zeros(brightfield.shape, dtype=np.uint16)
+    
+    # group by cy0,cy1... and find min-std partition
     log(f"Dataframe created with shape: {df.shape}")
 
     update_progress(95, "Bead generation complete.")

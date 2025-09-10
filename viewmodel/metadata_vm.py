@@ -61,12 +61,20 @@ class MetadataVM(QObject):
         self.inspect_beads_sig.emit(self.selected_files[0], self.protein_df)
 
     def set_protein_files(self, files: list[str]):
-        pp = [pd.read_csv(f) if f.endswith(".csv") else pd.read_excel(f) for f in files]
-        pp = pd.concat(pp).drop_duplicates().reset_index(drop=True)
-        cols = pp.columns.tolist()
+        new_protein_df = (
+            pd.concat(
+                [pd.read_csv(f) if f.endswith(".csv") else pd.read_excel(f) for f in files]
+            )
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
+
+        cols = new_protein_df.columns.tolist()
         renamed = {}
         for i in range(1, len(cols)):
             renamed[cols[i]] = "cy" + str(i - 1)
-        pp.rename(columns=renamed, inplace=True)
-        self.protein_df = pp
-        self.update_overview_sig.emit(pp)
+        new_protein_df.rename(columns=renamed, inplace=True)
+
+        
+        self.protein_df = new_protein_df
+        self.update_overview_sig.emit(new_protein_df)

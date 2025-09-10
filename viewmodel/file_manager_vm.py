@@ -85,15 +85,17 @@ class FileManagerVM(QObject):
             self.align_error.emit("File not found in the manager.")
             return
         most_updated_file = self.files[file_item.path]
+        if most_updated_file.beads is None or most_updated_file.beads.empty:
+            self.align_error.emit("No beads data available for this file.")
+            return
+
         if len(protein_profile) > 0:
             print(protein_profile.head())
         # test data
         # df = pd.read_csv("./test_outputs/efficient_test.csv")
         # print(f"Loaded {len(df)} beads from CSV for testing.")
         # most_updated_file.beads = df
-        if most_updated_file.beads is None or most_updated_file.beads.empty:
-            self.align_error.emit("No beads data available for this file.")
-            return
+        
         # if shade corrected, this will be the shade corrected bf image
         # bf = self._get_brightfield_image(most_updated_file)
         # if bf is None:

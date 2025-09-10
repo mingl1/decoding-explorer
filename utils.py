@@ -145,6 +145,60 @@ def get_memory_usage_mb():
     mem_bytes = process.memory_info().rss  # Resident Set Size
     return mem_bytes / (1024 * 1024)  # MB
 
+import itertools
+import math
+
+def get_std_dev(numbers):
+    """Calculates the standard deviation of a list of numbers."""
+    if not numbers:
+        return 0
+    mean = sum(numbers) / len(numbers)
+    variance = sum([(x - mean) ** 2 for x in numbers]) / len(numbers)
+    return math.sqrt(variance)
+
+def find_min_std_partition(numbers):
+    """
+    Finds the binary grouping of numbers that minimizes the weighted
+    standard deviation using a brute-force approach.
+    """
+    n = len(numbers)
+
+    min_total_std = float('inf')
+    best_groups = ([], [])
+
+    # Iterate through all possible sizes for the first group (from 1 to n-1)
+    for k in range(1, n // 2 + 1):
+        # Generate all unique combinations of size k for the first group
+        for group1_tuple in itertools.combinations(numbers, k):
+            group1 = list(group1_tuple)
+            
+            # The second group contains all numbers not in the first group
+            group2 = [num for num in numbers if num not in group1]
+            
+            # Special handling for duplicate numbers
+            if len(group1) + len(group2) != n:
+                original_copy = list(numbers)
+                group2 = []
+                for num in original_copy:
+                    if num in group1:
+                        group1.remove(num)
+                    else:
+                        group2.append(num)
+                group1 = list(group1_tuple)
+
+            # Calculate standard deviations for each group
+            std1 = get_std_dev(group1)
+            std2 = get_std_dev(group2)
+            
+            # Calculate the weighted total standard deviation
+            total_std = (len(group1) * std1 + len(group2) * std2) / n
+            
+            # Check if this partition is better than the current best
+            if total_std < min_total_std:
+                min_total_std = total_std
+                best_groups = [group1, group2]
+
+    return best_groups, min_total_std
 
 def calculate_ncc(img1, img2):
     """
