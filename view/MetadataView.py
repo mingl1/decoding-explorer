@@ -107,8 +107,9 @@ class MetadataView(QWidget):
         self.stats_separator.setFrameShape(QFrame.Shape.HLine)
         self.stats_separator.setFrameShadow(QFrame.Shadow.Sunken)
         self.total_beads_label = QLabel("Total Beads: N/A")
+        self.filtered_beads_label = QLabel("Filtered Beads: N/A")
         self.mean_rows_label = QLabel("Mean Rows per Protein: N/A")
-        self.error_label = QLabel("Error: N/A")
+        self.error_label = QLabel("Error Rate: N/A")
         self.counts_table = QTableWidget()
         self.counts_table.setColumnCount(2)
         self.counts_table.setHorizontalHeaderLabels(["Protein Name", "Count"])
@@ -117,6 +118,8 @@ class MetadataView(QWidget):
         self.form_layout.addRow(self.stats_separator)
         self.form_layout.addRow(self.total_beads_label)
         self.form_layout.addRow(self.mean_rows_label)
+        
+        self.form_layout.addRow(self.filtered_beads_label)
         self.form_layout.addRow(self.error_label)
         self.form_layout.addRow(self.counts_table)
         self.vm.update_metadata_view_sig.connect(self.update_metadata)
@@ -249,10 +252,21 @@ class MetadataView(QWidget):
         self.total_beads_label.setText(
             f"Total Beads: {stats.get('total_beads', 'N/A')}"
         )
-        self.mean_rows_label.setText(
-            f"Mean Rows per Protein: {stats.get('mean_rows', 'N/A'):.2f}"
-        )
-        self.error_label.setText(f"Error: {stats.get('error', 'N/A'):.4f}%")
+
+        filtered_perc = stats.get('filtered_beads_percentage')
+        if filtered_perc is not None:
+            self.filtered_beads_label.setText(f"Filtered Beads: {filtered_perc:.2f}%")
+        
+        mean_rows = stats.get('mean_rows')
+        if mean_rows is not None:
+            self.mean_rows_label.setText(f"Mean Rows per Protein: {mean_rows:.2f}")
+        else:
+            self.mean_rows_label.setText("Mean Rows per Protein: N/A")
+        error_rate = stats.get('error_rate')
+        if error_rate is not None:
+            self.error_label.setText(f"Error Rate: {error_rate:.4f}%")
+        else:
+            self.error_label.setText("Error Rate: N/A")
 
         counts_table_data = stats.get("counts_table")
         if counts_table_data is not None:

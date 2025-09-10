@@ -35,23 +35,88 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from utils import adjust_contrast, to_uint8
+from utils import adjust_contrast, to_uint8,find_min_std_partition
 
 
 def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_columns):
-    # for each column in merge column, convert to int in both dataframes
+    """
+    Merge bead data with protein profile. If protein_profile is empty,
+    create one by grouping combinations and partitioning counts into valid/invalid groups.
+    """
+    # Convert merge columns to int in both dataframes
     for col in merge_columns:
         bead_data[col] = bead_data[col].astype(int)
-        protein_profile[col] = protein_profile[col].astype(int)
+        if not protein_profile.empty:
+            protein_profile[col] = protein_profile[col].astype(int)
+    
+    
+    # Handle empty protein_profile case
+    if protein_profile.empty:
+        # Group by merge columns to get count per combination
+        combination_counts = bead_data.groupby(merge_columns).size().reset_index(name='count')
+        
+        # Extract the counts for partitioning
+        counts = combination_counts['count'].tolist()
+        
+        if len(counts) > 1:
+            # Use find_min_std_partition to separate into two groups
+            groups, min_std = find_min_std_partition(counts)
+            
+            # Determine which group has lower values (invalid) and higher values (valid)
+            # Compare the minimum values of each group instead of means
+            group1_min = min(groups[0]) if groups[0] else float('inf')
+            group2_min = min(groups[1]) if groups[1] else float('inf')
+            
+            if group1_min <= group2_min:
+                invalid_counts_set = set(groups[0])
+                valid_counts_set = set(groups[1])
+            else:
+                invalid_counts_set = set(groups[1])
+                valid_counts_set = set(groups[0])
+        else:
+            # If only one combination, consider it invalid
+            invalid_counts_set = set(counts)
+            valid_counts_set = set()
+        
+        # Create protein profile dataframe
+        protein_profile_data = []
+        valid_protein_counter = 1
+        
+        # Assign protein names to each combination
+        for _, row in combination_counts.iterrows():
+            if row['count'] in invalid_counts_set:
+                protein_name = "Invalid"
+            else:
+                # Assign unique protein names (Protein 1, Protein 2, etc.) to valid combinations
+                protein_name = f"Protein {valid_protein_counter}"
+                valid_protein_counter += 1
+            
+            # Create row for protein profile
+            profile_row = {}
+            for col in merge_columns:
+                profile_row[col] = row[col]
+            profile_row['Protein name'] = protein_name
+            protein_profile_data.append(profile_row)
+        
+        # Create the protein profile dataframe
+        protein_profile = pd.DataFrame(protein_profile_data)
+    
+    # Merge bead_data with protein_profile
+    # Create the filtered row
+    # filtered_row = {col: 255 for col in merge_columns}
+    # filtered_row['Protein name'] = 'Filtered'
+
+    # protein_profile = pd.concat([protein_profile, pd.DataFrame([filtered_row])], ignore_index=True)
+    
     bead_data = bead_data.merge(protein_profile, how="left", on=merge_columns)
-    bead_data.fillna("Invalid", inplace=True)
-    # convert x, y to float then round to int
-    bead_data["x"] = bead_data["x"].astype(float).round().astype(int)
-    bead_data["y"] = bead_data["y"].astype(float).round().astype(int)
-    mean_rows_per_protein = bead_data.groupby("Protein name")
-    # count 254, 255 and non-combinations
-    bead_data.loc[bead_data["cy1"] >= 254, "Protein name"] = "Filtered"
-    return bead_data, mean_rows_per_protein
+    
+    # Fill NaN values with "Invalid"
+    bead_data['Protein name'].fillna("Invalid", inplace=True)
+    # For all merge columns being 255
+    mask_all_255 = (bead_data[merge_columns] == 255).all(axis=1)
+    bead_data.loc[mask_all_255, 'Protein name'] = "Filtered"
+    
+    return bead_data
 
 
 class NullableIntValidator(QIntValidator):
@@ -121,28 +186,25 @@ class ROI_Inspector(QDialog):
 
         self.target_image = snapshot_data["bf_image"].copy()
         self.beads = snapshot_data.get("beads", None)
-        self.cycles = snapshot_data.get("cycles", None)
+        self.cycles = snapshot_data.get("cycles", {})
         self.bboxs = snapshot_data.get("bboxs", None)
         self.labeled_image = snapshot_data.get("labeled_image", None)
-        self.protein_profile = snapshot_data.get("protein_profile", None)
+        self.protein_profile = snapshot_data.get("protein_profile", pd.DataFrame())
         self.bright_fields = snapshot_data.get("bright_fields", None)
         merge_columns = []
-        if self.protein_profile is not None and self.beads is not None:
-            merge_columns = [
-                i for i in self.protein_profile.columns if i in self.beads.columns
-            ]
-        print(merge_columns)
+        for i in range(len(self.cycles)):
+            merge_columns.append(f"cy{i}")
+            
         # Merge bead data with protein profile if both are provided
         if (
             self.beads is not None
             and self.protein_profile is not None
             and merge_columns
         ):
-            self.merged_bead_data, self.mean_rows_per_protein = (
-                merge_bead_data_with_protein_profile(
+            self.merged_bead_data = merge_bead_data_with_protein_profile(
                     self.beads.copy(), self.protein_profile.copy(), merge_columns
                 )
-            )
+            
             print(self.merged_bead_data.head())
         else:
             self.merged_bead_data = None
@@ -184,17 +246,19 @@ class ROI_Inspector(QDialog):
 
     def _setup_sidebar(self):
         assert self.merged_bead_data is not None
-        """Create sidebar with list of invalid beads and resample button."""
-        self.sidebar_widget = QGroupBox("Invalid Beads")
+        """Create sidebar with list of invalid/filtered beads and resample buttons."""
+        self.sidebar_widget = QGroupBox("Bead Inspector")
         sidebar_layout = QVBoxLayout()
 
-        # List widget for invalid beads
-        self.invalid_beads_list = QListWidget()
-        self.invalid_beads_list.itemClicked.connect(self._on_invalid_bead_selected)
+        # List widget for beads
+        self.beads_list = QListWidget()
+        self.beads_list.itemClicked.connect(self._on_invalid_bead_selected)
 
-        # Resample button
-        self.resample_button = QPushButton("Resample")
-        self.resample_button.clicked.connect(self._populate_invalid_beads_list)
+        # Resample buttons
+        self.resample_invalids_button = QPushButton("Resample Invalids")
+        self.resample_invalids_button.clicked.connect(self._populate_invalid_beads_list)
+        self.resample_filtered_button = QPushButton("Resample Filtereds")
+        self.resample_filtered_button.clicked.connect(self._populate_filtered_beads_list)
 
         # Add count label
         invalid_count = len(
@@ -208,8 +272,13 @@ class ROI_Inspector(QDialog):
         )
 
         sidebar_layout.addWidget(self.invalid_count_label)
-        sidebar_layout.addWidget(self.invalid_beads_list)
-        sidebar_layout.addWidget(self.resample_button)
+        sidebar_layout.addWidget(self.beads_list)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.resample_invalids_button)
+        button_layout.addWidget(self.resample_filtered_button)
+        sidebar_layout.addLayout(button_layout)
+
         sidebar_layout.addStretch()  # Push everything to top
 
         self.sidebar_widget.setLayout(sidebar_layout)
@@ -217,6 +286,27 @@ class ROI_Inspector(QDialog):
         self.sidebar_widget.setMinimumWidth(250)
         # Populate the list with invalid beads
         self._populate_invalid_beads_list()
+
+    def _populate_filtered_beads_list(self):
+        """Populate the sidebar list with a random selection of 10 filtered beads."""
+        if self.merged_bead_data is not None:
+            filtered_beads = self.merged_bead_data[
+                self.merged_bead_data["Protein name"] == "Filtered"
+            ]
+
+            # Randomly sample 10 rows (or fewer if less than 10)
+            sampled_beads = filtered_beads.sample(
+                n=min(10, len(filtered_beads)), random_state=None
+            )
+
+            self.beads_list.clear()
+
+            for idx, row in sampled_beads.iterrows():
+                x, y = int(row["x"]), int(row["y"])
+                item_text = f"Bead {idx}: ({x}, {y})"
+                item = QListWidgetItem(item_text)
+                item.setData(Qt.ItemDataRole.UserRole, (idx, x, y))
+                self.beads_list.addItem(item)
 
     def _populate_invalid_beads_list(self):
         """Populate the sidebar list with a random selection of 10 invalid beads."""
@@ -230,14 +320,14 @@ class ROI_Inspector(QDialog):
                 n=min(10, len(invalid_beads)), random_state=None
             )
 
-            self.invalid_beads_list.clear()  # Clear previous items if any
+            self.beads_list.clear()  # Clear previous items if any
 
             for idx, row in sampled_beads.iterrows():
-                x, y = int(row["x"]), int(row["y"])
+                x, y = int(row["x"]), int(row['y'])
                 item_text = f"Bead {idx}: ({x}, {y})"
                 item = QListWidgetItem(item_text)
                 item.setData(Qt.ItemDataRole.UserRole, (idx, x, y))
-                self.invalid_beads_list.addItem(item)
+                self.beads_list.addItem(item)
 
     def _on_invalid_bead_selected(self, item):
         """Handle selection of an invalid bead from the sidebar list."""
@@ -249,12 +339,10 @@ class ROI_Inspector(QDialog):
             self.y_input.setText(str(y))
             # Call inspect_roi with None event to trigger inspection
             self.inspect_roi(None)
-            # Enable resample button
-            self.resample_button.setEnabled(True)
 
     def _resample_selected_bead(self):
         """Handle resampling of selected invalid bead."""
-        current_item = self.invalid_beads_list.currentItem()
+        current_item = self.beads_list.currentItem()
         if current_item:
             data = current_item.data(Qt.ItemDataRole.UserRole)
             if data:
