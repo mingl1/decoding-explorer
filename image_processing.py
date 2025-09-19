@@ -1291,7 +1291,7 @@ def prepare_data_for_resolution(
     ColorThreshold = signal_to_noise_cutoff
 
     tif_metadata = [f.metadata for _, f in tifs]
-    tif_images = np.array([np.array(img) for img, _ in tifs])
+    tif_images = np.array([np.array(img) for img, _ in tifs]).copy()
     
     # Setup flors_layers for each metadata object
     for i, md in enumerate(tif_metadata):
@@ -1617,7 +1617,7 @@ def get_excel(
         "both_single": both_assignment.sum(),
     }
     print(counts)
-    tif_images = np.pad(np.array(tif_images), ((0,), (0,), (2,), (2,)))
+    # tif_images = np.pad(np.array(tif_images), ((0,), (0,), (2,), (2,)))
     columns = [f"cy{i}" for i in range(len(tif_images))]
     
     

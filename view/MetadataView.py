@@ -270,12 +270,16 @@ class MetadataView(QWidget):
 
         counts_table_data = stats.get("counts_table")
         if counts_table_data is not None:
+            self.counts_table.setUpdatesEnabled(False)
+            self.counts_table.setSortingEnabled(False)
             self.counts_table.setRowCount(len(counts_table_data))
             for i, row in counts_table_data.iterrows():
                 self.counts_table.setItem(
                     i, 0, QTableWidgetItem(str(row["Protein name"]))
                 )
                 self.counts_table.setItem(i, 1, QTableWidgetItem(str(row["row_count"])))
+            self.counts_table.setSortingEnabled(True)
+            self.counts_table.setUpdatesEnabled(True)
 
     def export_all(self):
         folder = QFileDialog.getExistingDirectory()

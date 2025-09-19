@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         self, file_item: FileItem, protein_profile: DataFrame
     ):
         if file_item.beads is None or file_item.beads.empty:
+            print("file item no beads")
             return
         total_beads = len(file_item.beads)
 
@@ -177,6 +178,7 @@ class MainWindow(QMainWindow):
             .reset_index(name="row_count")
             .sort_values("row_count", ascending=False)
         )
+        print(counts_table)
         valid_proteins = counts_table[(counts_table["Protein name"] != "Invalid") & (counts_table["Protein name"] != "Filtered")]
         unique_rows = valid_proteins["row_count"].unique().mean()
         try:
@@ -654,8 +656,11 @@ def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_colum
     
     # Fill NaN values with "Invalid"
     bead_data['Protein name'].fillna("Invalid", inplace=True)
+
     # For all merge columns being 255
     mask_all_255 = (bead_data[merge_columns] == 255).all(axis=1)
     bead_data.loc[mask_all_255, 'Protein name'] = "Filtered"
+    bead_data.loc[bead_data['cy1'] >= 254, 'Protein name'] = "Filtered"
+    bead_data.loc[bead_data['cy0'] >= 254, 'Protein name'] = "Filtered"
     
     return bead_data

@@ -78,3 +78,4 @@ class MetadataVM(QObject):
         
         self.protein_df = new_protein_df
         self.update_overview_sig.emit(new_protein_df)
+        print("new protein file")
