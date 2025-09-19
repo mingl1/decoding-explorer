@@ -1187,37 +1187,44 @@ import cv2
 from skimage.exposure import match_histograms, adjust_sigmoid, equalize_adapthist
 from skimage.morphology import erosion
 from skimage import img_as_float, img_as_uint
-def process_cycle(cycle, metadata: MetaData):
+from utils import background_subtraction_with_histogram
+def process_cycle(cycle):
     """
     Process one imaging cycle:
-    - Leave channels before reference untouched
-    - Use (reference_channel+1) as reference, equalize it
-    - Match all later channels to the reference, then adjust sigmoid
+    - Leave channel 0 untouched
+    - Use channel 1 as reference, equalize it
+    - Match all other channels (2..N) to channel 1, then adjust sigmoid
     """
     num_layers = cycle.shape[0]
     processed = []
 
-    ref_idx = metadata.reference_channel + 1
+    # channel 0 untouched
+    processed.append(cycle[0])
 
-    # keep all channels before reference
-    processed.extend(cycle[:ref_idx])
+    ref16 = cycle[1]
+    ref16,*_=background_subtraction_with_histogram(ref16)
+    ref_float = img_as_float(ref16)   # normalize to [0,1]
+    
 
-    # reference channel
-    ref16 = cycle[ref_idx]
-    ref_float = img_as_float(ref16)
-    # ref_adj = adjust_sigmoid(ref_float, cutoff=0.1, gain=1)
-    processed.append(img_as_uint(ref_float))
-
-    # channels after reference
-    for j in range(ref_idx + 1, num_layers):
+    # channels 2..N
+    for j in range(2, num_layers):
         img16 = cycle[j]
+        img16,*_ = background_subtraction_with_histogram(img16)
         matched_float = img_as_float(img16)
         matched = match_histograms(matched_float, ref_float)
-        # matched = adjust_sigmoid(matched, cutoff=0.1, gain=1)
-        processed.append(img_as_uint(matched))
+        
+        adj = adjust_sigmoid(matched, cutoff=0.1,gain=1)
+        # adj = erosion(adj)
+        # adj = matched
+        processed.append(img_as_uint(adj))   # back to uint16
+
+    # channel 1: reference, equalized
+    ref_adj = adjust_sigmoid(ref_float, cutoff=0.1,gain=1)
+    # ref_adj = equalize_adapthist(ref_float)
+    # ref_adj = ref_float
+    processed.insert(1, img_as_uint(ref_adj))
 
     return np.stack(processed, axis=0)
-
 import numpy as np
 from tqdm import tqdm
 
