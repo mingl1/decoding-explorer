@@ -1163,9 +1163,6 @@ from skimage.restoration import rolling_ball
 
 def get_labels_from_cycles(cycles, cycles_metadata: List[MetaData],max_size):
     cycle_labels = []
-    print("processing cycles")
-    
-    print("done processing cycles")
     
     for i, cycle in enumerate(cycles):
         flor_layers = cycles_metadata[i].flors_layers
@@ -1174,13 +1171,9 @@ def get_labels_from_cycles(cycles, cycles_metadata: List[MetaData],max_size):
         labels = []
         bead_radius= 5
         for layer_idx in flor_layers:
-            img = cycle[layer_idx][:max_size, :max_size]
-            # img = equalize_adapthist(img,kernel_size=9)
-            # img = equalize_hist(img)
+            img = cycle[layer_idx]
+            print(img.shape)
             img = (img - img.min()) / (img.max() - img.min())
-            # img = img - gaussian(img, sigma=bead_radius*2)
-            # bg = rolling_ball(img, radius=40, num_threads=8)
-            # img -= bg
             seg, label, timing = watershed_segmentation_cv2(
                 img, use_numexpr=False, border=0, marker_low=0.1, marker_high=0.15
             )
@@ -1289,7 +1282,7 @@ def prepare_data_for_resolution(
     """
     def update_progress(value, message):
         if progress_callback:
-            overall_progress = 40 + (value / 100) * 50
+            overall_progress = 40 + (value / 100) * 30
             progress_callback(int(overall_progress), message)
 
     def is_running():
@@ -1298,7 +1291,7 @@ def prepare_data_for_resolution(
     ColorThreshold = signal_to_noise_cutoff
 
     tif_metadata = [f.metadata for _, f in tifs]
-    tif_images = [np.array(img)[:,:max_size,:max_size] for img, _ in tifs]
+    tif_images = np.array([np.array(img) for img, _ in tifs])
     
     # Setup flors_layers for each metadata object
     for i, md in enumerate(tif_metadata):
@@ -1307,13 +1300,15 @@ def prepare_data_for_resolution(
             j for j in range(len(tif_images[i])) if j > int(md.reference_channel)
         ]
     for i in range(len(tif_images)):
-        tif_images[i] = process_cycle(tif_images[i], tif_metadata[i])
+        res = process_cycle(tif_images[i], tif_metadata[i])
+        tif_images[i] = res
     total_beads = len(beads)
     total_cycles = len(tif_metadata)
     total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
     beads = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
     
     update_progress(10, "Getting activation regions from cycles")
+    print(tif_images.shape, max_size)
     labels, cycles = get_labels_from_cycles(tif_images, tif_metadata, max_size)
     update_progress(50, "Assigning beads labels")
     df = assign_beads_labels(beads, labels)
@@ -1605,10 +1600,8 @@ def get_excel(
     total_beads = len(beads)
     total_cycles = len(tif_metadata)
     total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
-    beads = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
     update_progress(10, "Getting activation regions from cycles")
-    data_dict = prepare_data_for_resolution(beads, signal_to_noise_cutoff, tifs, max_size)
-    # labels, cycles = get_labels_from_cycles(tif_images, tif_metadata, max_size)
+    data_dict = prepare_data_for_resolution(beads, signal_to_noise_cutoff, tifs, max_size, progress_callback=update_progress)
     update_progress(50, "Assigning beads labels")
     # df = assign_beads_labels(beads, labels)
     # cycle_layer_columns = {}
