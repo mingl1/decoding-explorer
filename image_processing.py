@@ -1164,8 +1164,7 @@ from skimage.restoration import rolling_ball
 def get_labels_from_cycles(cycles, cycles_metadata: List[MetaData],max_size):
     cycle_labels = []
     print("processing cycles")
-    for i in range(len(cycles)):
-        cycles[i] = process_cycle(cycles[i], cycles_metadata[i])
+    
     print("done processing cycles")
     
     for i, cycle in enumerate(cycles):
@@ -1272,138 +1271,6 @@ def get_assignment(row, cols):
     return int(col.split("_")[-1])  # layer number
 
 
-def isolated_get_excel(
-    beads,
-    signal_to_noise_cutoff,
-    tifs,
-    max_size,
-    layer_threshold_dict=defaultdict(int),
-    progress_callback=None,
-    is_running_callback=None,
-    roi_coords=None,
-    n_workers=10,
-    radius=2,
-):
-    def update_progress(value, message):
-        if progress_callback:
-            overall_progress = 40 + (value / 100) * 50
-            progress_callback(int(overall_progress), message)
-
-    def is_running():
-        return is_running_callback() if is_running_callback else True
-
-    ColorThreshold = signal_to_noise_cutoff
-    export_to_excel = np.zeros((len(beads), len(tifs)), dtype="uint8")
-
-    tif_metadata = [f.metadata for _, f in tifs]
-    tif_images = [np.array(img) for img, _ in tifs]
-    resized_tif_images = []
-    for img in tif_images:
-        if img.shape[-2:] != (max_size, max_size):  # Check last 2 dimensions (height, width)
-            # Resize each channel separately if it's a multi-channel image
-            if img.ndim == 3:
-                resized_channels = []
-                for channel in img:
-                    resized_channel = cv2.resize(channel, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
-                    resized_channels.append(resized_channel)
-                resized_img = np.stack(resized_channels, axis=0)
-            else:  # 2D image
-                resized_img = cv2.resize(img, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
-            resized_tif_images.append(resized_img)
-        else:
-            resized_tif_images.append(img)
-    
-    tif_images = resized_tif_images
-
-    # Setup flors_layers for each metadata object
-    for i, md in enumerate(tif_metadata):
-        assert isinstance(md, MetaData)
-        md.flors_layers = [
-            j for j in range(len(tif_images[i])) if j > int(md.reference_channel)
-        ]
-
-
-    total_beads = len(beads)
-    total_cycles = len(tif_metadata)
-    total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
-    beads = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
-    update_progress(10, "Getting activation regions from cycles")
-    labels, cycles = get_labels_from_cycles(tif_images, tif_metadata, max_size)
-    update_progress(50, "Assigning beads labels")
-    df = assign_beads_labels(beads, labels)
-    cycle_layer_columns = {}
-
-    for i in range(total_cycles):
-        cols = []
-        for j in range(total_layers):
-            cycle_layer_columns[(i, j)] = f"cy{i}_{j}"
-            cols.append(cycle_layer_columns[(i, j)])
-        df[f"cy{i}_count"] = (df[cols] > 0).sum(axis=1)
-    count_cols = [f"cy{i}_count" for i in range(total_cycles)]
-
-    both_assignment = (df[count_cols] == 1).all(axis=1)
-    no_assignment = (df[count_cols] == 0).any(axis=1)
-
-    counts = {
-        "no_assignment": no_assignment.sum(),
-        "both_single": both_assignment.sum(),
-    }
-    print(counts)
-    need_correction = df[~both_assignment]
-    template = gaussian_kernel(5).astype(np.float32)
-    # Zero-pad cycles
-    pad = 2
-    tif_images = np.pad(np.array(tif_images), ((0,), (0,), (2,), (2,)))
-
-    # doesn't change actual coords, only for calculations
-    x_coords = np.rint(need_correction["x"].to_numpy() + pad).astype(np.int32)
-    y_coords = np.rint(need_correction["y"].to_numpy() + pad).astype(np.int32)
-    columns = [f"cy{i}" for i in range(len(tif_images))]
-    
-    final_df = df[["x", "y"]].copy()
-    final_df[columns] = 255
-
-    def assignment_row(row):
-        return [
-            get_assignment(
-                row, [f"{col}_{i}" for i in range(len(tif_metadata[0].flors_layers))]
-            )
-            for col in columns
-        ]
-
-    singles_vals = df.loc[both_assignment].apply(
-        assignment_row, axis=1, result_type="expand"
-    )
-    final_df.loc[both_assignment, columns] = singles_vals.values
-    
-    single_distr = final_df.loc[both_assignment].groupby(columns).size().reset_index(name='count')
-    print(single_distr.head(30))
-    cycle_values = []
-    for i, (x, y) in tqdm(enumerate(zip(x_coords, y_coords))):
-        # Extract 5x5 patches for all channels except channel 0
-        row_cycles_val = []
-        for cycle_idx in range(len(tif_images)):
-            flors_layers = tif_metadata[cycle_idx].flors_layers
-
-            patches = tif_images[cycle_idx][flors_layers, y - 2 : y + 3, x - 2 : x + 3]
-            patches = utils.adjust_contrast(patches.astype(np.float32), 10, 90)
-            flor_assignments = np.array(
-                [
-                    cv2.matchTemplate(patch, template, cv2.TM_CCORR_NORMED).max()
-                    for patch in patches
-                ]
-            )
-            max_flor_layer = np.argmax(flor_assignments)
-            if flor_assignments[max_flor_layer]>ColorThreshold:
-                row_cycles_val.append(max_flor_layer)
-            else:
-                row_cycles_val.append(255)
-        cycle_values.append(row_cycles_val)
-    cycle_values = np.array(cycle_values)
-    final_df.loc[need_correction.index, columns] = cycle_values
-
-    return final_df, tif_images, x_coords, y_coords
-
 def prepare_data_for_resolution(
     beads,
     signal_to_noise_cutoff,
@@ -1431,32 +1298,16 @@ def prepare_data_for_resolution(
     ColorThreshold = signal_to_noise_cutoff
 
     tif_metadata = [f.metadata for _, f in tifs]
-    tif_images = [np.array(img) for img, _ in tifs]
-    resized_tif_images = []
-    for img in tif_images:
-        if img.shape[-2:] != (max_size, max_size):  # Check last 2 dimensions (height, width)
-            # Resize each channel separately if it's a multi-channel image
-            if img.ndim == 3:
-                resized_channels = []
-                for channel in img:
-                    resized_channel = cv2.resize(channel, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
-                    resized_channels.append(resized_channel)
-                resized_img = np.stack(resized_channels, axis=0)
-            else:  # 2D image
-                resized_img = cv2.resize(img, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
-            resized_tif_images.append(resized_img)
-        else:
-            resized_tif_images.append(img)
+    tif_images = [np.array(img)[:,:max_size,:max_size] for img, _ in tifs]
     
-    tif_images = resized_tif_images
-
     # Setup flors_layers for each metadata object
     for i, md in enumerate(tif_metadata):
         assert isinstance(md, MetaData)
         md.flors_layers = [
             j for j in range(len(tif_images[i])) if j > int(md.reference_channel)
         ]
-
+    for i in range(len(tif_images)):
+        tif_images[i] = process_cycle(tif_images[i], tif_metadata[i])
     total_beads = len(beads)
     total_cycles = len(tif_metadata)
     total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
@@ -1740,24 +1591,8 @@ def get_excel(
     export_to_excel = np.zeros((len(beads), len(tifs)), dtype="uint8")
 
     tif_metadata = [f.metadata for _, f in tifs]
-    tif_images = [np.array(img) for img, _ in tifs]
-    resized_tif_images = []
-    for img in tif_images:
-        if img.shape[-2:] != (max_size, max_size):  # Check last 2 dimensions (height, width)
-            # Resize each channel separately if it's a multi-channel image
-            if img.ndim == 3:
-                resized_channels = []
-                for channel in img:
-                    resized_channel = cv2.resize(channel, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
-                    resized_channels.append(resized_channel)
-                resized_img = np.stack(resized_channels, axis=0)
-            else:  # 2D image
-                resized_img = cv2.resize(img, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
-            resized_tif_images.append(resized_img)
-        else:
-            resized_tif_images.append(img)
+    tif_images = [np.array(img)[:,:max_size,:max_size] for img, _ in tifs]
     
-    tif_images = resized_tif_images
 
     # Setup flors_layers for each metadata object
     for i, md in enumerate(tif_metadata):
@@ -1778,12 +1613,7 @@ def get_excel(
     # df = assign_beads_labels(beads, labels)
     # cycle_layer_columns = {}
     df = data_dict['df']
-    # for i in range(total_cycles):
-    #     cols = []
-    #     for j in range(total_layers):
-    #         cycle_layer_columns[(i, j)] = f"cy{i}_{j}"
-    #         cols.append(cycle_layer_columns[(i, j)])
-    #     df[f"cy{i}_count"] = (df[cols] > 0).sum(axis=1)
+
     count_cols = [f"cy{i}_count" for i in range(total_cycles)]
 
     both_assignment = (df[count_cols] == 1).all(axis=1)
@@ -1817,11 +1647,10 @@ def get_excel(
     
     # single_distr = final_df.loc[both_assignment].groupby(columns).size().reset_index(name='count')
     # print(single_distr.head(30))
-    update_progress(70, "Matching Histograms")
     tif_images_padded = data_dict['tif_images_padded']
-    for i in range(len(tif_images_padded)):
-        for j in range(1,len(tif_images_padded[i])):
-            tif_images_padded[i][j] = match_histograms(tif_images_padded[i][j], tif_images_padded[i][1])
+    # for i in range(len(tif_images_padded)):
+        # for j in range(1,len(tif_images_padded[i])):
+            # tif_images_padded[i][j] = match_histograms(tif_images_padded[i][j], tif_images_padded[i][1])
             
     tif_metadata = data_dict['tif_metadata']
     ColorThreshold = data_dict['ColorThreshold']
@@ -1834,7 +1663,7 @@ def get_excel(
     need_correction = df[~both_assignment & ~no_assignment]
     
     print(f"Beads needing correction: {len(need_correction)}")
-    update_progress(80, "Resolving Bead Labels")
+    update_progress(70, "Resolving Bead Labels")
     ColorThreshold = 0.005
     # Convert coordinates to integer indices (adjusted for padding)
     x_coords = np.rint(need_correction["x"].to_numpy() + pad).astype(np.int32)
