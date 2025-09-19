@@ -6,7 +6,47 @@ import numpy as np
 import psutil
 from numpy.typing import NDArray
 
+from skimage.filters import threshold_otsu
 
+
+def background_subtraction_with_histogram(image: np.ndarray) -> np.ndarray:
+    """ 
+    Implements the described method:
+    1. Otsu threshold to extract background.
+    2. Compute histogram of background pixels.
+    3. Use the peak of background histogram as refined threshold.
+    4. Subtract refined threshold from original image.
+
+    https://www.nature.com/articles/s44303-025-00088-w#MOESM1
+    """
+
+    # Ensure float64 for precision
+    original_dtype = image.dtype
+    img = image.astype(np.float64)
+
+    # Step 1: Otsu's threshold
+    otsu_thresh = threshold_otsu(img)
+    background_mask = img <= otsu_thresh  # background region
+
+    # Step 2: Histogram of background pixels
+    background_pixels = img[background_mask]
+    hist, bin_edges = np.histogram(background_pixels, bins=256, range=(0, img.max()))
+
+    # Step 3: Find peak of histogram
+    peak_idx = np.argmax(hist)
+    refined_threshold = bin_edges[peak_idx]
+
+    # Step 4: Subtract refined threshold
+    result = img - refined_threshold
+    result[result < 0] = 0  # clip negatives
+
+    # Convert back to original dtype if possible
+    if original_dtype == np.uint16:
+        result = result.astype(np.uint16)
+    elif original_dtype == np.uint8:
+        result = result.astype(np.uint8)
+
+    return result, otsu_thresh, refined_threshold, hist, bin_edges
 def to_uint16(arr):
     """
     Converts image data array to a 16 bit unsigned integer array.
@@ -269,16 +309,18 @@ def to_uint8(image):
 
 
 def adjust_contrast(
-    img: NDArray[np.float32] | NDArray[np.float64], min_percentile=2, max_percentile=98
+    img: NDArray[np.float32] | NDArray[np.float64], min_percentile=2, max_percentile=98,axis=None
 ):
     """Adjust image contrast using percentile-based clipping for float images"""
     # Calculate percentiles
-    minval = np.percentile(img, min_percentile)
-    maxval = np.percentile(img, max_percentile)
-
+    minval = np.percentile(img, min_percentile,axis=axis)
+    maxval = np.percentile(img, max_percentile,axis=axis)
+    if axis is not None:
+        minval = minval[:, None, None]
+        maxval = maxval[:, None, None]
     # Avoid division by zero
-    if maxval - minval < 1e-12:
-        return np.zeros_like(img)
+    # if maxval - minval < 1e-12:
+        # return np.zeros_like(img)
 
     # Clip and rescale to [0.0, 1.0]
     img_adjusted = np.clip(img, minval, maxval)

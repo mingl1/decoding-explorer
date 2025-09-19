@@ -13,10 +13,9 @@ from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from image_processing import adjust_contrast
-from utils import calculate_ncc, to_uint8
+from utils import calculate_ncc, to_uint8, background_subtraction_with_histogram
 
 
-# !TODO: need to add preview after aligning arrays
 class Register(QThread):
     image_ready = pyqtSignal(bool)
     progress = pyqtSignal(int, str)
@@ -76,7 +75,7 @@ class Register(QThread):
         reference_tif_index = self.params["alignment_layer"]
         print("Reference channel is: ", reference_tif_index)
         print(f"Aligning {len(self.image)} channels with max size {m}")
-        reference_bf = self.image[reference_tif_index][:m, :m]
+        reference_bf = adjust_contrast(background_subtraction_with_histogram(self.image[reference_tif_index][:m, :m])[0],2,99)
         alignment_layers = []
 
         for i, tif in enumerate(self.tifs):
@@ -90,7 +89,7 @@ class Register(QThread):
                     )
                     return
                 alignment_layers.append(
-                    adjust_contrast(tif["image"][bf_channel][:m, :m], 50, 99)
+                    adjust_contrast(background_subtraction_with_histogram(tif["image"][bf_channel][:m, :m])[0], 2, 99)
                 )
 
         fixed_map = TileMap(

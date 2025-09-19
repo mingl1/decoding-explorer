@@ -276,6 +276,7 @@ class FileManagerVM(QObject):
                 "file_path": f.path,
             }
             alignable_images.append(alignable)
+            print(f"ALIGN ARRYS SHAPE: {image.shape}")
 
         self.register_thread = Register(
             np.array(
