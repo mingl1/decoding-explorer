@@ -1188,42 +1188,34 @@ from skimage.exposure import match_histograms, adjust_sigmoid, equalize_adapthis
 from skimage.morphology import erosion
 from skimage import img_as_float, img_as_uint
 from utils import background_subtraction_with_histogram
-def process_cycle(cycle, metadata:MetaData):
+def process_cycle(cycle, metadata: MetaData):
     """
     Process one imaging cycle:
-    - Leave channel 0 untouched
-    - Use channel 1 as reference, equalize it
-    - Match all other channels (2..N) to channel 1, then adjust sigmoid
+    - Leave channels before reference untouched
+    - Use (reference_channel+1) as reference, equalize it
+    - Match all later channels to the reference, then adjust sigmoid
     """
     num_layers = cycle.shape[0]
     processed = []
 
-    # channel 0 untouched
-    ref_channel = metadata.reference_channel +1
-    processed.extend(cycle[:ref_channel])
+    ref_idx = metadata.reference_channel + 1
 
-    ref16 = cycle[ref_channel]
-    ref16,*_=background_subtraction_with_histogram(ref16)
-    ref_float = img_as_float(ref16)   # normalize to [0,1]
-    
+    # keep all channels before reference
+    processed.extend(cycle[:ref_idx])
 
-    # channels 2..N
-    for j in range(ref_channel+1, num_layers):
+    # reference channel
+    ref16 = cycle[ref_idx]
+    ref_float = img_as_float(ref16)
+    ref_adj = adjust_sigmoid(ref_float, cutoff=0.1, gain=1)
+    processed.append(img_as_uint(ref_adj))
+
+    # channels after reference
+    for j in range(ref_idx + 1, num_layers):
         img16 = cycle[j]
-        img16,*_ = background_subtraction_with_histogram(img16)
         matched_float = img_as_float(img16)
         matched = match_histograms(matched_float, ref_float)
-        
-        adj = adjust_sigmoid(matched, cutoff=0.1,gain=1)
-        # adj = erosion(adj)
-        # adj = matched
-        processed.append(img_as_uint(adj))   # back to uint16
-
-    # channel 1: reference, equalized
-    ref_adj = adjust_sigmoid(ref_float, cutoff=0.1,gain=1)
-    # ref_adj = equalize_adapthist(ref_float)
-    # ref_adj = ref_float
-    processed.insert(1, img_as_uint(ref_adj))
+        matched = adjust_sigmoid(matched, cutoff=0.1, gain=1)
+        processed.append(img_as_uint(matched))
 
     return np.stack(processed, axis=0)
 import numpy as np
@@ -1628,6 +1620,7 @@ def get_excel(
     tif_images = np.pad(np.array(tif_images), ((0,), (0,), (2,), (2,)))
     columns = [f"cy{i}" for i in range(len(tif_images))]
     
+    
 
     
     # final_df = df[["x", "y"]].copy()
@@ -1649,9 +1642,10 @@ def get_excel(
     # single_distr = final_df.loc[both_assignment].groupby(columns).size().reset_index(name='count')
     # print(single_distr.head(30))
     tif_images_padded = data_dict['tif_images_padded']
-    # for i in range(len(tif_images_padded)):
-        # for j in range(1,len(tif_images_padded[i])):
-            # tif_images_padded[i][j] = match_histograms(tif_images_padded[i][j], tif_images_padded[i][1])
+    for i in range(len(tif_images_padded)):
+        ref_idx = tif_metadata[i].reference_channel+1
+        for j in range(ref_idx+1,len(tif_images_padded[i])):
+            tif_images_padded[i][j] = match_histograms(tif_images_padded[i][j], tif_images_padded[i][ref_idx])
             
     tif_metadata = data_dict['tif_metadata']
     ColorThreshold = data_dict['ColorThreshold']
