@@ -1188,7 +1188,7 @@ from skimage.exposure import match_histograms, adjust_sigmoid, equalize_adapthis
 from skimage.morphology import erosion
 from skimage import img_as_float, img_as_uint
 from utils import background_subtraction_with_histogram
-def process_cycle(cycle):
+def process_cycle(cycle, metadata:MetaData):
     """
     Process one imaging cycle:
     - Leave channel 0 untouched
@@ -1199,15 +1199,16 @@ def process_cycle(cycle):
     processed = []
 
     # channel 0 untouched
-    processed.append(cycle[0])
+    ref_channel = metadata.reference_channel +1
+    processed.extend(cycle[:ref_channel])
 
-    ref16 = cycle[1]
+    ref16 = cycle[ref_channel]
     ref16,*_=background_subtraction_with_histogram(ref16)
     ref_float = img_as_float(ref16)   # normalize to [0,1]
     
 
     # channels 2..N
-    for j in range(2, num_layers):
+    for j in range(ref_channel+1, num_layers):
         img16 = cycle[j]
         img16,*_ = background_subtraction_with_histogram(img16)
         matched_float = img_as_float(img16)
