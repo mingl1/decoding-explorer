@@ -1213,7 +1213,7 @@ def process_cycle(cycle, metadata: MetaData):
     ref16 = cycle[ref_idx]
     ref_float = img_as_float(ref16)
     # ref_adj = adjust_sigmoid(ref_float, cutoff=0.1, gain=1)
-    processed.append(img_as_uint(ref_adj))
+    processed.append(img_as_uint(ref_float))
 
     # channels after reference
     for j in range(ref_idx + 1, num_layers):
