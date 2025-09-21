@@ -4,8 +4,8 @@ import select
 import sys
 import warnings
 from typing import List
-import numpy as np
 
+import numpy as np
 from pandas import DataFrame
 from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
 from PyQt6.QtWidgets import (
@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
 
 from model.file_item import FileItem
 from model.status_enum import FileStatus
-from utils import is_dark_mode, find_min_std_partition
+from utils import find_min_std_partition, is_dark_mode
 from view.CycleAssignmentWidget import CycleAssignmentWidget
 from view.FileListWidget import FileTableWidget
 from view.MetadataView import MetadataView
@@ -159,7 +159,6 @@ class MainWindow(QMainWindow):
         total_beads = len(file_item.beads)
 
         merge_columns = [col for col in file_item.beads.columns if col.startswith("cy")]
-        
 
         beads_for_merge = file_item.beads.copy()
         for col in merge_columns:
@@ -179,21 +178,30 @@ class MainWindow(QMainWindow):
             .sort_values("row_count", ascending=False)
         )
         print(counts_table)
-        valid_proteins = counts_table[(counts_table["Protein name"] != "Invalid") & (counts_table["Protein name"] != "Filtered")]
+        valid_proteins = counts_table[
+            (counts_table["Protein name"] != "Invalid")
+            & (counts_table["Protein name"] != "Filtered")
+        ]
         unique_rows = valid_proteins["row_count"].unique().mean()
         try:
-            error_rate = (counts_table[counts_table["Protein name"] == "Invalid"]['row_count']/unique_rows).item()
+            error_rate = (
+                counts_table[counts_table["Protein name"] == "Invalid"]["row_count"]
+                / unique_rows
+            ).item()
         except:
             error_rate = 0
         try:
-            filtered_beads_percentage = (counts_table[counts_table["Protein name"] == "Filtered"]['row_count']/total_beads).item() 
+            filtered_beads_percentage = (
+                counts_table[counts_table["Protein name"] == "Filtered"]["row_count"]
+                / total_beads
+            ).item()
         except:
             filtered_beads_percentage = 0
         stats = {
             "total_beads": total_beads,
-            "filtered_beads_percentage": float(filtered_beads_percentage)*100,
+            "filtered_beads_percentage": float(filtered_beads_percentage) * 100,
             "mean_rows": unique_rows,
-            "error_rate": float(error_rate)*100,
+            "error_rate": float(error_rate) * 100,
             "counts_table": counts_table,
         }
         self.metadata_vm.statistics_updated.emit(stats)
@@ -377,9 +385,7 @@ class MainWindow(QMainWindow):
     def _setup_main_window(self):
         self.setWindowTitle("Decoding-Explorer")
         if sys.platform == "win32":
-            self.setWindowFlags(
-                Qt.WindowType.FramelessWindowHint
-            )
+            self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.resize(1280, 800)
         self.setMinimumSize(1200, 800)
 
@@ -586,7 +592,10 @@ class SideGrip(QWidget):
 
     def mouseReleaseEvent(self, event):
         self.mousePos = None
+
+
 import pandas as pd
+
 
 def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_columns):
     """
@@ -598,25 +607,26 @@ def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_colum
         bead_data[col] = bead_data[col].astype(int)
         if not protein_profile.empty:
             protein_profile[col] = protein_profile[col].astype(int)
-    
-    
+
     # Handle empty protein_profile case
     if protein_profile.empty:
         # Group by merge columns to get count per combination
-        combination_counts = bead_data.groupby(merge_columns).size().reset_index(name='count')
-        
+        combination_counts = (
+            bead_data.groupby(merge_columns).size().reset_index(name="count")
+        )
+
         # Extract the counts for partitioning
-        counts = combination_counts['count'].tolist()
-        
+        counts = combination_counts["count"].tolist()
+
         if len(counts) > 1:
             # Use find_min_std_partition to separate into two groups
             groups, min_std = find_min_std_partition(counts)
-            
+
             # Determine which group has lower values (invalid) and higher values (valid)
             # Compare the minimum values of each group instead of means
-            group1_min = min(groups[0]) if groups[0] else float('inf')
-            group2_min = min(groups[1]) if groups[1] else float('inf')
-            
+            group1_min = min(groups[0]) if groups[0] else float("inf")
+            group2_min = min(groups[1]) if groups[1] else float("inf")
+
             if group1_min <= group2_min:
                 invalid_counts_set = set(groups[0])
                 valid_counts_set = set(groups[1])
@@ -627,40 +637,39 @@ def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_colum
             # If only one combination, consider it invalid
             invalid_counts_set = set(counts)
             valid_counts_set = set()
-        
+
         # Create protein profile dataframe
         protein_profile_data = []
         valid_protein_counter = 1
-        
+
         # Assign protein names to each combination
         for _, row in combination_counts.iterrows():
-            if row['count'] in invalid_counts_set:
+            if row["count"] in invalid_counts_set:
                 protein_name = "Invalid"
             else:
                 # Assign unique protein names (Protein 1, Protein 2, etc.) to valid combinations
                 protein_name = f"Protein {valid_protein_counter}"
                 valid_protein_counter += 1
-            
+
             # Create row for protein profile
             profile_row = {}
             for col in merge_columns:
                 profile_row[col] = row[col]
-            profile_row['Protein name'] = protein_name
+            profile_row["Protein name"] = protein_name
             protein_profile_data.append(profile_row)
-        
+
         # Create the protein profile dataframe
         protein_profile = pd.DataFrame(protein_profile_data)
-        
-    
+
     bead_data = bead_data.merge(protein_profile, how="left", on=merge_columns)
-    
+
     # Fill NaN values with "Invalid"
-    bead_data['Protein name'].fillna("Invalid", inplace=True)
+    bead_data["Protein name"].fillna("Invalid", inplace=True)
 
     # For all merge columns being 255
     mask_all_255 = (bead_data[merge_columns] == 255).all(axis=1)
-    bead_data.loc[mask_all_255, 'Protein name'] = "Filtered"
-    bead_data.loc[bead_data['cy1'] >= 254, 'Protein name'] = "Filtered"
-    bead_data.loc[bead_data['cy0'] >= 254, 'Protein name'] = "Filtered"
-    
+    bead_data.loc[mask_all_255, "Protein name"] = "Filtered"
+    bead_data.loc[bead_data["cy1"] >= 254, "Protein name"] = "Filtered"
+    bead_data.loc[bead_data["cy0"] >= 254, "Protein name"] = "Filtered"
+
     return bead_data

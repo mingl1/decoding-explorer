@@ -10,6 +10,7 @@ import pandas as pd
 import tifffile
 from pandas import DataFrame, Series
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtWidgets import QDialog
 from tifffile import TiffFile, TiffFileError
 
 import image_processing
@@ -17,7 +18,7 @@ import utils
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from view.alignment_preview_dialog import AlignmentPreviewDialog
-from PyQt6.QtWidgets import QDialog
+
 
 class BeadGenerationThread(QThread):
     progress = pyqtSignal(int, str)
@@ -99,7 +100,7 @@ class FileManagerVM(QObject):
         # df = pd.read_csv("./test_outputs/efficient_test.csv")
         # print(f"Loaded {len(df)} beads from CSV for testing.")
         # most_updated_file.beads = df
-        
+
         # if shade corrected, this will be the shade corrected bf image
         # bf = self._get_brightfield_image(most_updated_file)
         # if bf is None:
@@ -168,7 +169,7 @@ class FileManagerVM(QObject):
         for status in FileStatus:
             if status.name.startswith("_"):
                 continue
-            assert isinstance(status.value,str)
+            assert isinstance(status.value, str)
             prefix = status.value.lower() + "_"
             print(f"prefix: {prefix}, {status}")
             if filename_base.startswith(prefix):
@@ -225,9 +226,10 @@ class FileManagerVM(QObject):
             if not my_f:
                 continue
             corrected = utils.shading_correction(bright_field)
-            my_f.working_image = corrected
-            my_f.status = FileStatus.SHADE_CORRECTED
-            my_f.metadata.prefix = FileStatus.SHADE_CORRECTED.name.lower()
+            print(corrected.dtype)
+            my_f.working_image = corrected.copy()
+            my_f.status = FileStatus.CORRECTED
+            my_f.metadata.prefix = FileStatus.CORRECTED.name.lower()
             to_be_updated.append(my_f)
         self.file_information_update.emit(to_be_updated)
 
@@ -341,7 +343,6 @@ class FileManagerVM(QObject):
                 my_f.metadata.prefix = FileStatus.ALIGNED.name.lower()
                 to_be_updated.append(my_f)
             self.file_information_update.emit(to_be_updated)
-        
 
     def delete_files(self, selected_files: list[FileItem]):
         for f in selected_files:
@@ -371,9 +372,7 @@ class FileManagerVM(QObject):
                 if working_image is None:
                     self.files[self.reference_item.path].status = FileStatus.RAW
                 elif len(working_image.shape) == 2:
-                    self.files[self.reference_item.path].status = (
-                        FileStatus.SHADE_CORRECTED
-                    )
+                    self.files[self.reference_item.path].status = FileStatus.CORRECTED
                 elif len(working_image.shape) > 2:
                     self.files[self.reference_item.path].status = FileStatus.ALIGNED
                 to_be_updated.append(self.files[self.reference_item.path])
@@ -416,6 +415,7 @@ class FileManagerVM(QObject):
                     : int(file_item.metadata.max_size),
                     : int(file_item.metadata.max_size),
                 ]
+            print(export_image.shape, export_image.dtype)
             file_name = os.path.basename(file_item.path)
 
             # Check for and remove existing status prefixes
@@ -431,7 +431,7 @@ class FileManagerVM(QObject):
                 file_name = f"{file_item.metadata.prefix}_{file_name}"
 
             export_path = os.path.join(folder_path, file_name)
-            tifffile.imwrite(export_path, export_image, metadata=metadata)
+            tifffile.imwrite(export_path, export_image, metadata=metadata, imagej=True)
             self.export_progress.emit(i + 1, total_files)
 
     def generate_beads(self, cycle_assignments: dict[int, FileItem]):
@@ -499,11 +499,13 @@ class FileManagerVM(QObject):
         bboxs = results.get("bboxs", pd.Series())
         labeled_image = results.get("labeled_image", None)
         beads = results.get("beads", pd.DataFrame())
+        post_process_beads = results.get("post_process_beads", pd.DataFrame())
 
         self.files[reference_path].cycles = cycles
         self.files[reference_path].bboxs = bboxs
         self.files[reference_path].labeled_image = labeled_image
         self.files[reference_path].beads = beads
+        self.files[reference_path].post_process_beads = post_process_beads
         self.files[reference_path].status = FileStatus.BEADS_GENERATED
         self.files[reference_path].metadata.prefix = (
             FileStatus.BEADS_GENERATED.name.lower()
@@ -540,4 +542,5 @@ def load_image(file_path, max_size):
     try:
         return tifffile.memmap(file_path, shape=(max_size, max_size), mode="r")
     except ValueError:
+        return tifffile.imread(file_path)
         return tifffile.imread(file_path)

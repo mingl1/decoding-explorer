@@ -33,6 +33,7 @@ class FileItem:
     shape: tuple = ()
     dtype: str = ""
     beads: Optional[DataFrame] = None
+    post_process_beads: Optional[DataFrame] = None
     cycles: Optional[dict[str, NDArray]] = None
     bboxs: Optional[Series] = None
     labeled_image: Optional[NDArray] = None

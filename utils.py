@@ -5,12 +5,11 @@ import cv2
 import numpy as np
 import psutil
 from numpy.typing import NDArray
-
 from skimage.filters import threshold_otsu
 
 
 def background_subtraction_with_histogram(image: np.ndarray) -> np.ndarray:
-    """ 
+    """
     Implements the described method:
     1. Otsu threshold to extract background.
     2. Compute histogram of background pixels.
@@ -47,6 +46,8 @@ def background_subtraction_with_histogram(image: np.ndarray) -> np.ndarray:
         result = result.astype(np.uint8)
 
     return result, otsu_thresh, refined_threshold, hist, bin_edges
+
+
 def to_uint16(arr):
     """
     Converts image data array to a 16 bit unsigned integer array.
@@ -124,6 +125,7 @@ def resource_path(relative_path):
 def shading_correction(bright_layer_array):
     # Load an image
     # image = cv2.imread(filepath)
+    bright_layer_array = bright_layer_array.astype(np.uint16)
     bright_layer_array = cv2.cvtColor(
         bright_layer_array, cv2.COLOR_GRAY2BGR
     )  # convert into RGB image
@@ -185,8 +187,10 @@ def get_memory_usage_mb():
     mem_bytes = process.memory_info().rss  # Resident Set Size
     return mem_bytes / (1024 * 1024)  # MB
 
+
 import itertools
 import math
+
 
 def get_std_dev(numbers):
     """Calculates the standard deviation of a list of numbers."""
@@ -196,6 +200,7 @@ def get_std_dev(numbers):
     variance = sum([(x - mean) ** 2 for x in numbers]) / len(numbers)
     return math.sqrt(variance)
 
+
 def find_min_std_partition(numbers):
     """
     Finds the binary grouping of numbers that minimizes the weighted
@@ -203,7 +208,7 @@ def find_min_std_partition(numbers):
     """
     n = len(numbers)
 
-    min_total_std = float('inf')
+    min_total_std = float("inf")
     best_groups = ([], [])
 
     # Iterate through all possible sizes for the first group (from 1 to n-1)
@@ -211,10 +216,10 @@ def find_min_std_partition(numbers):
         # Generate all unique combinations of size k for the first group
         for group1_tuple in itertools.combinations(numbers, k):
             group1 = list(group1_tuple)
-            
+
             # The second group contains all numbers not in the first group
             group2 = [num for num in numbers if num not in group1]
-            
+
             # Special handling for duplicate numbers
             if len(group1) + len(group2) != n:
                 original_copy = list(numbers)
@@ -229,16 +234,17 @@ def find_min_std_partition(numbers):
             # Calculate standard deviations for each group
             std1 = get_std_dev(group1)
             std2 = get_std_dev(group2)
-            
+
             # Calculate the weighted total standard deviation
             total_std = (len(group1) * std1 + len(group2) * std2) / n
-            
+
             # Check if this partition is better than the current best
             if total_std < min_total_std:
                 min_total_std = total_std
                 best_groups = [group1, group2]
 
     return best_groups, min_total_std
+
 
 def calculate_ncc(img1, img2):
     """
@@ -309,18 +315,21 @@ def to_uint8(image):
 
 
 def adjust_contrast(
-    img: NDArray[np.float32] | NDArray[np.float64], min_percentile=2, max_percentile=98,axis=None
+    img: NDArray[np.float32] | NDArray[np.float64],
+    min_percentile=2,
+    max_percentile=98,
+    axis=None,
 ):
     """Adjust image contrast using percentile-based clipping for float images"""
     # Calculate percentiles
-    minval = np.percentile(img, min_percentile,axis=axis)
-    maxval = np.percentile(img, max_percentile,axis=axis)
+    minval = np.percentile(img, min_percentile, axis=axis)
+    maxval = np.percentile(img, max_percentile, axis=axis)
     if axis is not None:
         minval = minval[:, None, None]
         maxval = maxval[:, None, None]
     # Avoid division by zero
     # if maxval - minval < 1e-12:
-        # return np.zeros_like(img)
+    # return np.zeros_like(img)
 
     # Clip and rescale to [0.0, 1.0]
     img_adjusted = np.clip(img, minval, maxval)

@@ -3,7 +3,7 @@ from enum import Enum
 
 class FileStatus(Enum):
     RAW = "Raw"
-    SHADE_CORRECTED = "Corrected"
+    CORRECTED = "Corrected"
     ALIGNED = "Aligned"
     BEADS_GENERATED = "Generated"
     REFERENCE = "Reference"
@@ -17,7 +17,7 @@ class FileStatus(Enum):
     def color(self):
         return {
             FileStatus.RAW: "#A0A0A0",  # medium gray
-            FileStatus.SHADE_CORRECTED: "#FFD700",  # gold (better than plain yellow)
+            FileStatus.CORRECTED: "#FFD700",  # gold (better than plain yellow)
             FileStatus.ALIGNED: "#FF8C00",  # dark orange
             FileStatus.BEADS_GENERATED: "#32CD32",  # lime green
             FileStatus.REFERENCE: "#1E90FF",  # dodger blue
