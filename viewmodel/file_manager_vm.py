@@ -3,11 +3,11 @@ import os
 from functools import reduce
 from typing import Optional
 
-import imageio.v3 as iio  # or PIL / cv2
 import numpy as np
 import pandas as pd
 import tifffile
 from pandas import DataFrame, Series
+from PIL import Image
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import QDialog
 from tifffile import TiffFile, TiffFileError
@@ -223,14 +223,13 @@ class FileManagerVM(QObject):
         if os.path.isfile(file_path):
             status = self._get_status_from_filename(file_path)
             self.files[file_path] = FileItem(path=file_path, status=status)
-
             try:
                 # Try TIFF-specific metadata extraction
                 shape, dtype = get_tif_info(file_path)
             except (OSError, ValueError, TiffFileError):
                 # Fallback: load as generic image array
                 try:
-                    arr = iio.imread(file_path)
+                    arr = np.array(Image.open(file_path))
                     shape = arr.shape
                     dtype = arr.dtype
                 except Exception as e:
