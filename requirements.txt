@@ -28,3 +28,5 @@ tensorflow==2.10.1; platform_system == "Windows"
 tensorflow==2.17.1; platform_system != "Windows"
 umap-learn==0.5.9.post2
 tensorflow-io-gcs-filesystem==0.31.0; platform_system == "Windows"
+tiffile
+imageio

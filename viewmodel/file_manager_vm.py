@@ -7,7 +7,6 @@ import imageio.v3 as iio  # or PIL / cv2
 import numpy as np
 import pandas as pd
 import tifffile
-from lark import logger
 from pandas import DataFrame, Series
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import QDialog
@@ -518,7 +517,12 @@ class FileManagerVM(QObject):
             tifffile.imwrite(export_path, export_image, metadata=metadata)
             self.export_progress.emit(i + 1, total_files)
 
-    def generate_beads(self, cycle_assignments: dict[int, FileItem], use_stardist=False, model_name='model_4_400epoch_no_aug'):
+    def generate_beads(
+        self,
+        cycle_assignments: dict[int, FileItem],
+        use_stardist=False,
+        model_name="model_4_400epoch_no_aug",
+    ):
         assert self.reference_item is not None, (
             "Reference item must be set before generating beads."
         )
