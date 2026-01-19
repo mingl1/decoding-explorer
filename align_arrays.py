@@ -44,7 +44,7 @@ class Register(QThread):
         self.template_size = template_size
         self.max_points = max_points
         self.min_circularity = 0.5  # hardcoded for now...
-        self.threshold = threshold
+        self.threshold = params.get("threshold", threshold)
 
     def _fatal_error_message(self, msg):
         self.error.emit(msg)

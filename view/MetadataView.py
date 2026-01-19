@@ -107,7 +107,9 @@ class MetadataView(QWidget):
     def _toggle_section(self, section_name):
         if section_name not in self._section_widgets:
             return
-        self._section_collapsed[section_name] = not self._section_collapsed[section_name]
+        self._section_collapsed[section_name] = not self._section_collapsed[
+            section_name
+        ]
         collapsed = self._section_collapsed[section_name]
         for widget in self._section_widgets[section_name]:
             widget.setVisible(not collapsed)
@@ -128,7 +130,9 @@ class MetadataView(QWidget):
             label = QLabel(text)
             label.setStyleSheet("font-weight: bold; font-size: 16px;")
             label.setCursor(Qt.CursorShape.PointingHandCursor)
-            label.mousePressEvent = lambda event, s=section_name: self._toggle_section(s)
+            label.mousePressEvent = lambda event, s=section_name: self._toggle_section(
+                s
+            )
             return label
 
         def make_separator():
@@ -153,6 +157,15 @@ class MetadataView(QWidget):
         self.align_channels_btn = QPushButton("Align to Reference")
         self.align_channels_btn.clicked.connect(self.vm.align_channels)
 
+        # StarDist controls
+        self.use_stardist_checkbox = QCheckBox("Use StarDist(Recommended)")
+        self.use_stardist_checkbox.setChecked(True)
+        self.use_stardist_checkbox.stateChanged.connect(
+            self.on_stardist_checkbox_changed
+        )
+        self.stardist_model_path_input = QLineEdit("model_4_400epoch_no_aug")
+        self.stardist_model_path_input.setDisabled(True)  # Disabled by default
+
         self.upload_protein_key_btn = QPushButton("Upload Protein/Gene Key Files")
         self.upload_protein_key_btn.clicked.connect(self.upload_protein_key_files)
         self.protein_key_files_label = QLabel("No files uploaded.")
@@ -171,10 +184,14 @@ class MetadataView(QWidget):
         self.counts_table = QTableWidget()
         self.counts_table.setColumnCount(2)
         self.counts_table.setHorizontalHeaderLabels(["Protein Name", "Count"])
-        self.counts_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.counts_table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
         self.counts_table_container = QWidget()
-        self.counts_table_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.counts_table_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         counts_table_layout = QVBoxLayout()
         counts_table_layout.setContentsMargins(0, 0, 0, 0)
         counts_table_layout.addWidget(self.counts_table)
@@ -201,11 +218,23 @@ class MetadataView(QWidget):
         self.form_layout.addRow(self.max_size_label, self.max_size_input)
         self.form_layout.addRow(self.apply_btn)
         self._section_widgets["metadata"] = [
-            self.prefix_label, self.prefix_input, self.prefix_checkbox,
-            self.axes_label, self.axes_input, self.unit_label, self.unit_input,
-            self.phys_size_x_label, self.size_x_input, self.phys_size_y_label,
-            self.size_y_input, self.align_ch_label, self.channel_input,
-            self.max_size_label, self.max_size_input, self.apply_btn, metadata_sep
+            self.prefix_label,
+            self.prefix_input,
+            self.prefix_checkbox,
+            self.axes_label,
+            self.axes_input,
+            self.unit_label,
+            self.unit_input,
+            self.phys_size_x_label,
+            self.size_x_input,
+            self.phys_size_y_label,
+            self.size_y_input,
+            self.align_ch_label,
+            self.channel_input,
+            self.max_size_label,
+            self.max_size_input,
+            self.apply_btn,
+            metadata_sep,
         ]
 
         self.form_layout.addRow(align_arrays_title)
@@ -224,22 +253,40 @@ class MetadataView(QWidget):
         self.form_layout.addRow(self.align_channels_btn)
         self.form_layout.addRow(self.apply_shading_checkbox)
         self._section_widgets["align_arrays"] = [
-            self.num_tiles_label, self.num_tiles_input, self.overlap_label,
-            self.overlap_input, self.ncc_thresh_label, self.threshold_container,
-            self.align_channels_btn, self.apply_shading_checkbox, align_arrays_sep
+            self.num_tiles_label,
+            self.num_tiles_input,
+            self.overlap_label,
+            self.overlap_input,
+            self.ncc_thresh_label,
+            self.threshold_container,
+            self.align_channels_btn,
+            self.apply_shading_checkbox,
+            align_arrays_sep,
         ]
 
         self.form_layout.addRow(bead_generation_title)
         self.form_layout.addRow(bead_generation_sep)
+        self.form_layout.addRow(self.use_stardist_checkbox)
+
+        self.stardist_model_label = QLabel("Model Path:")
+        self.form_layout.addRow(
+            self.stardist_model_label, self.stardist_model_path_input
+        )
+
         self.form_layout.addRow(self.upload_protein_key_btn)
         self.form_layout.addRow(self.protein_key_files_label)
         self.form_layout.addRow(self.generate_beads_btn)
         self.form_layout.addRow(self.upload_beads_btn)
-        self.form_layout.addRow(self.inspect_beads_btn)
         self._section_widgets["bead_generation"] = [
-            self.upload_protein_key_btn, self.protein_key_files_label,
-            self.generate_beads_btn, self.upload_beads_btn, self.inspect_beads_btn,
-            bead_generation_sep
+            self.use_stardist_checkbox,
+            self.stardist_model_label,
+            self.stardist_model_path_input,
+            self.upload_protein_key_btn,
+            self.protein_key_files_label,
+            self.generate_beads_btn,
+            self.upload_beads_btn,
+            # self.inspect_beads_btn,
+            bead_generation_sep,
         ]
 
         self.form_layout.addRow(stats_title)
@@ -249,10 +296,16 @@ class MetadataView(QWidget):
 
         self.form_layout.addRow(self.filtered_beads_label)
         self.form_layout.addRow(self.error_label)
+        self.form_layout.addRow(self.inspect_beads_btn)
         self.form_layout.addRow(self.counts_table_container)
         self._section_widgets["statistics"] = [
-            self.total_beads_label, self.mean_rows_label, self.filtered_beads_label,
-            self.error_label, self.counts_table_container, stats_sep
+            self.total_beads_label,
+            self.mean_rows_label,
+            self.filtered_beads_label,
+            self.error_label,
+            self.inspect_beads_btn,
+            self.counts_table_container,
+            stats_sep,
         ]
 
         self.vm.update_metadata_view_sig.connect(self.update_metadata)
@@ -260,7 +313,9 @@ class MetadataView(QWidget):
 
         self.content_widget = QWidget()
         self.content_widget.setLayout(self.form_layout)
-        self.content_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.content_widget.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
         layout = QVBoxLayout()
         layout.addWidget(self.content_widget)
@@ -276,6 +331,11 @@ class MetadataView(QWidget):
         if self.vm.selected_files:
             for file_item in self.vm.selected_files:
                 file_item.metadata.use_status_as_prefix = is_checked
+
+    def on_stardist_checkbox_changed(self, state):
+        """Enable/disable StarDist model path input based on checkbox state."""
+        is_checked = state == Qt.CheckState.Checked
+        self.stardist_model_path_input.setDisabled(not is_checked)
 
     def _on_input_changed(self):
         """Save all input values to selected FileItems immediately."""
@@ -549,6 +609,13 @@ class MetadataView(QWidget):
         folder = QFileDialog.getExistingDirectory()
         if folder:
             self.export_all_sig.emit(folder, self.vm.selected_files)
+
+    def get_stardist_settings(self):
+        """Get StarDist configuration from UI."""
+        return {
+            "use_stardist": self.use_stardist_checkbox.isChecked(),
+            "model_name": self.stardist_model_path_input.text(),
+        }
 
     def on_metadata_corrected(self, corrections: dict):
         for key, value in corrections.items():

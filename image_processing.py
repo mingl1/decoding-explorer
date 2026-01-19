@@ -1,24 +1,21 @@
-import concurrent.futures
-import itertools
-import os
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from random import gauss
-from typing import List
+from typing import List, Tuple
 
 import cv2
 
 # import diplib as dip
 import numpy as np
 import pandas as pd
-from scipy.spatial import KDTree, cKDTree
-from skimage.color import label2rgb
+from scipy import ndimage
+from scipy import ndimage as ndi
+from skimage import filters, img_as_float, img_as_uint, measure
 from skimage.exposure import match_histograms
-from skimage.filters import threshold_isodata, threshold_otsu
+from skimage.filters import threshold_otsu
 from skimage.measure import label, regionprops
 from skimage.morphology import closing, square
-from skimage.segmentation import clear_border, expand_labels
+from skimage.segmentation import clear_border
+from sklearn.cluster import KMeans
 from tqdm import tqdm
 
 from model.file_item import MetaData
@@ -53,7 +50,6 @@ class TileMap:
 
     @staticmethod
     def find_mask(moving_array):
-
         def blur(img):
             img = img.copy()
             kernel = np.ones((5, 5), np.float64) / 225
@@ -209,206 +205,119 @@ class TileMap:
         return pairs
 
 
-import itertools
-from concurrent.futures import ProcessPoolExecutor, as_completed
-
-
-# ---- Helper: tile processing ----
-def process_tile(idx, bounds, px_overlap, tile_size, brightfield_path):
-    # Load memory-mapped brightfield in subprocess
-    bf = np.load(brightfield_path, mmap_mode="r")
-
-    ymin = int(round(bounds["center"][1] - tile_size))
-    ymax = int(round(bounds["center"][1] + tile_size))
-    xmin = int(round(bounds["center"][0] - tile_size))
-    xmax = int(round(bounds["center"][0] + tile_size))
-
-    # clip coordinates inside image bounds
-    crop_ymin = max(0, ymin)
-    crop_ymax = min(bf.shape[0], ymax)
-    crop_xmin = max(0, xmin)
-    crop_xmax = min(bf.shape[1], xmax)
-
-    tile = bf[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
-
-    # pad if needed
-    # pad_top = max(0, 0 - ymin)
-    # pad_bottom = max(0, ymax - bf.shape[0])
-    # pad_left = max(0, 0 - xmin)
-    # pad_right = max(0, xmax - bf.shape[1])
-
-    # tile_padded = cv2.copyMakeBorder(
-    #     tile,
-    #     pad_top,
-    #     pad_bottom,
-    #     pad_left,
-    #     pad_right,
-    #     borderType=cv2.BORDER_CONSTANT,
-    #     value=0,
-    # )
-
-    # if tile_padded.size == 0 or tile_padded.shape[0] == 0 or tile_padded.shape[1] == 0:
-    #     return idx, np.empty((0, 2)), [], np.empty((0, 2)), []
-    beads, roi_coords = find_beads(tile)  # user-provided
-
-    # Adjust coordinates to global image space
-    beads[:, 0] += xmin
-    beads[:, 1] += ymin
-
-    roi_coords_adjusted = [region + np.array([ymin, xmin]) for region in roi_coords]
-
-    # Mark edge beads near overlap
-    mask_edge = (
-        (beads[:, 0] - xmin <= px_overlap)
-        | (xmax - beads[:, 0] <= px_overlap)
-        | (beads[:, 1] - ymin <= px_overlap)
-        | (ymax - beads[:, 1] <= px_overlap)
-    )
-
-    return (
-        idx,
-        beads[~mask_edge],
-        [roi_coords_adjusted[i] for i in np.where(~mask_edge)[0]],
-        beads[mask_edge],
-        [roi_coords_adjusted[i] for i in np.where(mask_edge)[0]],
-    )
-
-
-def merge_edge_pairs(beads1, rois1, beads2, rois2, radius=1):
-    if len(beads1) == 0 or len(beads2) == 0:
-        return beads1, rois1, beads2, rois2
-
-    all_beads = np.vstack([beads1, beads2])
-    all_rois = rois1 + rois2
-    tree = cKDTree(all_beads)
-
-    visited = np.zeros(len(all_beads), dtype=bool)
-    merged_beads, merged_rois = [], []
-
-    for i in range(len(all_beads)):
-        if visited[i]:
-            continue
-        cluster_idx = set()
-        to_visit = [i]
-        while to_visit:
-            idx = to_visit.pop()
-            if visited[idx]:
-                continue
-            visited[idx] = True
-            cluster_idx.add(idx)
-            neighbors = tree.query_ball_point(all_beads[idx], r=radius)
-            for n in neighbors:
-                if not visited[n]:
-                    to_visit.append(n)
-
-        merged_roi = np.vstack([all_rois[k] for k in cluster_idx])
-        new_center_yx = merged_roi.mean(axis=0)
-        merged_beads.append(np.array([new_center_yx[1], new_center_yx[0]]))
-        merged_rois.append(merged_roi)
-
-    # After merging, no double-counting: all merged beads belong to first tile
-    return merged_beads, merged_rois, [], []
-
-
-import tempfile
-
-
-# ---- Main beadfinding ----
 def beadfinding(
-    brightfield,
-    num_tiles=10,
-    px_overlap=100,
-    workers=10,
+    brightfield: np.ndarray,
+    num_tiles: int = 10,
+    px_overlap: int = 100,
+    workers: int = 10,
     is_running_callback=None,
-):
-    # New implementation: preprocess tiles with quadtree_threshold, stitch masks, then find beads from the stitched mask.
-    brightfield_path = "./tmp/brightfield_memmap.npy"
-    if not os.path.exists("./tmp"):
-        os.makedirs("./tmp")
-    np.save(brightfield_path, brightfield)
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Finds beads in a brightfield image using a tiled, parallel approach.
 
-    try:
-        tileset = TileMap("tm", brightfield, px_overlap, num_tiles)
-        stitched_mask = np.zeros_like(brightfield, dtype=bool)
+    This optimized version:
+    1.  Eliminates unnecessary disk I/O for performance.
+    2.  Vectorizes centroid calculation using SciPy for a massive speedup.
+    3.  Correctly applies morphological operations on a boolean mask.
+    4.  Simplifies the tile-stitching logic.
+    """
+    # --- 1. Avoid Unnecessary File I/O ---
+    # The brightfield image is already in memory, so saving and reloading it
+    # from a temporary file is unnecessary overhead.
 
-        def get_mask_from_tile(tile_and_bounds):
-            if is_running_callback and not is_running_callback():
-                return None
+    # tileset = TileMap("tm", brightfield, px_overlap, num_tiles)
+    # stitched_mask = np.zeros_like(brightfield, dtype=bool)
+    # img_h, img_w = brightfield.shape
 
-            tile, bounds = tile_and_bounds
-            mask = quadtree_threshold(tile)
+    # def process_tile(tile_and_bounds):
+    #     if is_running_callback and not is_running_callback():
+    #         return None
 
-            center = bounds["center"]
-            tile_half_width = tileset.tile_size
-            tile_size_with_overlap = round(tile_half_width) + px_overlap
+    #     tile, bounds = tile_and_bounds
+    #     mask = quadtree_threshold(tile)
 
-            ymin = int(round(center[1] - tile_size_with_overlap))
-            ymax = int(round(center[1] + tile_size_with_overlap))
-            xmin = int(round(center[0] - tile_size_with_overlap))
-            xmax = int(round(center[0] + tile_size_with_overlap))
+    #     # Simplified logic to calculate the destination slice in the full image
+    #     center_x, center_y = bounds["center"]
+    #     tile_radius = tileset.tile_size + px_overlap
 
-            img_h, img_w = brightfield.shape[:2]
+    #     ymin_global = int(round(center_y - tile_radius))
+    #     ymax_global = int(round(center_y + tile_radius))
+    #     xmin_global = int(round(center_x - tile_radius))
+    #     xmax_global = int(round(center_x + tile_radius))
 
-            crop_ymin = max(0, ymin)
-            crop_ymax = min(img_h, ymax)
-            crop_xmin = max(0, xmin)
-            crop_xmax = min(img_w, xmax)
+    #     # Define the destination slice in the main stitched_mask
+    #     dest_slice = (
+    #         slice(max(0, ymin_global), min(img_h, ymax_global)),
+    #         slice(max(0, xmin_global), min(img_w, xmax_global)),
+    #     )
 
-            pad_top = max(0, -ymin)
-            pad_bottom = max(0, ymax - img_h)
-            pad_left = max(0, -xmin)
-            pad_right = max(0, xmax - img_w)
+    #     # Define the source slice from the generated mask to account for edges
+    #     src_slice = (
+    #         slice(max(0, -ymin_global), mask.shape[0] - max(0, ymax_global - img_h)),
+    #         slice(max(0, -xmin_global), mask.shape[1] - max(0, xmax_global - img_w)),
+    #     )
 
-            h, w = mask.shape
-            unpadded_mask = mask[pad_top : h - pad_bottom, pad_left : w - pad_right]
+    #     return mask[src_slice], dest_slice
 
-            return unpadded_mask, (crop_ymin, crop_ymax, crop_xmin, crop_xmax)
+    # # Note: If quadtree_threshold is CPU-bound Python code, ProcessPoolExecutor
+    # # might be faster. ThreadPoolExecutor is ideal if it releases the GIL.
+    # with ThreadPoolExecutor(max_workers=workers) as executor:
+    #     futures = [executor.submit(process_tile, tb) for tb in tileset]
+    #     progress_bar = tqdm(
+    #         as_completed(futures), total=len(futures), desc="Processing tiles"
+    #     )
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(get_mask_from_tile, tb) for tb in tileset]
+    #     for future in progress_bar:
+    #         if is_running_callback and not is_running_callback():
+    #             executor.shutdown(wait=False, cancel_futures=True)
+    #             return None, None  # Indicate cancellation
 
-            for future in tqdm(
-                as_completed(futures), total=len(futures), desc="Processing tiles"
-            ):
-                if is_running_callback and not is_running_callback():
-                    executor.shutdown(wait=False)
-                    return None, None
+    #         result = future.result()
+    #         if result:
+    #             mask_chunk, dest_slice = result
+    #             stitched_mask[dest_slice] |= mask_chunk
 
-                result = future.result()
-                if result is None:
-                    continue
+    # # --- 2. Correct Morphological Operations ---
+    # # Morphological operations should run on boolean masks, not intensity images.
+    # closed_mask = closing(stitched_mask, square(1))
+    # cleared_mask = clear_border(closed_mask)
+    # label_image, num_labels = label(cleared_mask, return_num=True)
+    model = StarDist2D.from_pretrained("2D_versatile_fluo")
 
-                unpadded_mask, (ymin, ymax, xmin, xmax) = result
+    label_image = stardist_segmentation(
+        brightfield,
+        model,
+        1,
+        99,
+        1500,
+        scale=2,
+    )
+    num_labels = label_image.max()
+    if num_labels == 0:
+        print("No beads found after filtering.")
+        return np.array([]), np.zeros_like(brightfield, dtype=int)
 
-                # Stitching with logical OR for overlap regions
-                stitched_mask[ymin:ymax, xmin:xmax] |= unpadded_mask
+    print(f"Found {num_labels} potential beads after labeling.")
 
-        # Now, run the rest of find_beads logic on the stitched mask.
-        brighter_regions = np.where(brightfield, stitched_mask, 0)
+    # --- 3. Vectorized Centroid Calculation ---
+    # Create an intensity image where non-bead areas are zero
+    # intensity_image = np.where(cleared_mask, brightfield, 0)
 
-        bw = closing(brighter_regions, square(1))
-        cleared = clear_border(bw)  # optional
+    # Calculate all weighted centroids in a single, highly optimized operation.
+    # This is orders of magnitude faster than looping through regionprops.
+    indices = np.arange(1, num_labels + 1)
+    centers_yx = ndimage.center_of_mass(brightfield, label_image, indices)
 
-        label_image = label(cleared)
-        centers = []
-        coords = []
-        for region in tqdm(
-            regionprops(label_image, brightfield), desc="Computing centroids"
-        ):
-            y, x = region.centroid_weighted
-            coords.append(region.coords)
-            centers.append([x, y])
+    # Convert list of (y, x) tuples to a NumPy array of [x, y] coordinates
+    centers = np.array([(x, y) for y, x in centers_yx if not np.isnan(y)])
+    centers = np.rint(centers).astype(np.uint16)
 
-        centers = np.array(centers)
-        if centers.size > 0:
-            centers = np.rint(centers).astype(np.uint16)
+    print(f"Final bead count: {len(centers)}")
 
-        print(f"Final bead count: {len(centers)}")
-        return centers, coords, label_image
-    finally:
-        if os.path.exists(brightfield_path):
-            os.remove(brightfield_path)
-            log(f"Cleaned up temporary file: {brightfield_path}")
+    # Note: The 'coords' output was removed. Collecting pixel coordinates for each
+    # bead requires a loop and is the primary performance bottleneck. This version
+    # prioritizes speed by returning only the centroids and the label image.
+    return centers
 
     # old method missed around 5% of beads, even after second pass
     # new method gets more beads and is like 2 passes in one
@@ -796,46 +705,7 @@ def edge_bead_filtering(radius, max_size):
 #     return export_to_excel
 
 import numpy as np
-from scipy.signal import convolve2d, correlate2d
-
-
-def gaussian_kernel(size: int, sigma: float = None) -> np.ndarray:
-    """
-    Generate a normalized 2D Gaussian kernel.
-    Args:
-        size (int): Odd kernel size
-        sigma (float): Standard deviation. Defaults to size/6.
-    """
-    if size % 2 == 0:
-        raise ValueError("Size must be odd")
-    if sigma is None:
-        sigma = size / 6.0
-
-    ax = np.arange(-(size // 2), size // 2 + 1)
-    xx, yy = np.meshgrid(ax, ax)
-    kernel = np.exp(-(xx**2 + yy**2) / (2.0 * sigma**2))
-    return kernel / np.sum(kernel)
-
-
-def extract_bead_rois(flor_layer: np.ndarray, beads_batch: np.ndarray, radius: int):
-    """
-    Extract same-shaped, padded ROIs for beads.
-    Returns shape: (N, 2r+1, 2r+1)
-    """
-    H, W = flor_layer.shape
-    pad = radius
-    padded = np.pad(flor_layer, pad_width=pad, mode="constant", constant_values=0)
-
-    beads_batch = np.rint(beads_batch).astype(int)
-    beads_batch_padded = beads_batch + pad
-
-    roi_size = 2 * radius + 1
-    bead_rois = np.empty((len(beads_batch), roi_size, roi_size), dtype=flor_layer.dtype)
-
-    for i, (x, y) in enumerate(beads_batch_padded):
-        bead_rois[i] = padded[y - radius : y + radius + 1, x - radius : x + radius + 1]
-
-    return bead_rois
+from scipy.signal import correlate2d
 
 
 def process_bead_batch(args):
@@ -1021,16 +891,7 @@ def extract_padded_rois(img, coords, channels, radius=2):
     return rois
 
 
-import time
-
-import cv2
 import numpy as np
-from scipy import ndimage as ndi
-from skimage import filters, measure, segmentation
-from skimage.feature import peak_local_max
-from skimage.segmentation import watershed
-
-import utils
 
 
 def print_timing_summary(timings):
@@ -1043,295 +904,312 @@ def print_timing_summary(timings):
     for step, time_val in timings.items():
         if step != "total":
             percentage = (time_val / total_time) * 100
-            print(f"{step:<25} {time_val*1000:>8.2f} ms {percentage:>8.1f}%")
+            print(f"{step:<25} {time_val * 1000:>8.2f} ms {percentage:>8.1f}%")
 
     print("-" * 50)
-    print(f"{'TOTAL':<25} {total_time*1000:>8.2f} ms {100.0:>8.1f}%")
+    print(f"{'TOTAL':<25} {total_time * 1000:>8.2f} ms {100.0:>8.1f}%")
     print("=" * 50)
 
 
-# def watershed_segmentation_cv2(img, border=1, marker_low=30/255.0, marker_high=40/255.0,
-#                               use_numexpr=True, bg=None, visualize=False,
-#                               bg_percentile_low=20, bg_percentile_high=80, histogram_cutoffs=None,background_mask=None):
-#     """
-#     Watershed segmentation with optional numexpr preprocessing, logging for timing,
-#     and visualization of labeled regions.
-
-#     Parameters:
-#     -----------
-#     img : numpy.ndarray
-#         Input image (grayscale)
-#     border : int
-#         Border size for marker placement
-#     marker_low : float
-#         Lower threshold for foreground markers (when bg=None)
-#     marker_high : float
-#         Upper threshold for background markers (when bg=None)
-#     use_numexpr : bool
-#         Whether to use numexpr for preprocessing
-#     bg : numpy.ndarray, optional
-#         Background image for localized thresholding
-#     visualize : bool
-#         Whether to return annotated visualization
-#     bg_percentile_low : int
-#         Lower percentile for background-based thresholding
-#     bg_percentile_high : int
-#         Upper percentile for background-based thresholding
-
-#     Returns:
-#     --------
-#     segmentation_coins : numpy.ndarray
-#         Binary mask of segmented regions
-#     labeled_coins : numpy.ndarray
-#         Integer labels for connected components
-#     image_out : numpy.ndarray (optional)
-#         Annotated image with circles and labels (if visualize=True)
-#     timings : dict
-#         Dictionary containing timing information for each step
-#     """
-#     timings = {}
-
-#     # Step 1: Convert to float
-#     t0 = time.time()
-#     img_float = img.astype(np.float64)
-#     timings['convert_to_float'] = time.time() - t0
-
-#     # Step 2: Optional normalization using numexpr
-#     t1 = time.time()
-#     if use_numexpr:
-#         img_min = img_float.min()
-#         img_max = img_float.max()
-#         img_float = ne.evaluate("(img_float - img_min) / (img_max - img_min)")
-#     timings['numexpr_preprocessing'] = time.time() - t1
-
-#     # Step 3: Compute elevation map using Sobel
-#     t2 = time.time()
-#     elevation_map = filters.sobel(img_float)
-#     timings['sobel'] = time.time() - t2
-
-#     # Step 4: Create markers
-#     t3 = time.time()
-#     markers = np.zeros_like(img, dtype=np.int32)
-
-#     if bg is None or histogram_cutoffs is not None:
-#         # Original threshold-based approach
-#         if histogram_cutoffs is not None:
-#             if background_mask is None:
-#                 markers = np.digitize(img_float, histogram_cutoffs).astype(np.int32)
-#             else:
-#                 markers = np.digitize(img_float, histogram_cutoffs).astype(np.int32)
-#                 markers[background_mask] = 1
-#                 # markers[img_float>histogram_cutoffs[1]] = 2
-#                 # markers = np.digitize(img_float, [0]+histogram_cutoffs).astype(np.int32)
-#             print(markers.dtype, markers.shape)
-#         else:
-#             markers[img_float < marker_low] = 1  # Background
-#             markers[img_float > marker_high] = 2  # Foreground
-#     else:
-#         # Background-based localized thresholding
-#         # Edit the background array using localized percentiles
-#         if bg.shape != img.shape:
-#             raise ValueError("Background image must have same shape as input image")
-
-#         # Normalize background image
-#         bg_float = bg.astype(np.float64)
-#         bg_float = (bg_float - bg_float.min()) / (bg_float.max() - bg_float.min())
-
-#         # Create localized background correction using percentiles
-#         # Use a sliding window approach for local percentile calculation
-#         from scipy.ndimage import generic_filter
-
-#         # Define local window size (should be larger than expected objects)
-#         window_size = min(img.shape) // 8  # Adaptive window size
-
-#         # Calculate local percentiles of the background
-#         def local_percentile_low(arr):
-#             return np.percentile(arr, bg_percentile_low)
-
-#         def local_percentile_high(arr):
-#             return np.percentile(arr, bg_percentile_high)
-
-#         # Apply local percentile filtering to background
-#         bg_local_low = generic_filter(bg_float, local_percentile_low, size=window_size)
-#         bg_local_high = generic_filter(bg_float, local_percentile_high, size=window_size)
-
-#         # Create adaptive thresholds based on local background statistics
-#         # Markers are based on how the image compares to local bg percentiles
-#         markers[img_float < bg_local_low] = 1   # Below local background low percentile
-#         markers[img_float > bg_local_high] = 2  # Above local background high percentile
-#     # Add border markers to ensure proper segmentation
-#     # markers[:border, :] = 1
-#     # markers[-border:, :] = 1
-#     # markers[:, :border] = 1
-#     # markers[:, -border:] = 1
-
-#     timings['marker_creation'] = time.time() - t3
-
-#     # Step 5: Watershed segmentation
-#     t4 = time.time()
-#     # Convert elevation map to CV2 format (3-channel uint8)
-#     elevation_map_cv = cv2.cvtColor((elevation_map * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
-
-#     # Apply watershed
-#     labeled_markers = cv2.watershed(elevation_map_cv, markers.copy())
-#     timings['watershed'] = time.time() - t4
-
-#     # Step 6: Post-process results
-#     t5 = time.time()
-#     # Create binary segmentation (foreground regions)
-#     segmentation_coins = (labeled_markers >= 2).astype(np.uint8)
-
-#     if border > 0:
-#         segmentation_coins = ndi.binary_erosion(segmentation_coins, iterations=border)
-
-#     # Create connected component labels for individual objects
-#     labeled_coins ,_= ndi.label(segmentation_coins)
-
-#     # Remove small components (noise reduction)
-#     # min_size = 10
-#     # labeled_coins = ski.morphology.remove_small_objects(labeled_coins, min_size=min_size)
-
-#     # Update binary mask to match cleaned labels
-#     segmentation_coins = (labeled_coins > 0).astype(np.uint8)
-
-#     timings['post_processing'] = time.time() - t5
-#     timings['total'] = time.time() - t0
-
-
-#     return segmentation_coins, labeled_coins, timings
-
-
 def watershed_segmentation_cv2(
-    img,
-    border=1,
-    marker_low=30 / 255.0,
-    marker_high=40 / 255.0,
-    use_numexpr=True,
-    bg=None,
-    visualize=False,
-    bg_percentile_low=20,
-    bg_percentile_high=80,
-    histogram_cutoffs=None,
-    background_mask=None,
+    img: np.ndarray, border: int, tile_size: int = 100, pad_fraction: float = 0.1
 ):
-    timings = {}
+    """
+    Performs watershed segmentation using tile-based adaptive thresholding.
 
-    # Step 1: Convert to float
-    t0 = time.time()
-    img_float = img.astype(np.float64)
-    timings["convert_to_float"] = time.time() - t0
+    This function is robust to uneven illumination by calculating thresholds
+    locally on overlapping tiles.
 
-    # Step 2: Optional normalization using numexpr
-    t1 = time.time()
-    timings["numexpr_preprocessing"] = time.time() - t1
+    Args:
+        img (np.ndarray): Input grayscale image (float, normalized to 0-1).
+        border (int): Erosion iterations to apply to the final mask.
+        tile_size (int): The size of the square tiles for local thresholding.
+        pad_fraction (float): The fraction of the tile size to use as overlap
+                              to prevent edge artifacts.
 
-    # Step 3: Compute elevation map using Sobel
-    t2 = time.time()
-    elevation_map = filters.sobel(
-        img_float,
-        mask=~bg[: img.shape[-2], : img.shape[-1]] if bg is not None else None,
-    )
-    timings["sobel"] = time.time() - t2
+    Returns:
+        Tuple[np.ndarray, np.ndarray]:
+        - A binary mask of the segmented objects.
+        - An integer-labeled mask where each unique object has a different ID.
+    """
+    # 1. Get an initial binary mask using tile-based (adaptive) thresholding.
+    height, width = img.shape
+    binary_mask = np.zeros_like(img, dtype=bool)
+    pad_size = int(tile_size * pad_fraction)
 
-    # Step 4: Create markers
-    t3 = time.time()
+    for y in range(0, height, tile_size):
+        for x in range(0, width, tile_size):
+            # Define the padded tile to calculate the threshold from
+            y_start_pad = max(0, y - pad_size)
+            y_end_pad = min(height, y + tile_size + pad_size)
+            x_start_pad = max(0, x - pad_size)
+            x_end_pad = min(width, x + tile_size + pad_size)
+
+            tile = img[y_start_pad:y_end_pad, x_start_pad:x_end_pad]
+            if tile.size == 0:
+                continue
+
+            # Calculate a local threshold for this specific tile
+            local_thresh = filters.threshold_yen(tile)
+
+            # Define the main, non-overlapping region to apply the threshold to
+            y_start_main = y
+            y_end_main = min(height, y + tile_size)
+            x_start_main = x
+            x_end_main = min(width, x + tile_size)
+
+            main_region = img[y_start_main:y_end_main, x_start_main:x_end_main]
+
+            # Apply the local threshold to the main region of the final mask
+            binary_mask[y_start_main:y_end_main, x_start_main:x_end_main] = (
+                main_region > local_thresh
+            )
+
+    # The rest of the watershed logic proceeds as before, but now using the
+    # much more robust, adaptively-generated binary_mask.
+
+    # 2. Create the "sure background" marker.
+    sure_background = binary_mask
+
+    # 3. Create the "sure foreground" markers using the distance transform.
+    distance_transform = ndi.distance_transform_edt(binary_mask)
+    threshold_distance = 0.0001 * distance_transform.max()
+    sure_foreground_seeds = distance_transform > threshold_distance
+    labeled_fg, _ = measure.label(sure_foreground_seeds, return_num=True)
+
+    # 4. Create the final marker image for the watershed algorithm.
     markers = np.zeros_like(img, dtype=np.int32)
+    markers[~sure_background] = 1
+    markers[sure_foreground_seeds] = labeled_fg[sure_foreground_seeds] + 1
 
-    # Original threshold-based approach
-    if histogram_cutoffs is not None:
-        if background_mask is None:
-            markers = np.digitize(img_float, histogram_cutoffs).astype(np.int32)
-        else:
-            markers = np.digitize(img_float, histogram_cutoffs).astype(np.int32)
-            markers[background_mask] = 1
-            # markers[img_float>histogram_cutoffs[1]] = 2
-            # markers = np.digitize(img_float, [0]+histogram_cutoffs).astype(np.int32)
-        print(markers.dtype, markers.shape)
-    else:
-        markers[img_float <= marker_low] = 1  # Background
-        markers[img_float > marker_high] = 2  # Background
-        if bg is not None:
-            markers[bg[: img.shape[-2], : img.shape[-1]]] = 1
-        # markers[img_float > ski.filters.threshold_li(img_float)] = 2  # Foreground
-        # foreground = (img_float > ski.filters.threshold_li(img_float)).astype(np.uint8)*2
+    # 5. Compute the elevation map and run the watershed algorithm.
+    elevation_map = filters.sobel(img)
+    elevation_map_cv = cv2.cvtColor(
+        (elevation_map * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR
+    )
+    labeled_markers = cv2.watershed(elevation_map_cv, markers)
 
-    # Add border markers to ensure proper segmentation
-    # markers[:border, :] = 1
-    # markers[-border:, :] = 1
-    # markers[:, :border] = 1
-    # markers[:, -border:] = 1
+    # 6. Post-process the results.
+    segmentation_mask = (labeled_markers > 1).astype(np.uint8)
+    if border > 0:
+        segmentation_mask = ndi.binary_erosion(segmentation_mask, iterations=border)
 
-    timings["marker_creation"] = time.time() - t3
+    labeled_objects = measure.label(segmentation_mask)
+    final_segmentation_mask = (labeled_objects > 0).astype(np.uint8)
 
-    # Step 5: Watershed segmentation
-    t4 = time.time()
-    # Convert elevation map to CV2 format (3-channel uint8)
+    return final_segmentation_mask, labeled_objects
+
+
+def _create_adaptive_threshold_maps(
+    img: np.ndarray, tile_size: int, low_percentile: int, high_percentile: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Creates smooth, full-resolution threshold maps from low-res tile-based statistics.
+    """
+    img_h, img_w = img.shape
+
+    # Determine the dimensions of the low-resolution grid
+    tiles_h = int(np.ceil(img_h / tile_size))
+    tiles_w = int(np.ceil(img_w / tile_size))
+
+    # Initialize low-resolution placeholder maps
+    low_res_low_map = np.zeros((tiles_h, tiles_w), dtype=np.float32)
+    low_res_high_map = np.zeros((tiles_h, tiles_w), dtype=np.float32)
+
+    # Calculate percentile for each tile
+    for i in range(tiles_h):
+        for j in range(tiles_w):
+            # Define tile boundaries
+            y1, y2 = i * tile_size, min((i + 1) * tile_size, img_h)
+            x1, x2 = j * tile_size, min((j + 1) * tile_size, img_w)
+            tile = img[y1:y2, x1:x2]
+            # low_percentile = get_adaptive_low_percentile(tile, high_percentile)
+
+            if tile.size > 0:
+                low_res_low_map[i, j] = np.percentile(tile, low_percentile)
+                low_res_high_map[i, j] = np.percentile(tile, high_percentile)
+
+    # Upscale the low-res maps to full image size using cubic interpolation
+    # This creates a smooth, spatially varying threshold surface.
+    full_res_low_map = cv2.resize(
+        low_res_low_map, (img_w, img_h), interpolation=cv2.INTER_CUBIC
+    )
+    full_res_high_map = cv2.resize(
+        low_res_high_map, (img_w, img_h), interpolation=cv2.INTER_CUBIC
+    )
+
+    return full_res_low_map, full_res_high_map
+
+
+def watershed_segmentation_adaptive(
+    img: np.ndarray,
+    border: int,
+    tile_size: int = 64,
+    low_percentile: int = 50,
+    fill: bool = True,
+    high_percentile: int = 65,
+):
+    """
+    Performs watershed segmentation using tile-based adaptive thresholds.
+
+    This function automatically handles variations in background and brightness
+    by calculating marker thresholds locally across a grid of tiles.
+
+    Args:
+        img (np.ndarray): Input grayscale image (float, normalized to 0-1).
+        border (int): Number of erosion iterations for post-processing.
+        tile_size (int): The side length (in pixels) of tiles for local thresholding.
+                         Should be larger than the objects of interest.
+        low_percentile (int): Percentile (0-100) to define the local background.
+        high_percentile (int): Percentile (0-100) to define local foreground seeds.
+        fill (bool): Whether to fill holes in the segmentation mask.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]:
+        - A binary mask of the segmented objects.
+        - An integer-labeled mask where each object has a unique ID.
+    """
+    img_float = img.astype(np.float32)
+
+    adaptive_low_map, adaptive_high_map = _create_adaptive_threshold_maps(
+        img_float, tile_size, low_percentile, high_percentile
+    )
+
+    elevation_map = filters.sobel(img_float)
+
+    markers = np.zeros_like(img_float, dtype=np.int32)
+
+    markers[img_float <= adaptive_low_map] = 1
+    markers[img_float > adaptive_high_map] = 2
+
     elevation_map_cv = cv2.cvtColor(
         (elevation_map * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR
     )
 
-    # Apply watershed
     labeled_markers = cv2.watershed(elevation_map_cv, markers.copy())
-    timings["watershed"] = time.time() - t4
 
-    # Step 6: Post-process results
-    t5 = time.time()
-    # Create binary segmentation (foreground regions)
-    segmentation_coins = (labeled_markers >= 2).astype(np.uint8)
+    segmentation_mask = (labeled_markers >= 2).astype(np.uint8)
 
     if border > 0:
-        segmentation_coins = ndi.binary_erosion(segmentation_coins, iterations=border)
-    # segmentation_coins = ndi.binary_fill_holes(segmentation_coins, structure=ndi.generate_binary_structure(2,1))
+        segmentation_mask = ndi.binary_erosion(segmentation_mask, iterations=border)
+    if fill:
+        segmentation_mask = ndi.binary_fill_holes(
+            segmentation_mask, structure=ndi.generate_binary_structure(2, 1)
+        )
+    labeled_objects = measure.label(segmentation_mask)
+    final_segmentation_mask = (labeled_objects > 0).astype(np.uint8)
 
-    # Create connected component labels for individual objects
-    labeled_coins = measure.label(segmentation_coins)
-
-    # Remove small components (noise reduction)
-    # min_size = 10
-    # labeled_coins = ski.morphology.remove_small_objects(labeled_coins, min_size=min_size)
-
-    # Update binary mask to match cleaned labels
-    segmentation_coins = (labeled_coins > 0).astype(np.uint8)
-
-    timings["post_processing"] = time.time() - t5
-    timings["total"] = time.time() - t0
-
-    return segmentation_coins, labeled_coins, timings
+    return final_segmentation_mask, labeled_objects
 
 
-from skimage.exposure import equalize_adapthist
-from skimage.restoration import rolling_ball
-
-
-def get_labels_from_cycles(cycles, cycles_metadata: List[MetaData],max_size):
+def get_labels_from_cycles(
+    cycles,
+    cycles_metadata: List[MetaData],
+    max_size,
+    low_percentile=50,
+    high_percentile=65,
+    fill=True,
+    adaptive_thresholding=False,
+    tile_size=100,
+    border_erode=1,
+    use_stardist=False,  # Toggle between watershed and StarDist
+    model=None,  # StarDist model (required if use_stardist=True)
+):
     cycle_labels = []
     for i in range(len(cycles)):
-        cycles[i] = process_cycle(cycles[i], cycles_metadata[i])[:max_size,:max_size]
-    
+        cycles[i] = process_cycle(cycles[i], cycles_metadata[i])[:max_size, :max_size]
+
     for i, cycle in enumerate(cycles):
         flor_layers = cycles_metadata[i].flors_layers
         assert flor_layers is not None, "forgot to initialize flors layer idx"
         max_size = cycles_metadata[i].max_size
         labels = []
         for layer_idx in flor_layers:
-            img = cycle[layer_idx][:max_size, :max_size]
-            img = (img - img.min()) / (img.max() - img.min())
-            # img = equalize_adapthist(img,kernel_size=9)
-            # bg = rolling_ball(img, radius=40, num_threads=8)
-            # img -= bg
-            seg, label, timing = watershed_segmentation_cv2(
-                img, use_numexpr=False, border=1, marker_low=0.15, marker_high=0.2
-            )
-            print_timing_summary(timing)
-            labels.append(label)
+            img_array = cycle[layer_idx, :max_size, :max_size].astype(np.float32)
+
+            # Normalize image to a 0-1 range
+            img_min, img_max = img_array.min(), img_array.max()
+            if img_max > img_min:
+                img_array = (img_array - img_min) / (img_max - img_min)
+
+            if use_stardist:
+                # StarDist path - use CSBDeep normalization
+                img_normalized = normalize(img_array, 1, 99.8)
+
+                if model is None:
+                    raise ValueError(
+                        "StarDist model is required when use_stardist=True"
+                    )
+
+                label_image, _ = model.predict_instances(
+                    img_normalized,
+                    axes="YX",
+                    prob_thresh=0.15,  # Hardcoded from user example
+                    n_tiles=(3, 3),  # Hardcoded from user example
+                )
+                labels.append(label_image)
+            else:
+                # Watershed path - keep existing logic
+                # old cold, shouldn't be used, it is always adaptive now
+                if not adaptive_thresholding:
+                    seg, label = watershed_segmentation_cv2(
+                        img=img_array,
+                        border=border_erode,
+                        # low_percentile=low_percentile,
+                        # high_percentile=high_percentile,
+                        # tile_size=100,
+                    )
+                else:
+                    seg, label = watershed_segmentation_adaptive(
+                        img=img_array,
+                        border=border_erode,
+                        low_percentile=low_percentile,
+                        high_percentile=high_percentile,
+                        tile_size=tile_size,
+                        fill=fill,
+                    )
+                # label = stardist_segmentation(img_array, model)
+                labels.append(label)
+
         cycle_labels.append(labels)
     return cycle_labels
 
-import numpy as np
-import cv2
-from skimage.exposure import match_histograms, adjust_sigmoid, equalize_adapthist
-from skimage.morphology import erosion
-from skimage import img_as_float, img_as_uint
+
+from csbdeep.utils import normalize
+from stardist.models import StarDist2D
+
+
+def stardist_segmentation(
+    img, model, min=1, max=75, block_size=700, new_min_overlap=24, scale=1
+):
+    # guess_tiles = model._guess_n_tiles(img)
+    img = normalize(img, min, max)
+    stardist_labels, polygons = model.predict_instances_big(
+        img,
+        axes="YX",
+        block_size=block_size,
+        min_overlap=new_min_overlap,
+        context=None,
+        show_progress=True,
+        n_tiles=(1, 1),
+        scale=scale,
+    )
+    # total_tiles = int(guess_tiles[0] * guess_tiles[1])
+    # labels_gen = model._predict_instances_generator(
+    #     img,
+    #     n_tiles=guess_tiles,
+    #     scale=scale,
+    # )
+    # stardist_labels = None
+    # for i, (labels, *_) in enumerate(labels_gen):
+    #     stardist_labels = labels  # last one is full image
+    #     log(f"Processing tile {i}/{total_tiles}")
+    #     if i > total_tiles:
+    #         break
+    # print(f"Stardist found {stardist_labels.max()} objects")
+    return stardist_labels
+
+
 def process_cycle(cycle, metadata: MetaData):
     """
     Process one imaging cycle:
@@ -1350,21 +1228,21 @@ def process_cycle(cycle, metadata: MetaData):
     # reference channel
     ref16 = cycle[ref_idx]
     ref_float = img_as_float(ref16)
-    ref_adj = adjust_sigmoid(ref_float, cutoff=0.1, gain=1)
-    processed.append(img_as_uint(ref_adj))
+    # ref_adj = adjust_sigmoid(ref_float, cutoff=0.1, gain=1)
+    processed.append(img_as_uint(ref_float))
 
     # channels after reference
     for j in range(ref_idx + 1, num_layers):
         img16 = cycle[j]
         matched_float = img_as_float(img16)
         matched = match_histograms(matched_float, ref_float)
-        matched = adjust_sigmoid(matched, cutoff=0.1, gain=1)
+        # matched = adjust_sigmoid(matched, cutoff=0.1, gain=1)
         processed.append(img_as_uint(matched))
 
     return np.stack(processed, axis=0)
 
+
 import numpy as np
-from tqdm import tqdm
 
 
 def assign_beads_labels(bead_data, cycle_labels):
@@ -1376,11 +1254,6 @@ def assign_beads_labels(bead_data, cycle_labels):
         # Round coords and clip to bounds
         xs = np.rint(bead_data["x"].to_numpy()).astype(int)
         ys = np.rint(bead_data["y"].to_numpy()).astype(int)
-        # xs = np.clip(xs, 0, labs.shape[-1]-1)
-        # ys = np.clip(ys, 0, labs.shape[-2]-1)
-
-        # Fancy index: take values at (flour, y, x)
-        # shape (n_points, n_flour)
         print(len(xs))
         values = labs[:, ys, xs].T
         print(len(values))
@@ -1409,6 +1282,512 @@ def get_assignment(row, cols):
     return int(col.split("_")[-1])  # layer number
 
 
+def get_adaptive_low_percentile(
+    image: np.ndarray,
+    high_percentile: float,
+    min_diff: float = 1.0,
+    max_diff: float = 15.0,
+    scale_factor: float = 10.0,
+) -> float:
+    """
+    Calculates an adaptive low percentile based on the image's coefficient of variation.
+
+    Args:
+        image (np.ndarray): The 2D image array to analyze.
+        high_percentile (float): The upper percentile bound (e.g., 95).
+        min_diff (float): The smallest possible percentile difference.
+        max_diff (float): The largest possible percentile difference.
+        scale_factor (float): A factor to map the CV to the percentile difference.
+
+    Returns:
+        float: The calculated lower percentile bound.
+    """
+    # Analyze only non-zero pixels to avoid background bias
+    pixels = image[image > 0]
+    if pixels.size == 0:
+        return high_percentile - min_diff
+
+    # Calculate Coefficient of Variation (CV)
+    std_dev = np.std(pixels)
+    mean_val = np.mean(pixels)
+
+    if mean_val == 0:
+        return high_percentile - min_diff
+
+    cv = std_dev / mean_val
+
+    # Map the CV to a percentile difference
+    percentile_diff = cv * scale_factor
+
+    # Clamp the difference to a reasonable range (e.g., between 3 and 15)
+    clamped_diff = np.clip(percentile_diff, min_diff, max_diff)
+
+    low_percentile = high_percentile - clamped_diff
+
+    return low_percentile
+
+
+def prepare_data_for_resolution(
+    beads,
+    signal_to_noise_cutoff,
+    tifs,
+    max_size,
+    layer_threshold_dict=defaultdict(int),
+    progress_callback=None,
+    is_running_callback=None,
+    roi_coords=None,
+    n_workers=10,
+    radius=2,
+    low_percentile=50,
+    high_percentile=65,
+    adaptive_thresholding=False,
+    tile_size=100,
+    border_erode=1,
+    fill=True,
+    use_stardist=False,  # Toggle between watershed and StarDist
+    model_name="model_4_400epoch_no_aug",  # Model path for StarDist
+):
+    """
+
+    Prepares data for bead assignment resolution.
+
+    Returns all necessary data structures for testing different resolution methods.
+
+    """
+
+    def update_progress(value, message):
+        if progress_callback:
+            overall_progress = 40 + (value / 100) * 50
+
+            progress_callback(int(overall_progress), message)
+
+        log(message)
+
+    def is_running():
+        return is_running_callback() if is_running_callback else True
+
+    ColorThreshold = signal_to_noise_cutoff
+    export_to_excel = np.zeros((len(beads), len(tifs)), dtype="uint8")
+
+    tif_metadata = [f.metadata for _, f in tifs]
+
+    tif_images = [np.array(img) for img, _ in tifs]
+    resized_tif_images = []
+    for img in tif_images:
+        if img.shape[-2:] != (
+            max_size,
+            max_size,
+        ):  # Check last 2 dimensions (height, width)
+            # Resize each channel separately if it's a multi-channel image
+            if img.ndim == 3:
+                resized_channels = []
+                for channel in img:
+                    resized_channel = cv2.resize(
+                        channel, (max_size, max_size), interpolation=cv2.INTER_LINEAR
+                    )
+                    resized_channels.append(resized_channel)
+                resized_img = np.stack(resized_channels, axis=0)
+            else:  # 2D image
+                resized_img = cv2.resize(
+                    img, (max_size, max_size), interpolation=cv2.INTER_LINEAR
+                )
+            resized_tif_images.append(resized_img)
+        else:
+            resized_tif_images.append(img)
+
+    tif_images = resized_tif_images
+
+    # Setup flors_layers for each metadata object
+
+    for i, md in enumerate(tif_metadata):
+        assert isinstance(md, MetaData)
+
+        md.flors_layers = [
+            j for j in range(len(tif_images[i])) if j > int(md.reference_channel)
+        ]
+
+    total_beads = len(beads)
+
+    total_cycles = len(tif_metadata)
+
+    total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
+
+    update_progress(10, "Getting activation regions from cycles")
+    # Conditionally load StarDist model
+    if use_stardist:
+        model = StarDist2D(None, name=model_name, basedir=model_name)
+    else:
+        model = None  # Not needed for watershed
+
+    labels = get_labels_from_cycles(
+        tif_images,
+        tif_metadata,
+        max_size,
+        fill=fill,
+        low_percentile=low_percentile,
+        high_percentile=high_percentile,
+        adaptive_thresholding=adaptive_thresholding,
+        tile_size=tile_size,
+        border_erode=border_erode,
+        use_stardist=use_stardist,
+        model=model,
+    )
+
+    update_progress(50, "Assigning beads labels")
+
+    df = assign_beads_labels(beads, labels)
+
+    cycle_layer_columns = {}
+
+    for i in range(total_cycles):
+        cols = []
+
+        for j in range(total_layers):
+            cycle_layer_columns[(i, j)] = f"cy{i}_{j}"
+
+            cols.append(cycle_layer_columns[(i, j)])
+
+        df[f"cy{i}_count"] = (df[cols] > 0).sum(axis=1)
+
+    count_cols = [f"cy{i}_count" for i in range(total_cycles)]
+
+    both_assignment = (df[count_cols] == 1).all(axis=1)
+
+    no_assignment = (df[count_cols] == 0).any(axis=1)
+
+    counts = {
+        "no_assignment": no_assignment.sum(),
+        "both_single": both_assignment.sum(),
+    }
+
+    print(counts)
+
+    # Zero-pad cycles for patch extraction
+
+    pad = 2
+
+    # tif_images_padded = np.pad(np.array(tif_images), ((0,), (0,), (2,), (2,)))
+
+    columns = [f"cy{i}" for i in range(len(tif_images))]
+
+    # Prepare final_df structure
+
+    final_df = df[["x", "y"]].copy()
+
+    final_df[columns] = 255  # Initialize with default value
+
+    num_flor_layers = len(tif_metadata[0].flors_layers)
+
+    # 2. Filter the source DataFrame once to work on the relevant subset
+
+    subset_df = df.loc[both_assignment]
+
+    update_progress(80, "Processing single assignments")
+
+    # 3. Loop through cycles (this loop is short and efficient)
+
+    for i in range(total_cycles):
+        # Define the prefix for the current cycle (e.g., 'cy0')
+
+        col_prefix = f"cy{i}"
+
+        # List the related data columns for this cycle (e.g., ['cy0_0', 'cy0_1', ...])
+
+        related_cols = [f"{col_prefix}_{j}" for j in range(num_flor_layers)]
+
+        # Use idxmax() to find the column with the max value for ALL rows at once
+
+        # This is the core vectorized operation that replaces get_assignment for each row
+
+        assignments = subset_df[related_cols].idxmax(axis=1)
+
+        # Extract the layer number from the column name (e.g., 'cy0_2' -> '2')
+
+        final_values = assignments.str.split("_").str[-1].astype(np.uint8)
+
+        # Assign the entire series of results to the final DataFrame
+
+        final_df.loc[both_assignment, col_prefix] = final_values
+
+    single_distr = (
+        final_df.loc[both_assignment].groupby(columns).size().reset_index(name="count")
+    )
+
+    # print(single_distr.head(30))
+
+    # Return all data needed for resolution methods
+
+    return {
+        "df": df,
+        "final_df": final_df,
+        "tif_metadata": tif_metadata,
+        "ColorThreshold": ColorThreshold,
+        "total_cycles": total_cycles,
+        "both_assignment": both_assignment,
+        "no_assignment": no_assignment,
+        "columns": columns,
+        "pad": pad,
+    }
+
+
+def _create_patch_indices(coords, patch_radius, img_shape):
+    """Helper to create broadcastable indices for patch extraction for all coordinates."""
+    # Coords is an (N, 2) array of (x, y)
+    # Create a grid of offsets, e.g., [-1, 0, 1] for radius 1
+    d = np.arange(-patch_radius, patch_radius + 1)
+    # Shape: (1, 2*radius+1, 1) and (1, 1, 2*radius+1) for broadcasting
+    dx, dy = d[np.newaxis, :, np.newaxis], d[np.newaxis, np.newaxis, :]
+
+    # Add offsets to each coordinate
+    # Coords shape: (N, 1, 1) for broadcasting with dx, dy
+    x_indices = coords[:, 0, np.newaxis, np.newaxis] + dx
+    y_indices = coords[:, 1, np.newaxis, np.newaxis] + dy
+
+    # Ensure indices are within image bounds
+    np.clip(x_indices, 0, img_shape[1] - 1, out=x_indices)
+    np.clip(y_indices, 0, img_shape[0] - 1, out=y_indices)
+
+    return y_indices.astype(int), x_indices.astype(
+        int
+    )  # Return as (row, col) for NumPy indexing
+
+
+def combine_results(data_dict, cycle_values, correction_indices):
+    """
+    Combine the resolution results with the prepared data to get final_df.
+    """
+    final_df = data_dict["final_df"].copy()
+    columns = data_dict["columns"]
+
+    if len(cycle_values) > 0:
+        final_df.loc[correction_indices, columns] = cycle_values
+
+    return final_df
+
+
+def _medianroi_method_optimized(
+    x_coords,
+    y_coords,
+    tif_images_padded,
+    tif_metadata,
+    ColorThreshold,
+    correction_indices,
+    background_method="local_ring",
+):
+    """
+    Vectorized method using median intensity in a 3x3 ROI with background-dependent filtering.
+    """
+    num_beads = len(x_coords)
+    num_cycles = len(tif_images_padded)
+    coords = np.array([x_coords, y_coords]).T  # Shape: (num_beads, 2)
+
+    img_height, img_width = tif_images_padded.shape[-2:]
+
+    # 1. Pre-calculate all indices for ROI and Background patches
+    patch_radius = 4
+    roi_rows, roi_cols = _create_patch_indices(
+        coords, patch_radius, (img_height, img_width)
+    )  # 3x3 ROI patch
+    if background_method in ["psnr"]:
+        bg_radius = patch_radius + 1
+    elif background_method in ["local_ring", "adaptive_snr"]:
+        bg_radius = 3  # 7x7 patch
+    else:  # local_patch or percentile_diff
+        bg_radius = 4  # 9x9 patch
+
+    bg_rows, bg_cols = _create_patch_indices(coords, bg_radius, (img_height, img_width))
+
+    # Create a boolean mask to exclude the center ROI from the background patch
+    # This effectively creates a "ring" of pixels for the background calculation
+    if background_method in ["local_ring", "local_patch"]:
+        mask_size = 2 * bg_radius + 1
+        center_start = bg_radius - 1  # Center 3x3 starts at radius-1
+        center_end = bg_radius + 2  # and ends at radius+2
+        bg_mask = np.ones((mask_size, mask_size), dtype=bool)
+        bg_mask[center_start:center_end, center_start:center_end] = False
+
+    # Initialize the final results array with the "all filtered" value
+    cycle_values = np.full((num_beads, num_cycles), 255, dtype=np.uint8)
+
+    # Main loop over cycles
+    for cycle_idx in tqdm(range(num_cycles), desc="Processing cycles"):
+        num_channels = tif_images_padded[cycle_idx].shape[0]
+        all_scores = np.zeros((num_beads, num_channels), dtype=np.float32)
+
+        # Inner loop over fluorescence channels
+        for layer_idx in range(num_channels):
+            img_layer = tif_images_padded[cycle_idx][layer_idx]
+
+            # 2. Vectorized data extraction for ALL beads at once
+            roi_patches = img_layer[roi_rows, roi_cols]
+            signal_medians = np.median(roi_patches, axis=(1, 2))
+
+            # bg_patches = img_layer[bg_rows, bg_cols]
+            bg_patches = img_layer[bg_rows, bg_cols].astype(np.float32)
+
+            # 3. Vectorized score calculation for ALL beads
+            scores = np.zeros(num_beads, dtype=np.float32)
+            # Replace zeros with NaN to ignore them in calculations
+            # bg_patches[bg_patches == 0] = np.nan
+            # Suppress RuntimeWarning for patches that are all NaNs
+            with np.errstate(all="ignore"):
+                if (
+                    background_method == "local_ring"
+                    or background_method == "local_patch"
+                ):
+                    valid_bg = bg_patches[:, bg_mask]
+                    background_medians = np.nanmedian(valid_bg, axis=1)
+                    background_medians = np.nan_to_num(background_medians)
+                    scores = signal_medians / (background_medians + 1e-8)
+                elif background_method == "psnr":
+                    valid_bg = bg_patches
+                    background_percentile = np.percentile(valid_bg, 50, axis=(1, 2))
+                    scores = (signal_medians - background_percentile) / (
+                        background_percentile + 1e-8
+                    )
+                elif background_method == "percentile_diff":
+                    # Reshape from (N, 9, 9) to (N, 81) for percentile calculation
+                    bg_flat = bg_patches.reshape(num_beads, -1)
+                    background_75th = np.nanpercentile(bg_flat, 75, axis=1)
+                    background_75th = np.nan_to_num(background_75th)
+                    scores = signal_medians - background_75th
+
+            all_scores[:, layer_idx] = scores
+
+        # 4. Vectorized Filtering and Argmax
+        if background_method in ["local_ring", "local_patch"]:
+            threshold = 1.0 + ColorThreshold
+        else:  # adaptive_snr, percentile_diff
+            threshold = ColorThreshold
+
+        passed_mask = all_scores > threshold
+        any_passed = np.any(passed_mask, axis=1)
+        num_passed = sum(passed_mask)
+        print(f"corrected :{num_passed}")
+
+        if np.any(any_passed):
+            # Set scores of failing channels to -inf to exclude them from argmax
+            scores_for_argmax = np.where(passed_mask, all_scores, -np.inf)
+            winner_indices = np.argmax(scores_for_argmax, axis=1)
+
+            # Update only the beads where at least one channel passed the filter
+            cycle_values[any_passed, cycle_idx] = winner_indices[any_passed]
+
+    return cycle_values, correction_indices
+
+
+import itertools
+
+
+def optimize_parameters(beads, signal_to_noise_cutoff, tifs, max_size, param_grid):
+    """
+    Iteratively runs bead processing with different parameters to find the optimal set.
+    """
+    if tqdm is None:
+        raise ImportError(
+            "tqdm is required for the optimization progress bar. "
+            "Please install it using 'pip install tqdm'"
+        )
+
+    # Create all parameter combinations
+    param_keys = param_grid.keys()
+    param_values = param_grid.values()
+    param_combinations = [
+        dict(zip(param_keys, v)) for v in itertools.product(*param_values)
+    ]
+
+    # Filter combinations where high_percentile is not greater than low_percentile
+    valid_combinations = [
+        p
+        for p in param_combinations
+        if p.get("high_percentile", 0) > p.get("low_percentile", -1)
+    ]
+
+    results = []
+    print(
+        f"\nStarting optimization for {len(valid_combinations)} parameter combinations..."
+    )
+
+    for params in tqdm(valid_combinations, desc="Optimizing Parameters"):
+        try:
+            # Run the main processing function with the current set of parameters
+            data_dict = prepare_data_for_resolution(
+                beads,
+                signal_to_noise_cutoff,
+                tifs,
+                max_size,
+                adaptive_thresholding=True,
+                tile_size=1000,
+                **params,
+            )
+
+            # Run the analysis function (in automatic mode, without a protein profile)
+            error_metrics = get_error(data_dict["final_df"])
+
+            # Store the parameters and their results
+            results.append(
+                {
+                    **params,
+                    "error_percent": error_metrics["invalid_error_percentage"],
+                    "filtered_count": error_metrics["filtered_count"],
+                }
+            )
+
+        except Exception as e:
+            print(f"Error with params {params}: {e}")
+            results.append(
+                {**params, "error_percent": np.nan, "filtered_count": np.nan}
+            )
+
+    # Analyze and display best results
+    if not results:
+        print("Optimization did not produce any results.")
+        return
+
+    results_df = pd.DataFrame(results).dropna()
+    if results_df.empty:
+        print("All parameter combinations resulted in errors.")
+        return
+
+    # Normalize the two metrics to a 0-1 scale (lower is better)
+    results_df["error_norm"] = (
+        results_df["error_percent"] - results_df["error_percent"].min()
+    ) / (results_df["error_percent"].max() - results_df["error_percent"].min())
+    results_df["filtered_norm"] = (
+        results_df["filtered_count"] - results_df["filtered_count"].min()
+    ) / (results_df["filtered_count"].max() - results_df["filtered_count"].min())
+    results_df["score"] = (results_df["error_norm"] + results_df["filtered_norm"]) / 2
+    results_df_sorted = results_df.sort_values("score", ascending=True)
+
+    print("\n--- ✅ Optimization Complete ---")
+    print("\nTop 5 Parameter Sets (Lower Score is Better):")
+    print(
+        results_df_sorted[
+            [
+                "border_erode",
+                "low_percentile",
+                "high_percentile",
+                "error_percent",
+                "filtered_count",
+                "score",
+            ]
+        ]
+        .head(5)
+        .round(2)
+    )
+
+    best_params = results_df_sorted.iloc[0]
+    print("\n--- 🏆 Best Configuration Found ---")
+    print(f"  Border Erode:    {int(best_params['border_erode'])}")
+    print(f"  Low Percentile:  {int(best_params['low_percentile'])}")
+    print(f"  High Percentile: {int(best_params['high_percentile'])}")
+    print("------------------------------------")
+    print(f"  Resulting Error:       {best_params['error_percent']:.2f}%")
+    print(f"  Resulting Filtered:    {int(best_params['filtered_count'])}")
+    print(f"  Combined Score:        {best_params['score']:.3f}")
+    return best_params.to_dict()
+
+
 def get_excel(
     beads,
     signal_to_noise_cutoff,
@@ -1420,6 +1799,8 @@ def get_excel(
     roi_coords=None,
     n_workers=10,
     radius=2,
+    use_stardist=False,  # Toggle between watershed and StarDist
+    model_name="model_4_400epoch_no_aug",  # Model path for StarDist
 ):
     def update_progress(value, message):
         if progress_callback:
@@ -1433,24 +1814,7 @@ def get_excel(
     export_to_excel = np.zeros((len(beads), len(tifs)), dtype="uint8")
 
     tif_metadata = [f.metadata for _, f in tifs]
-    tif_images = [np.array(img) for img, _ in tifs]
-    resized_tif_images = []
-    for img in tif_images:
-        if img.shape[-2:] != (max_size, max_size):  # Check last 2 dimensions (height, width)
-            # Resize each channel separately if it's a multi-channel image
-            if img.ndim == 3:
-                resized_channels = []
-                for channel in img:
-                    resized_channel = cv2.resize(channel, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
-                    resized_channels.append(resized_channel)
-                resized_img = np.stack(resized_channels, axis=0)
-            else:  # 2D image
-                resized_img = cv2.resize(img, (max_size, max_size), interpolation=cv2.INTER_LINEAR)
-            resized_tif_images.append(resized_img)
-        else:
-            resized_tif_images.append(img)
-    
-    tif_images = resized_tif_images
+    tif_images = [np.ascontiguousarray(img)[:, :max_size, :max_size] for img, _ in tifs]
 
     # Setup flors_layers for each metadata object
     for i, md in enumerate(tif_metadata):
@@ -1459,23 +1823,67 @@ def get_excel(
             j for j in range(len(tif_images[i])) if j > int(md.reference_channel)
         ]
 
-
-    total_beads = len(beads)
     total_cycles = len(tif_metadata)
-    total_layers = len(tif_metadata[0].flors_layers) if total_cycles > 0 else 0
     beads = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
-    update_progress(10, "Getting activation regions from cycles")
-    labels = get_labels_from_cycles(tif_images, tif_metadata, max_size)
-    update_progress(50, "Assigning beads labels")
-    df = assign_beads_labels(beads, labels)
-    cycle_layer_columns = {}
 
-    for i in range(total_cycles):
-        cols = []
-        for j in range(total_layers):
-            cycle_layer_columns[(i, j)] = f"cy{i}_{j}"
-            cols.append(cycle_layer_columns[(i, j)])
-        df[f"cy{i}_count"] = (df[cols] > 0).sum(axis=1)
+    # Only optimize parameters for watershed
+    if not use_stardist:
+        # find optimal parameters
+        update_progress(10, "Finding optimal parameters...")
+        param_grid = {
+            "border_erode": [0, 1, 2],
+            "low_percentile": [45, 50, 55, 60],
+            "high_percentile": [65, 70, 75, 80],
+        }
+        sample_size = 1000
+        cropped_tifs = [
+            (np.ascontiguousarray(img[:, :sample_size, :sample_size]), meta)
+            for img, meta in tifs
+        ]
+        bead_positions = beads.query(f"x < {sample_size} and y < {sample_size}")
+        optimization_results = optimize_parameters(
+            bead_positions,
+            signal_to_noise_cutoff,
+            cropped_tifs,
+            sample_size,
+            param_grid,
+        )
+        if optimization_results is None:
+            log("Optimization failed, using default parameters.")
+            optimization_results = {}
+        border_erode = int(optimization_results.get("border_erode", 1))
+        low_percentile = int(optimization_results.get("low_percentile", 50))
+        high_percentile = int(optimization_results.get("high_percentile", 70))
+        update_progress(30, "Getting activation regions from cycles")
+    else:
+        # StarDist doesn't need parameter optimization
+        update_progress(10, "Loading StarDist model...")
+        border_erode = 1  # Unused but keep for consistency
+        low_percentile = 50  # Unused but keep for consistency
+        high_percentile = 70  # Unused but keep for consistency
+        update_progress(30, "Getting activation regions from cycles")
+
+    data_dict = prepare_data_for_resolution(
+        beads,
+        signal_to_noise_cutoff,
+        tifs,
+        max_size,
+        border_erode=border_erode,
+        low_percentile=low_percentile,
+        high_percentile=high_percentile,
+        use_stardist=use_stardist,
+        model_name=model_name,
+        progress_callback=update_progress,
+    )
+    final_df = data_dict["final_df"]
+    tif_metadata = data_dict["tif_metadata"]
+    ColorThreshold = data_dict["ColorThreshold"]
+    total_cycles = data_dict["total_cycles"]
+    both_assignment = data_dict["both_assignment"]
+    no_assignment = data_dict["no_assignment"]
+    update_progress(50, "Assigning beads labels")
+    df = data_dict["df"]
+
     count_cols = [f"cy{i}_count" for i in range(total_cycles)]
 
     both_assignment = (df[count_cols] == 1).all(axis=1)
@@ -1486,633 +1894,41 @@ def get_excel(
         "both_single": both_assignment.sum(),
     }
     print(counts)
+    # tif_images = np.pad(np.array(tif_images), ((0,), (0,), (2,), (2,)))
+    columns = [f"cy{i}" for i in range(len(tif_images))]
 
-    need_correction = df[~both_assignment & ~no_assignment]
-    template = gaussian_kernel(5).astype(np.float32)
-    # Zero-pad cycles
-    pad = 2
-    tif_images = np.pad(np.array(tif_images), ((0,), (0,), (2,), (2,)))
+    pad = data_dict["pad"]
 
-    # doesn't change actual coords, only for calculations
+    # Identify beads that need correction
+    need_correction = df[~both_assignment]
+
+    print(f"Beads needing correction: {len(need_correction)}")
+    update_progress(70, "Resolving Bead Labels")
+
+    print("Using median ROI method for correction")
+    # Zero-pad cycles for patch extraction
+    ColorThreshold = 0.1
+    tif_images_padded = np.pad(np.array(tif_images), ((0,), (0,), (pad,), (pad,)))
     x_coords = np.rint(need_correction["x"].to_numpy() + pad).astype(np.int32)
     y_coords = np.rint(need_correction["y"].to_numpy() + pad).astype(np.int32)
-    columns = [f"cy{i}" for i in range(len(tif_images))]
-    final_df = df[["x", "y"]].copy()
-    final_df[columns] = 255
-
-    def assignment_row(row):
-        return [
-            get_assignment(
-                row, [f"{col}_{i}" for i in range(len(tif_metadata[0].flors_layers))]
-            )
-            for col in columns
-        ]
-
-    singles_vals = df.loc[both_assignment].apply(
-        assignment_row, axis=1, result_type="expand"
+    cycle_values, correction_indices = _medianroi_method_optimized(
+        x_coords,
+        y_coords,
+        tif_images_padded[:, 1:, :, :],
+        tif_metadata,
+        ColorThreshold,
+        need_correction.index,
+        background_method="psnr",
     )
-    final_df.loc[both_assignment, columns] = singles_vals.values
-    cycle_values = []
-    for i, (x, y) in tqdm(enumerate(zip(x_coords, y_coords))):
-        # Extract 5x5 patches for all channels except channel 0
-        row_cycles_val = []
-        for cycle_idx in range(len(tif_images)):
-            flors_layers = tif_metadata[cycle_idx].flors_layers
+    new_dd = combine_results(data_dict, cycle_values, correction_indices)
+    ff = {"final_df": new_dd, "columns": data_dict["columns"]}
+    post_resolution_final_df = ff["final_df"]
 
-            patches = tif_images[cycle_idx][flors_layers, y - 2 : y + 3, x - 2 : x + 3]
-            patches = utils.adjust_contrast(patches.astype(np.float32), 10, 90)
-            flor_assignments = np.array(
-                [
-                    cv2.matchTemplate(patch, template, cv2.TM_CCORR_NORMED).max()
-                    for patch in patches
-                ]
-            )
-            max_flor_layer = np.argmax(flor_assignments)
-            row_cycles_val.append(max_flor_layer)
-        cycle_values.append(row_cycles_val)
-    cycle_values = np.array(cycle_values)
-    final_df.loc[need_correction.index, columns] = cycle_values
+    return final_df, post_resolution_final_df
 
-    return final_df, final_df.loc[both_assignment], labels
 
-    # Histogram matching to first cycle's first flor layer
-    # for i, md in enumerate(tif_metadata):
-    #     reference = tif_images[i][md.flors_layers[0]]
-    #     for layer in md.flors_layers[1:]:
-    #         img16 = match_histograms(tif_images[i][layer], reference)
-    #         img8 = np.zeros_like(img16, dtype=np.uint8)
-    #         img8 = cv2.normalize(img16, img8, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-    #         img_eq = cv2.equalizeHist(img8)
-    #         tif_images[i][layer] = img_eq
+import gc
 
-    # bounding_boxes = np.zeros((total_beads, 4), dtype=int)
-    # if roi_coords:
-    #     coords_array = [np.array(region) for region in roi_coords]
-    #     # Ensure bounding boxes are square (max width/height)
-    #     bounding_boxes = np.array(
-    #         [(*region.max(axis=0), *region.max(axis=0)) for region in coords_array]
-    #     )
-
-    # Calculate batch size and number of batches reliably
-    # batch_size = max(1, total_beads // max(1, n_workers))
-
-    # with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
-    #     for cycle_idx, md in enumerate(tif_metadata):
-    #         if not is_running():
-    #             return None
-
-    #         cycle_data = np.zeros((total_beads, len(md.flors_layers)), dtype="uint16")
-    # cycle_snr = np.zeros((total_beads, len(md.flors_layers)), dtype="float")
-    # cycle_threshold = np.zeros(
-    #     (total_beads, len(md.flors_layers)), dtype="float"
-    # )
-
-    # for layer_idx, layer in enumerate(md.flors_layers):
-    #     if not is_running():
-    #         return None
-
-    #     flor_layer = tif_images[cycle_idx][layer]
-    #     layer_threshold = layer_threshold_dict.get(layer, 0)
-
-    #     n_batches = (total_beads + batch_size - 1) // batch_size
-    #     batch_args = []
-
-    #     for batch_idx in range(n_batches):
-    #         start = batch_idx * batch_size
-    #         end = min(start + batch_size, total_beads)
-    #         beads_batch = beads[start:end]
-    #         roi_batch = roi_coords[start:end] if roi_coords else None
-    #         batch_args.append(
-    #             (
-    #                 flor_layer,
-    #                 beads_batch,
-    #                 radius,
-    #                 layer_threshold,
-    #                 roi_batch,
-    #                 start,
-    #                 end,
-    #             )
-    #         )
-
-    #     # Map batches to worker function
-    #     batch_results = list(executor.map(process_bead_batch, batch_args))
-
-    #     # Collect batch results into cycle arrays
-    #     for batch_idx, (data, snr_data, threshold_data) in enumerate(
-    #         batch_results
-    #     ):
-    #         start = batch_idx * batch_size
-    #         end = min(start + batch_size, total_beads)
-    #         cycle_data[start:end, layer_idx] = data
-    #         # cycle_snr[start:end, layer_idx] = snr_data
-    #         # cycle_threshold[start:end, layer_idx] = threshold_data
-
-    #     # Update progress after each layer
-    #     progress = (
-    #         ((cycle_idx * total_layers) + (layer_idx + 1))
-    #         / (total_cycles * total_layers)
-    #         * 100
-    #     )
-    #     update_progress(
-    #         progress,
-    #         f"Processing cycle {cycle_idx + 1}/{total_cycles}, layer {layer_idx + 1}/{total_layers}",
-    #     )
-
-    # # Find brightest layers per bead
-    # brightest_layers = np.argmax(cycle_data, axis=1)
-    # export_to_excel[:, cycle_idx] = brightest_layers
-
-    # # Apply filters
-    # for i, snr_row in enumerate(cycle_snr):
-    #     if np.min(snr_row) > 1 - ColorThreshold:
-    #         export_to_excel[i, cycle_idx] = 254
-    #         # print("Sig noise filtered:", beads[i])
-
-    # for i, thresh_row in enumerate(cycle_threshold):
-    #     if np.all(thresh_row == 0):
-    #         export_to_excel[i, cycle_idx] = 255
-    # print("Threshold filtered:", beads[i])
-
-    # bounding_boxes_str = np.array(
-    #     [
-    #         f"({x1}, {y1}, {max(x2 - x1, y2 - y1) + x1}, {max(x2 - x1, y2 - y1) + y1})"
-    #         for x1, y1, x2, y2 in bounding_boxes
-    #     ]
-    # ).reshape(-1, 1)
-
-    export_to_excel = np.hstack((beads[:, :2], export_to_excel))
-    columns = ["x", "y"] + [f"cy{i}" for i in range(len(tifs))]
-    df = pd.DataFrame(export_to_excel, columns=columns)
-    count_table = (
-        df.groupby([f"cy{i}" for i in range(len(tifs))])
-        .size()
-        .reset_index(name="counts")
-    )
-    (invalid_beads, valid_beads), best_gap = best_split_df_max_avg_gap(
-        count_table, "counts"
-    )  # type: ignore
-    invalid_idx = invalid_beads.merge(df, how="left").index
-
-    # Get indices of invalid beads
-    invalid_idx = invalid_beads.merge(df, how="left").index
-    coords = (
-        df.loc[invalid_idx, ["x", "y"]].astype("float").round().astype(int).to_numpy()
-    )
-
-    # Vectorized cycle loop
-    for cycle_idx, md in enumerate(tif_metadata):
-        # Extract all channels for this cycle
-        channels = md.flors_layers
-        img = tif_images[cycle_idx]  # shape: (num_channels, H, W)
-
-        # Build padded ROIs
-        rois = extract_padded_rois(
-            img, coords, channels, radius=2
-        )  # shape: (num_beads, num_channels, 5, 5)
-
-        # Flatten for manual vectorization
-        num_beads, num_channels = rois.shape[:2]
-        flat_rois = rois.reshape(-1, 5, 5)
-
-        # Apply template match to each ROI
-        scores_flat = np.apply_along_axis(
-            lambda r: calculate_template_match(r.reshape(5, 5)),
-            axis=1,
-            arr=flat_rois.reshape(flat_rois.shape[0], -1),
-        )
-
-        # Reshape back and get best channel per bead
-        scores = scores_flat.reshape(num_beads, num_channels)
-        best_channels = np.argmax(scores, axis=1)
-
-        # Write back into df
-        df.loc[invalid_idx, f"cy{cycle_idx}"] = best_channels
-
-    print(f"Final get_excel length: {len(df)}")
-    return df, tif_images
-
-
-def blur_layer(layer, image_stack, blur_percentage=1):
-    layer_4 = image_stack[layer]  # Modify the 4th layer
-    blurred_mask = cv2.GaussianBlur(layer_4, (101, 101), 0)
-    blurred_mask_adjusted = (blurred_mask * blur_percentage).astype(np.uint16)
-    corrected_layer_4 = cv2.subtract(layer_4, blurred_mask_adjusted)
-    corrected_layer_4 = np.clip(corrected_layer_4, 0, 65535).astype(np.uint16)
-    image_stack[layer] = corrected_layer_4
-
-
-class CellIntensity:
-    def __init__(self):
-        """Initializes the CellIntensity analysis tool."""
-        self.params = {
-            "max_size": 23000,
-            "num_decoding_cycles": 3,
-            "num_decoding_colors": 3,
-            "radius_fg": 2,
-            "radius_bg": 7,
-        }
-
-        self.color_code = None
-        self.stardist_labels = np.array([], dtype=np.uint16)
-        self.df_cell_data = None
-        self.bead_data = None
-        self.protein_signal_array = None
-        self.same_cells = False
-        self.cell_centroids = {}
-
-    def use_same_cell_centroids(self, same_cells: bool):
-        assert (
-            len(self.cell_centroids) > 0 or not same_cells
-        ), "Cell centroids must be computed before setting same_cells."
-        self.same_cells = same_cells
-
-    def load_protein_signal_array(self, arr: np.ndarray):
-        """Loads the protein signal image array."""
-        log("Loading protein signal array.")
-        self.protein_signal_array = arr
-
-    def load_stardist_labels(self, stardist_labels_array: np.ndarray):
-        """Loads the segmented cell labels array."""
-        log("Loading stardist labels array.")
-        log("Stardist label dtype:", stardist_labels_array.dtype)
-        log(
-            "Stardist label max and min:",
-            np.max(stardist_labels_array),
-            np.min(stardist_labels_array),
-        )
-        self.stardist_labels = stardist_labels_array.astype(np.uint16)
-
-    def load_bead_data(self, bead_data: np.ndarray):
-        """Loads the bead data numpy array."""
-        if isinstance(bead_data, np.ndarray):
-            self.bead_data = bead_data
-        else:
-            raise TypeError("Bead data must be a NumPy array.")
-
-    def load_color_code(self, color_code: pd.DataFrame):
-        """Loads the color code pandas DataFrame."""
-        if isinstance(color_code, pd.DataFrame):
-            self.color_code = color_code
-            try:
-                self.color_code = self.color_code.dropna(how="all", axis=1).dropna(
-                    how="all", axis=0
-                )
-            except Exception as e:
-                log(e)
-                self.color_code = pd.DataFrame(self.color_code)
-                self.color_code = self.color_code.dropna(how="all", axis=1).dropna(
-                    how="all", axis=0
-                )
-        else:
-            raise TypeError("Color code must be a pandas DataFrame.")
-
-    def generate_cell_intensity_table(self):
-        """
-        Starts the cell intensity calculation.
-
-        Returns:
-            pd.DataFrame: The computed cell intensity table.
-        """
-        log("Starting Cell Intensity Calculation...")
-        return self.run()
-
-    def critical_error(self, msg: str):
-        """Handles critical errors by printing a message and raising an exception."""
-        error_message = f"CRITICAL ERROR: {msg}"
-        log(error_message)
-        raise ValueError(error_message)
-
-    def compute_all_centroids(self):
-        """
-        Compute centroids for all unique labels in the mask (excluding 0).
-        Uses skimage.measure.regionprops for efficiency.
-
-        Returns:
-            dict: A dictionary mapping each label to its (cx, cy) centroid.
-        """
-        log("Finding centroids for all cells...")
-        centroids = {}
-        regions = regionprops(self.stardist_labels)
-        for region in tqdm(regions, desc="Finding Centroids"):
-            cy, cx = region.centroid
-            centroids[region.label] = (int(cx), int(cy))
-        return centroids
-
-    def infer_params(self):
-        """Infers parameters from the provided color code and bead data."""
-        if not isinstance(self.color_code, pd.DataFrame):
-            self.critical_error("Color code is not a pandas DataFrame.")
-
-        # Infer the number of decoding cycles from the color code columns
-        self.params["num_decoding_cycles"] = self.color_code.shape[1] - 1
-
-        # Infer the number of colors from the values in the color code
-        color_code_np = self.color_code.iloc[:, 1:].to_numpy()
-        max_color_value = np.max(color_code_np)
-        self.params["num_decoding_colors"] = int(max_color_value) + 1
-        log("Inferred params:", self.params)
-
-    def run(self):
-        """The main execution logic for calculating cell intensities."""
-        # 1. VALIDATE INPUTS
-        if self.stardist_labels is None or self.stardist_labels.size == 0:
-            self.critical_error("Stardist labels are not loaded.")
-        if self.bead_data is None:
-            self.critical_error("Bead data is not loaded.")
-        if self.color_code is None:
-            self.critical_error("Color code is not loaded.")
-        if self.protein_signal_array is None:
-            self.critical_error("Protein signal array is not loaded.")
-
-        # 2. SETUP & PARAMETER INFERENCE
-        self.infer_params()
-
-        # Create mappings for protein identification
-        possible_values = list(range(self.params["num_decoding_colors"]))
-        all_perms = [
-            "".join(map(str, p))
-            for p in itertools.product(
-                possible_values, repeat=self.params["num_decoding_cycles"]
-            )
-        ]
-        color_code_to_index = {int(k): i for i, k in enumerate(all_perms)}
-        index_to_color_code = {v: k for k, v in color_code_to_index.items()}
-
-        # Initialize data structure to hold intensities
-        num_proteins = len(color_code_to_index)
-        max_cell_id = np.max(self.stardist_labels)
-        cell_data_dict = {
-            cell_id: [[] for _ in range(num_proteins)]
-            for cell_id in range(1, max_cell_id + 1)
-        }
-        # 3. PROCESS BEADS
-        log("Processing beads...")
-        # Prepare bead data by combining color codes into a single string identifier
-        data_modified = np.zeros((len(self.bead_data), 3))
-        data_modified[:, 0:2] = self.bead_data[:, 0:2].astype("uint16")
-
-        # Correctly slice and join color codes
-        cycle_cols = self.bead_data[:, 2 : 2 + self.params["num_decoding_cycles"]]
-        data_modified[:, 2] = np.array(
-            [int("".join(map(str, map(int, bead)))) for bead in cycle_cols]
-        )
-        radius_bg = self.params["radius_bg"]
-        max_size = self.params["max_size"]
-
-        # Ensure they are integers for indexing
-        bead_xs = data_modified[:, 0].astype(int)
-        bead_ys = data_modified[:, 1].astype(int)
-
-        # Get the cell ID for every bead in a single, fast operation
-        cell_ids_for_beads = self.stardist_labels[bead_ys, bead_xs]
-
-        # --- 2. Create Boolean Masks for All Conditions ---
-
-        # Mask 1: Beads that are inside any cell (ID > 0)
-        in_cell_mask = cell_ids_for_beads > 0
-
-        # Mask 2: Beads that are within the processing boundaries
-        # (This prevents errors in get_adjusted_median_intensity)
-        in_bounds_mask = (
-            (bead_xs > radius_bg)
-            & (bead_ys > radius_bg)
-            & (bead_xs < (max_size - radius_bg))
-            & (bead_ys < (max_size - radius_bg))
-        )
-
-        # --- 3. Combine Masks ---
-        # The final mask identifies beads that satisfy ALL conditions
-        valid_bead_mask = in_cell_mask & in_bounds_mask
-
-        # --- 4. Filter the Data ---
-        # Create a much smaller array containing only the beads we need to process
-        valid_beads = data_modified[valid_bead_mask]
-        valid_cell_ids = cell_ids_for_beads[valid_bead_mask]
-
-        # --- 5. Loop Over the SMALLER Filtered Dataset ---
-
-        for i, bead in enumerate(valid_beads):
-            bead_x, bead_y, color_code = int(bead[0]), int(bead[1]), bead[2]
-
-            # We already know this bead is in a cell, so we get its ID
-            cell_associated_id = valid_cell_ids[i]
-
-            # The expensive calculation is only called for valid beads
-            adjusted_median_intensity = self.get_adjusted_median_intensity(
-                bead_x, bead_y
-            )
-
-            protein_idx = color_code_to_index.get(color_code)
-            if protein_idx is not None and adjusted_median_intensity is not None:
-                cell_data_dict[cell_associated_id][protein_idx].append(
-                    adjusted_median_intensity
-                )
-
-        # 4. IMPUTE MISSING PROTEINS
-        log("Imputing values for cells with incomplete protein profiles...")
-        log("Building K-D trees for fast nearest-neighbor search...")
-        protein_kdtree_map = {}
-        for i in tqdm(range(num_proteins), desc="Building KD-Trees"):
-            protein_code = index_to_color_code.get(i)
-            if protein_code is not None:
-                protein_beads = data_modified[data_modified[:, 2] == protein_code][
-                    :, 0:2
-                ].astype(int)
-                if len(protein_beads) > 0:
-                    protein_kdtree_map[i] = KDTree(protein_beads)
-        # Group bead locations by protein for fast nearest-neighbor search
-
-        # Find cell centroids
-        if not self.same_cells:
-            cell_centroids = self.compute_all_centroids()
-            self.cell_centroids = cell_centroids
-        else:
-            cell_centroids = self.cell_centroids
-
-        for cell_id in tqdm(cell_data_dict.keys(), desc="Imputing Missing Proteins"):
-            cell_center = cell_centroids[cell_id]
-            for protein_idx, intensities in enumerate(cell_data_dict[cell_id]):
-                if (
-                    not intensities
-                ):  # If no beads were found for this protein of cell_id
-                    kdtree = protein_kdtree_map.get(protein_idx)
-                    if kdtree:  # Check if a tree was successfully built
-                        _, index = kdtree.query(cell_center)
-                        nn_x, nn_y = kdtree.data[index]
-                        if (
-                            nn_x > radius_bg
-                            and nn_y > radius_bg
-                            and nn_x < (max_size - radius_bg)
-                            and nn_y < (max_size - radius_bg)
-                        ):
-                            adjusted_intensity = self.get_adjusted_median_intensity(
-                                int(nn_x), int(nn_y)
-                            )
-                            if adjusted_intensity is not None:
-                                cell_data_dict[cell_id][protein_idx].append(
-                                    adjusted_intensity
-                                )
-
-        # 5. AGGREGATE RESULTS & CREATE DATAFRAME
-        log("Aggregating results and creating DataFrame...")
-        median_values = {}
-        for cell_id, protein_lists in cell_data_dict.items():
-            # Calculate median for each protein, use np.nan if list is empty
-            medians = [
-                np.nanmedian(p_list) if p_list else np.nan for p_list in protein_lists
-            ]
-            median_values[cell_id] = medians
-
-        # Create human-readable column headers
-        color_code_map = {
-            int("".join(map(str, map(int, row[1:])))): row[0]
-            for _, row in self.color_code.iterrows()
-        }
-        header = ["Global X", "Global Y"] + [
-            color_code_map.get(index_to_color_code.get(i), f"Protein_{i}")
-            for i in range(num_proteins)
-        ]
-
-        # Combine centroid and intensity data
-        final_data = []
-        for cell_id, centroid in sorted(cell_centroids.items()):
-            if cell_id in median_values:
-                row = list(centroid) + median_values[cell_id]
-                final_data.append(row)
-
-        self.df_cell_data = pd.DataFrame(final_data, columns=header).set_index(
-            pd.Index(sorted(cell_centroids.keys()), name="Cell ID")
-        )
-        log("Cell data table generated successfully.")
-        return self.df_cell_data
-
-    def save_cell_data(self, file_path: str):
-        """
-        Saves the generated cell data table to a file.
-
-        Args:
-            file_path (str): The path to save the file (e.g., 'cell_data.csv').
-                             The format is inferred from the extension (.csv or .xlsx).
-        """
-        log(f"Saving cell data to {file_path}")
-        if self.df_cell_data is None:
-            self.critical_error("Cannot save. No cell data available.")
-            return
-
-        if file_path.endswith(".csv"):
-            self.df_cell_data.to_csv(file_path)
-        elif file_path.endswith(".xlsx"):
-            self.df_cell_data.to_excel(file_path)
-        else:
-            log(f"Warning: Unknown file extension. Saving as CSV to {file_path}.csv")
-            self.df_cell_data.to_csv(f"{file_path}.csv")
-
-    def get_adjusted_median_intensity(self, bead_x, bead_y, bead_median_threshold=5000):
-        """
-        Calculate the adjusted median intensity given the bead coordinates
-
-        :param bead_x: The x-coordinate of the bead
-        :param bead_y: The y-coordinate of the bead
-        :param bead_median_threshold: the threshold needed to apply median intensity correction
-        :type bead_x: int
-        :type bead_y: int
-        :type bead_median_threshold: int
-
-        :returns: The adjusted median intensity value of the bead
-        :rtype: float
-        """
-
-        if self.protein_signal_array is None:
-            return
-
-        radius_bg = self.params["radius_bg"]
-        radius_fg = self.params["radius_fg"]
-
-        # Extract the 5x5 region around the bead
-        bead_region = self.protein_signal_array[
-            bead_y - radius_fg : bead_y + radius_fg + 1,
-            bead_x - radius_fg : bead_x + radius_fg + 1,
-        ]
-
-        # Calculate the mean and median intensity of the 5x5 bead region
-        mean_5x5 = np.mean(bead_region)
-        bead_median_org = np.median(bead_region)
-        bead_median = bead_median_org.copy()
-
-        # Extract the 15x15 surrounding region
-        surrounding_region = self.protein_signal_array[
-            bead_y - radius_bg : bead_y + radius_bg + 1,
-            bead_x - radius_bg : bead_x + radius_bg + 1,
-        ]  # Convert to float to handle NaN values
-
-        # Ensure the 15x15 region is valid
-        if surrounding_region.shape != (15, 15):
-            return bead_median_org  # Return unadjusted median if the 15x15 region is invalid
-
-        # Mask out the 5x5 region from the 15x15 region
-        surrounding_region = surrounding_region.astype(
-            float
-        )  # Convert to float to handle NaN values
-        surrounding_region[
-            bead_y - radius_fg : bead_y + radius_fg + 1,
-            bead_x - radius_fg : bead_x + radius_fg + 1,
-        ] = np.nan
-
-        # Calculate the mean intensity of the surrounding 15x15 area, excluding the 5x5 region
-        surrounding_mean_15x15 = np.nanmean(surrounding_region)
-
-        # Apply correction only if 15x15 mean is 1.5x greater than 5x5 mean, and bead median > threshold
-        if (
-            surrounding_mean_15x15 > 1.5 * mean_5x5
-            and bead_median > bead_median_threshold
-        ):
-            # Calculate the correction factor and apply linear correction
-            correction_factor = mean_5x5 * (mean_5x5 / surrounding_mean_15x15)
-            y = self.linear_correction(correction_factor)
-
-            # Apply the correction to the bead median
-            bead_median = bead_median - y + 2000
-
-        # Ensure no negative values
-        if bead_median < 1:
-            bead_median = 1
-
-        # Return the final adjusted bead median
-        return bead_median
-
-    def linear_correction(self, x):
-        """A linear function for intensity correction."""
-        return 0.8266 * x + 3970.1
-
-    def set_param(self, key, value):
-        """Sets a single parameter."""
-        if key in self.params:
-            log(f"Setting parameter '{key}' to {value}")
-            self.params[key] = value
-        else:
-            log(f"Warning: Parameter '{key}' not found.")
-
-
-def best_split_df_max_avg_gap(df, count_col):
-    # Sort by counts
-    df_sorted = df.sort_values(by=count_col).reset_index(drop=True)
-
-    best_gap = float("-inf")
-    best_split = None
-
-    for i in range(1, len(df_sorted)):
-        left = df_sorted.iloc[:i]
-        right = df_sorted.iloc[i:]
-        avg_left = left[count_col].mean()
-        avg_right = right[count_col].mean()
-        gap = avg_right - avg_left
-
-        if gap > best_gap:
-            best_gap = gap
-            best_split = (left, right)
-
-    return best_split, best_gap
-from utils import find_min_std_partition
 
 def process_beads(
     brightfield,
@@ -2121,6 +1937,8 @@ def process_beads(
     signal_to_noise_cutoff,
     progress_callback=None,
     is_running_callback=None,
+    use_stardist=False,  # Toggle between watershed and StarDist
+    model_name="model_4_400epoch_no_aug",  # Model path for StarDist
 ):
     def update_progress(value, message):
         if progress_callback:
@@ -2140,9 +1958,9 @@ def process_beads(
     update_progress(10, "Initial bead detection...")
     if not is_running():
         return None
-    brightfield = brightfield[:max_size,:max_size]
+    brightfield = brightfield[:max_size, :max_size]
     log("Initial bead detection...")
-    beads, roi_coords, _ = beadfinding(brightfield, is_running_callback=is_running)
+    beads = beadfinding(brightfield, is_running_callback=is_running)
     if beads is None:
         return None
     initial_bead_count = len(beads)
@@ -2170,26 +1988,26 @@ def process_beads(
     if not is_running():
         return None
     log(f"Signal-to-noise cutoff: {signal_to_noise_cutoff}")
-    ex_res = get_excel(
+    gc.collect()
+    df, post_resoluton_df = get_excel(
         beads,
         signal_to_noise_cutoff,
         tifs,
         max_size,
         progress_callback=progress_callback,
         is_running_callback=is_running,
-        roi_coords=roi_coords,
+        use_stardist=use_stardist,
+        model_name=model_name,
+        # roi_coords=roi_coords,
     )
     log("Done getting excel")
-    if ex_res is None:
-        return None
-    df, tif_images = ex_res
 
     # if not is_running():
-        # return None
+    # return None
 
     update_progress(90, "Filtering out rows with all zeros...")
     labeled_image = np.zeros(brightfield.shape, dtype=np.uint16)
-    
+
     # group by cy0,cy1... and find min-std partition
     log(f"Dataframe created with shape: {df.shape}")
 
@@ -2204,9 +2022,185 @@ def process_beads(
     for i in range(len(tifs)):
         cycles[f"cy{i}"] = tifs[i][0]
         print(f"Cycle {i} image shape: {tifs[i][0].shape}")
+
+    # !TODO: Currently returning post resolution df as "beads" for compatibility, once frontend is updated, change to pre-resolution df
     results["beads"] = df
+    results["post_resolution_beads"] = post_resoluton_df
     results["cycles"] = cycles
     results["labeled_image"] = labeled_image
-    
 
     return results
+
+
+def get_error(bead_df: pd.DataFrame, protein_profile_df: pd.DataFrame = None) -> dict:
+    """
+    Analyzes bead data to calculate invalid and filtered bead counts and error rates.
+
+    This function is self-contained and operates in two modes:
+    1. With a protein profile: It merges bead data with the provided profile,
+       identifying beads as 'Invalid' if they don't match the profile.
+    2. Without a protein profile (protein_profile_df is None): It automatically
+       separates beads into two groups by clustering their counts. The group with
+       a significantly lower number of beads is considered 'Invalid'. This requires
+       'scikit-learn' to be installed.
+
+    In both modes, it also identifies and counts 'Filtered' beads with saturation values.
+
+    Args:
+        bead_df: DataFrame containing processed bead data with 'cy0' and 'cy1' columns.
+        protein_profile_df: Optional DataFrame mapping 'cy0' and 'cy1' to 'Protein name'.
+                            If None, automatic separation is performed.
+
+    Returns:
+        A dictionary containing key analysis results.
+
+    Raises:
+        ImportError: If protein_profile_df is None and scikit-learn is not installed.
+    """
+    # Mode 2: Automatic separation using clustering when no profile is given
+    if protein_profile_df is None:
+        if KMeans is None:
+            raise ImportError(
+                "scikit-learn is required for automatic bead separation. "
+                "Please install it using 'pip install scikit-learn'"
+            )
+
+        # Identify and count filtered beads first, then remove them for clustering
+        filter_mask = (bead_df["cy0"] >= 254) | (bead_df["cy1"] >= 254)
+        filtered_count = int(filter_mask.sum())
+        remaining_beads_df = bead_df[~filter_mask]
+
+        if remaining_beads_df.empty:
+            return {
+                "invalid_count": 0,
+                "filtered_count": filtered_count,
+                "mean_beads_per_protein": 0.0,
+                "invalid_error_percentage": 0.0,
+            }
+
+        # Count occurrences of each unique (cy0, cy1) bead type
+        counts_df = (
+            remaining_beads_df.groupby(["cy0", "cy1"]).size().reset_index(name="count")
+        )
+        counts_array = counts_df["count"].values.reshape(-1, 1)
+
+        # Only cluster if there are at least two distinct count values to separate
+        if len(np.unique(counts_array)) < 2:
+            invalid_count = 0  # Assume all are valid if no clear separation is possible
+            valid_protein_counts = counts_df["count"]
+        else:
+            kmeans = KMeans(n_clusters=2, random_state=42, n_init="auto").fit(
+                counts_array
+            )
+
+            # The cluster with the smaller center is the 'low count' (invalid) group
+            low_count_cluster_label = np.argmin(kmeans.cluster_centers_)
+            counts_df["cluster"] = kmeans.labels_
+
+            is_invalid_mask = counts_df["cluster"] == low_count_cluster_label
+
+            invalid_count = int(counts_df.loc[is_invalid_mask, "count"].sum())
+            valid_protein_counts = counts_df.loc[~is_invalid_mask, "count"]
+
+        # Calculate final metrics based on the clustered groups
+        mean_beads_per_protein = (
+            valid_protein_counts.mean() if not valid_protein_counts.empty else 0.0
+        )
+
+        if mean_beads_per_protein > 0:
+            invalid_error_percentage = (invalid_count / mean_beads_per_protein) * 100
+        else:
+            invalid_error_percentage = float("inf") if invalid_count > 0 else 0.0
+
+        return {
+            "invalid_count": invalid_count,
+            "filtered_count": filtered_count,
+            "mean_beads_per_protein": round(mean_beads_per_protein, 2),
+            "invalid_error_percentage": round(invalid_error_percentage, 4),
+            "filtered_percentage": (
+                filtered_count / len(bead_df) * 100 if len(bead_df) > 0 else 0.0
+            ),
+        }
+
+    # Mode 1: Original logic for when a protein_profile_df is provided
+    # Merge bead data with the protein profile to identify each bead
+    analyzed_df = bead_df.merge(protein_profile_df, on=["cy0", "cy1"], how="left")
+    # FIX: Use explicit assignment to avoid FutureWarning on chained assignment
+    analyzed_df["Protein name"] = analyzed_df["Protein name"].fillna("Invalid")
+
+    # Identify and label beads that should be filtered (e.g., saturation values)
+    filter_mask = (analyzed_df["cy0"] >= 254) | (analyzed_df["cy1"] >= 254)
+    analyzed_df.loc[filter_mask, "Protein name"] = "Filtered"
+
+    # Count beads per protein category
+    counts_table = analyzed_df["Protein name"].value_counts()
+
+    # Extract counts for specific categories, defaulting to 0 if not present
+    invalid_count = counts_table.get("Invalid", 0)
+    filtered_count = counts_table.get("Filtered", 0)
+
+    # Calculate the mean number of beads for validly identified proteins
+    valid_protein_counts = counts_table.drop(
+        labels=["Invalid", "Filtered"], errors="ignore"
+    )
+
+    mean_beads_per_protein = (
+        valid_protein_counts.mean() if not valid_protein_counts.empty else 0.0
+    )
+
+    # Calculate the invalid error rate as a percentage relative to the mean bead count
+    if mean_beads_per_protein > 0:
+        invalid_error_percentage = (invalid_count / mean_beads_per_protein) * 100
+    else:
+        # Handle case with no valid beads to avoid division by zero
+        invalid_error_percentage = float("inf") if invalid_count > 0 else 0.0
+
+    return {
+        "invalid_count": invalid_count,
+        "filtered_count": filtered_count,
+        "mean_beads_per_protein": round(mean_beads_per_protein, 2),
+        "invalid_error_percentage": round(invalid_error_percentage, 4),
+    }
+
+
+def analyze(
+    raw_bead_data: list, protein_profile_df: pd.DataFrame, output_csv_path: str = None
+) -> dict:
+    """
+    Performs a full, self-contained analysis of raw bead data.
+
+    This function converts raw bead data into a DataFrame, calculates error metrics,
+    and optionally saves the processed DataFrame to a CSV file.
+
+    Args:
+        raw_bead_data: A list of lists, where each inner list represents a bead
+                       with format [x, y, cy0, cy1, bbox].
+        protein_profile_df: DataFrame mapping 'cy0' and 'cy1' to 'Protein name'.
+        output_csv_path: Optional file path to save the processed bead DataFrame.
+
+    Returns:
+        A dictionary containing the total bead count and a nested dictionary of error metrics.
+    """
+    # Convert raw list data into a structured DataFrame
+    headers = ["x", "y", "cy0", "cy1", "bbox"]
+    df = pd.DataFrame(raw_bead_data, columns=headers)
+
+    # Clean and type-cast data, ensuring robust conversion
+    for col in ["x", "y", "cy0", "cy1"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df.dropna(inplace=True)  # Drop rows where conversion failed
+
+    df = df.astype({"x": int, "y": int, "cy0": int, "cy1": int})
+    df.pop("bbox")
+
+    total_beads = len(df)
+
+    # Optionally save the cleaned DataFrame
+    if output_csv_path:
+        df.to_csv(output_csv_path, index=False)
+        print(f"Processed bead data saved to {output_csv_path}")
+
+    # Calculate error metrics using the self-contained helper function
+    error_metrics = get_error(df, protein_profile_df)
+
+    return {"total_beads": total_beads, "error_metrics": error_metrics}

@@ -44,9 +44,13 @@ class MetadataVM(QObject):
         if len(self.selected_files) == 0:
             self.error_sig.emit("No files selected.")
             return
-        elif len(self.selected_files) > 1:
-            self.error_sig.emit("You should select the reference file only.")
-        self.inspect_beads_sig.emit(self.selected_files[0], self.protein_df)
+        # elif len(self.selected_files) > 1:
+        #     self.error_sig.emit("You should select the reference file only.")
+        for i in range(len(self.selected_files)):
+            if self.selected_files[i].beads is not None:
+                self.inspect_beads_sig.emit(self.selected_files[i], self.protein_df)
+                return
+        self.error_sig.emit("No bead data found in the selected files.")
 
     def set_protein_files(self, files: list[str]):
         new_protein_df = (

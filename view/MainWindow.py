@@ -312,9 +312,14 @@ class MainWindow(QMainWindow):
             f for f in selected_files if f.path != reference_item.path
         ]
 
+        # Get StarDist settings from the metadata view
+        stardist_settings = self.metadata_view.get_stardist_settings()
+        use_stardist = stardist_settings["use_stardist"]
+        model_name = stardist_settings["model_name"]
+
         if not files_for_assignment:
             # If only the reference file is selected, we can proceed with one cycle.
-            self.vm.generate_beads({0: reference_item})
+            self.vm.generate_beads({0: reference_item}, use_stardist=use_stardist, model_name=model_name)
             return
 
         dialog = CycleAssignmentWidget(files_for_assignment, self)
@@ -332,7 +337,7 @@ class MainWindow(QMainWindow):
             self.cancel_button.setVisible(True)
             self.cancel_button.clicked.disconnect()
             self.cancel_button.clicked.connect(self.cancel_bead_generation)
-            self.vm.generate_beads(assignments_from_dialog)
+            self.vm.generate_beads(assignments_from_dialog, use_stardist=use_stardist, model_name=model_name)
 
     def upload_bead_csv(self):
         selected_files = self.get_selected_files()

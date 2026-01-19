@@ -24,20 +24,30 @@ logger.setLevel(logging.DEBUG)
 NOT_SENT = "..."
 
 # Bead CSV validation constants
-REQUIRED_BEAD_COLUMNS = ['x', 'y']
-CYCLE_COLUMN_PREFIX = 'cy'
+REQUIRED_BEAD_COLUMNS = ["x", "y"]
+CYCLE_COLUMN_PREFIX = "cy"
 
 
 class BeadGenerationThread(QThread):
     progress = pyqtSignal(int, str)
     bead_generated = pyqtSignal(dict)
 
-    def __init__(self, ref_bf, tifs, max_size, signal_to_noise_cutoff):
+    def __init__(
+        self,
+        ref_bf,
+        tifs,
+        max_size,
+        signal_to_noise_cutoff,
+        use_stardist=False,
+        model_name="model_4_400epoch_no_aug",
+    ):
         super().__init__()
         self.ref_bf = ref_bf
         self.tifs = tifs
         self.max_size = max_size
         self.signal_to_noise_cutoff = signal_to_noise_cutoff
+        self.use_stardist = use_stardist
+        self.model_name = model_name
         self._is_running = True
 
     def run(self):
@@ -50,6 +60,8 @@ class BeadGenerationThread(QThread):
                 signal_to_noise_cutoff=self.signal_to_noise_cutoff,
                 progress_callback=self.progress.emit,
                 is_running_callback=self.is_running,
+                use_stardist=self.use_stardist,
+                model_name=self.model_name,
             )
             if self._is_running:
                 self.bead_generated.emit(results)
@@ -506,7 +518,7 @@ class FileManagerVM(QObject):
             tifffile.imwrite(export_path, export_image, metadata=metadata)
             self.export_progress.emit(i + 1, total_files)
 
-    def generate_beads(self, cycle_assignments: dict[int, FileItem]):
+    def generate_beads(self, cycle_assignments: dict[int, FileItem], use_stardist=False, model_name='model_4_400epoch_no_aug'):
         assert self.reference_item is not None, (
             "Reference item must be set before generating beads."
         )
@@ -550,6 +562,8 @@ class FileManagerVM(QObject):
             tifs,
             max_size=int(self.reference_item.metadata.max_size),
             signal_to_noise_cutoff=0.1,
+            use_stardist=use_stardist,
+            model_name=model_name,
         )
         self.bead_thread.bead_generated.connect(
             lambda res: self._on_beads_generated(res, curr_ref_path, cycle_assignments)
@@ -599,23 +613,40 @@ class FileManagerVM(QObject):
 
         # Check for cycle columns (cy0, cy1, cy2, ...)
         cycle_cols = [
-            col for col in df.columns
-            if col.startswith(CYCLE_COLUMN_PREFIX) and col[len(CYCLE_COLUMN_PREFIX):].isdigit()
+            col
+            for col in df.columns
+            if col.startswith(CYCLE_COLUMN_PREFIX)
+            and col[len(CYCLE_COLUMN_PREFIX) :].isdigit()
         ]
-        cycle_cols_sorted = sorted(cycle_cols, key=lambda x: int(x[len(CYCLE_COLUMN_PREFIX):]))
+        cycle_cols_sorted = sorted(
+            cycle_cols, key=lambda x: int(x[len(CYCLE_COLUMN_PREFIX) :])
+        )
 
         if not cycle_cols:
-            return (False, f"No cycle columns found (expected {CYCLE_COLUMN_PREFIX}0, {CYCLE_COLUMN_PREFIX}1, etc.)", 0)
+            return (
+                False,
+                f"No cycle columns found (expected {CYCLE_COLUMN_PREFIX}0, {CYCLE_COLUMN_PREFIX}1, etc.)",
+                0,
+            )
 
         # Validate sequential cycle numbers
-        expected_cycles = [f'{CYCLE_COLUMN_PREFIX}{i}' for i in range(len(cycle_cols_sorted))]
+        expected_cycles = [
+            f"{CYCLE_COLUMN_PREFIX}{i}" for i in range(len(cycle_cols_sorted))
+        ]
         if cycle_cols_sorted != expected_cycles:
-            return (False, f"Cycle columns must be sequential ({CYCLE_COLUMN_PREFIX}0, {CYCLE_COLUMN_PREFIX}1, {CYCLE_COLUMN_PREFIX}2, ...)", 0)
+            return (
+                False,
+                f"Cycle columns must be sequential ({CYCLE_COLUMN_PREFIX}0, {CYCLE_COLUMN_PREFIX}1, {CYCLE_COLUMN_PREFIX}2, ...)",
+                0,
+            )
 
         return (True, None, len(cycle_cols_sorted))
 
     def store_uploaded_beads(
-        self, csv_path: str, reference_file: FileItem, cycle_assignments: dict[int, FileItem]
+        self,
+        csv_path: str,
+        reference_file: FileItem,
+        cycle_assignments: dict[int, FileItem],
     ):
         """Store uploaded bead CSV data and cycle images in reference FileItem.
 
@@ -632,7 +663,7 @@ class FileManagerVM(QObject):
         cycles = {}
         max_size = int(reference_file.metadata.max_size)
         for cycle_idx, file_item in cycle_assignments.items():
-            cycle_name = f'{CYCLE_COLUMN_PREFIX}{cycle_idx}'
+            cycle_name = f"{CYCLE_COLUMN_PREFIX}{cycle_idx}"
             img = load_and_constrain_image(file_item, max_size)
             cycles[cycle_name] = img
 
