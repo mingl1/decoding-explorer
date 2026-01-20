@@ -1,18 +1,22 @@
+import os
+
 from PyQt6.QtWidgets import (
+    QComboBox,
     QDialog,
-    QVBoxLayout,
-    QTableWidget,
     QHeaderView,
     QPushButton,
-    QComboBox,
+    QTableWidget,
     QTableWidgetItem,
+    QVBoxLayout,
 )
+
 from model.file_item import FileItem
-import os
 
 
 class CycleAssignmentWidget(QDialog):
-    def __init__(self, files: list[FileItem], parent=None):
+    def __init__(
+        self, files: list[FileItem], parent=None, zero_indexed=False, start_cycle=1
+    ):
         super().__init__(parent)
         self.setWindowTitle("Assign Cycles")
         self.files = files
@@ -31,7 +35,13 @@ class CycleAssignmentWidget(QDialog):
         file_names = ["Select a file"] + list(self.file_map.keys())
 
         for i in range(num_cycles):
-            self.table.setItem(i, 0, QTableWidgetItem(f"Cycle {i + 1}"))
+            self.table.setItem(
+                i,
+                0,
+                QTableWidgetItem(
+                    f"Cycle {i + (0 if zero_indexed else 1) + start_cycle}"
+                ),
+            )
             combo = QComboBox()
             combo.addItems(file_names)
             self.table.setCellWidget(i, 1, combo)
