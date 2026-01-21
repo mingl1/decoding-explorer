@@ -6,14 +6,15 @@ import io
 import sys
 import traceback
 
-from PyQt6.QtWidgets import (
-    QApplication,
-    QDialog,
-    QLabel,
-    QPushButton,
-    QTextEdit,
-    QVBoxLayout,
-)
+try:
+    import pyi_splash
+except ImportError:
+    class DummySplash:
+        def close(self):
+            pass
+    pyi_splash = DummySplash()
+from PyQt6.QtWidgets import (QApplication, QDialog, QLabel, QPushButton,
+                             QTextEdit, QVBoxLayout)
 
 if sys.stdout is None:
     sys.stdout = io.StringIO()
@@ -59,11 +60,10 @@ sys.excepthook = show_error_dialog
 
 # Prevent matplotlib cache building after compiling data
 
-
 if __name__ == "__main__":
     __app = QApplication(sys.argv)
     window = MainWindow()
 
     window.show()
-
+    pyi_splash.close()
     sys.exit(__app.exec())

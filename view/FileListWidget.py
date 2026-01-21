@@ -4,20 +4,13 @@ from typing import List
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QAction, QColor, QFont, QPainter
 from PyQt6.QtSvg import QSvgRenderer  # For rendering SVGs
-from PyQt6.QtWidgets import (
-    QFileDialog,
-    QHeaderView,
-    QMenu,
-    QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
-)
+from PyQt6.QtWidgets import (QFileDialog, QHeaderView, QMenu, QPushButton,
+                             QTableWidget, QTableWidgetItem)
 
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from utils import resource_path
 from viewmodel.file_manager_vm import FileManagerVM
-
 
 COLUMN_FILENAME = 0
 COLUMN_STATUS = 1
@@ -381,8 +374,10 @@ class FileTableWidget(QTableWidget):
         )
         my_model = self.model()
         assert my_model is not None
+        selected_files = self.get_selected_files()
+        
+        # delete from vm:
+        self.vm.delete_files(selected_files)
+        
         for row in rows:
             my_model.removeRow(row)
-        # delete from vm:
-        selected_files = self.get_selected_files()
-        self.vm.delete_files(selected_files)

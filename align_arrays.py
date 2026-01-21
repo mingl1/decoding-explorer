@@ -1,5 +1,6 @@
 import heapq
 import math
+import os
 import re
 import time
 
@@ -9,11 +10,27 @@ import diplib as dip
 import numpy as np
 import pystackreg.util
 import SimpleITK as sitk
+import tifffile
 from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from image_processing import adjust_contrast
 from utils import calculate_ncc, to_uint8
+
+
+def load_image_from_path(path, shape, max_size=None):
+    """Load image from path with optional max_size constraint."""
+    try:
+        img = tifffile.memmap(path, shape=shape, mode="r")
+    except ValueError:
+        img = tifffile.imread(path)
+
+    if max_size is not None:
+        if len(img.shape) == 3:
+            img = img[:, :max_size, :max_size]
+        else:
+            img = img[:max_size, :max_size]
+    return np.array(img)
 
 
 # !TODO: need to add preview after aligning arrays
@@ -25,9 +42,10 @@ class Register(QThread):
 
     def __init__(
         self,
-        reference_image: np.ndarray,
-        params: dict,
-        to_be_aligned: list,
+        reference_file_item,
+        reference_params: dict,
+        to_be_aligned_files: list,
+        files_dict: dict,
         template_size=None,
         max_points=5000,
         threshold=0.5,
@@ -35,16 +53,16 @@ class Register(QThread):
         super().__init__()
         Image.MAX_IMAGE_PIXELS = 99999999999
 
-        # initialize variables
         self._is_running = False
 
-        self.params = params
-        self.tifs = to_be_aligned
-        self.image = reference_image
+        self.reference_file_item = reference_file_item
+        self.reference_params = reference_params
+        self.to_be_aligned_files = to_be_aligned_files
+        self.files_dict = files_dict
         self.template_size = template_size
         self.max_points = max_points
-        self.min_circularity = 0.5  # hardcoded for now...
-        self.threshold = params.get("threshold", threshold)
+        self.min_circularity = 0.5
+        self.threshold = reference_params.get("threshold", threshold)
 
     def _fatal_error_message(self, msg):
         self.error.emit(msg)
@@ -71,29 +89,86 @@ class Register(QThread):
         self.finished.connect(self.deleteLater)
 
     def run(self):
-        self.progress.emit(0, "preparing alignment")  # update progress bar
-        m = self.params["max_size"]
-        self.overlap = self.params["overlap"]  # overlap between each tile
-        self.num_tiles = self.params["num_tiles"]  # how many tiles we want
-        reference_tif_index = self.params["alignment_layer"]
+        self.progress.emit(0, "Loading images...")
+        m = self.reference_params["max_size"]
+        self.overlap = self.reference_params["overlap"]
+        self.num_tiles = self.reference_params["num_tiles"]
+        reference_tif_index = self.reference_params["alignment_layer"]
+
+        if self._handle_cancel():
+            return
+
+        self.progress.emit(5, "Loading reference image...")
+        ref_path = self.reference_file_item.path
+        ref_file = self.files_dict.get(ref_path)
+        if not ref_file:
+            self._fatal_error_message("Reference file not found")
+            return
+
+        reference_image = load_image_from_path(ref_path, ref_file.shape, m)
+
         print("Reference channel is: ", reference_tif_index)
-        print(f"Aligning {len(self.image)} channels with max size {m}")
-        reference_bf = self.image[reference_tif_index][:m, :m]
+        print(f"Aligning {len(reference_image)} channels with max size {m}")
+        reference_bf = reference_image[reference_tif_index][:m, :m]
+
+        if self._handle_cancel():
+            return
+
+        self.progress.emit(10, "Loading images to align...")
+        self.tifs = []
+        total_files = len(self.to_be_aligned_files)
+        for i, f in enumerate(self.to_be_aligned_files):
+            if self._handle_cancel():
+                return
+            progress_pct = 10 + int((i / total_files) * 20)
+            self.progress.emit(progress_pct, f"Loading image {i + 1}/{total_files}")
+
+            file_item = self.files_dict.get(f.path)
+            if not file_item:
+                self.error.emit(f"File {f.path} not found in manager. Skipping alignment for this file.")
+                continue
+
+            image = load_image_from_path(f.path, file_item.shape, m)
+
+            if len(image.shape) < 3:
+                image = np.expand_dims(image, axis=0)
+
+            bf_channel = int(f.metadata.reference_channel)
+            if bf_channel >= image.shape[0]:
+                self.error.emit(
+                    f"File {os.path.basename(f.path)} reference channel {bf_channel} exceeds number of channels ({image.shape[0]}). Skipping alignment for this file."
+                )
+                continue
+
+            if file_item.working_image is not None:
+                image[bf_channel] = np.array(file_item.working_image)[
+                    :m, :m
+                ]
+
+            self.tifs.append({
+                "image": image,
+                "alignment_layer": bf_channel,
+                "file_path": f.path,
+            })
+
+        if self._handle_cancel():
+            return
+
+        self.progress.emit(30, "Preparing alignment...")
         alignment_layers = []
 
         for i, tif in enumerate(self.tifs):
             if self._handle_cancel():
                 return
-            else:
-                bf_channel = tif.get("alignment_layer", 0)
-                if bf_channel >= len(tif["image"]):
-                    self._fatal_error_message(
-                        f"Alignment layer {bf_channel} out of bounds for image with {len(tif['image'])} channels"
-                    )
-                    return
-                alignment_layers.append(
-                    adjust_contrast(tif["image"][bf_channel][:m, :m], 50, 99)
+            bf_channel = tif.get("alignment_layer", 0)
+            if bf_channel >= len(tif["image"]):
+                self._fatal_error_message(
+                    f"Alignment layer {bf_channel} out of bounds for image with {len(tif['image'])} channels"
                 )
+                return
+            alignment_layers.append(
+                adjust_contrast(tif["image"][bf_channel][:m, :m], 50, 99)
+            )
 
         fixed_map = TileMap(
             "fixed", reference_bf, int(self.overlap), int(self.num_tiles)
@@ -536,33 +611,33 @@ class Register(QThread):
         if match:
             number = int(match.group())
             result = number - 1  # 0 index
-            self.params["alignment_layer"] = result
-            print("alignment layer is: ", self.params["alignment_layer"])
+            self.reference_params["alignment_layer"] = result
+            print("alignment layer is: ", self.reference_params["alignment_layer"])
 
     def set_cell_layer(self, channel):
         match = re.search(r"\d+", channel)
         if match:
             number = int(match.group())
             result = number - 1  # 0 index
-            self.params["cell_layer"] = result
-            print("cell layer is: ", self.params["cell_layer"])
+            self.reference_params["cell_layer"] = result
+            print("cell layer is: ", self.reference_params["cell_layer"])
 
     def set_protein_detection_layer(self, channel):
         match = re.search(r"\d+", channel)
         if match:
             number = int(match.group())
             result = number - 1  # 0 index
-            self.params["protein_detection_layer"] = result
-        print("protein_detection_layer is: ", self.params["protein_detection_layer"])
+            self.reference_params["protein_detection_layer"] = result
+        print("protein_detection_layer is: ", self.reference_params["protein_detection_layer"])
 
     def set_max_size(self, value):
-        self.params["max_size"] = value
+        self.reference_params["max_size"] = value
 
     def set_num_tiles(self, value):
-        self.params["num_tiles"] = value
+        self.reference_params["num_tiles"] = value
 
     def set_overlap(self, value):
-        self.params["overlap"] = value
+        self.reference_params["overlap"] = value
 
     def on_skip(self, param):
         _, _, ymin, xmin, radius, x, y = param

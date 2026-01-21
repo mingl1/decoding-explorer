@@ -8,23 +8,10 @@ import cv2
 import numpy as np
 from pandas import DataFrame
 from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
-from PyQt6.QtWidgets import (
-    QDialog,
-    QFileDialog,
-    QHBoxLayout,
-    QHeaderView,
-    QLabel,
-    QMainWindow,
-    QMenuBar,
-    QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QSizeGrip,
-    QSizePolicy,
-    QSplitter,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtWidgets import (QDialog, QFileDialog, QHBoxLayout, QHeaderView,
+                             QLabel, QMainWindow, QMenuBar, QMessageBox,
+                             QProgressBar, QPushButton, QSizeGrip, QSizePolicy,
+                             QSplitter, QVBoxLayout, QWidget)
 
 from model.file_item import FileItem
 from model.status_enum import FileStatus
@@ -111,8 +98,18 @@ class MainWindow(QMainWindow):
         self.vm.align_error.connect(self.show_error)
         self.vm.align_complete.connect(self.alignment_finished)
         self.vm.export_progress.connect(self.update_export_progress)
+        self.vm.export_complete.connect(self.on_export_complete)
+        self.vm.export_error.connect(self.show_error)
         self.vm.beads_generated.connect(self.on_beads_generated)
         self.vm.bead_progress.connect(self.update_progress)
+        self.vm.shading_progress.connect(self.update_progress)
+        self.vm.shading_complete.connect(self.on_shading_complete)
+        self.vm.folder_loaded.connect(self._on_folder_loaded)
+        self.vm.folder_loading_progress.connect(self.update_progress)
+        self.vm.file_loaded.connect(self._on_file_loaded)
+        self.vm.file_loading_progress.connect(self.update_progress)
+        self.vm.bead_upload_progress.connect(self.update_progress)
+        self.vm.bead_upload_complete.connect(self.on_bead_upload_complete)
         self.vm.inspect_beads_signal.connect(self.show_roi_inspector_window)
 
         self.file_table_widget.itemSelectionChanged.connect(
@@ -293,16 +290,28 @@ class MainWindow(QMainWindow):
             self.show_error("Please set a reference image first.")
             return
 
-        # Apply shading correction if checkbox is checked
         if self.metadata_view.apply_shading_checkbox.isChecked():
+            self.progress_bar.setVisible(True)
+            self.status_label.setVisible(True)
+            self.cancel_button.setVisible(True)
+            self.cancel_button.clicked.disconnect()
+            self.cancel_button.clicked.connect(self.cancel_shading)
+            self.vm.selected_files = selected_files
             self.vm.apply_shading(selected_files)
+        else:
+            self.progress_bar.setVisible(True)
+            self.status_label.setVisible(True)
+            self.cancel_button.setVisible(True)
+            self.cancel_button.clicked.disconnect()
+            self.cancel_button.clicked.connect(self.cancel_alignment)
+            self.vm.align_channels(selected_files)
 
-        self.progress_bar.setVisible(True)
-        self.status_label.setVisible(True)
-        self.cancel_button.setVisible(True)
-        self.cancel_button.clicked.disconnect()
-        self.cancel_button.clicked.connect(self.cancel_alignment)
-        self.vm.align_channels(selected_files)
+    def cancel_shading(self):
+        self.vm.cancel_shading()
+        self.status_label.setVisible(False)
+        self.progress_bar.setVisible(False)
+        self.cancel_button.setVisible(False)
+        self.cancel_button.setEnabled(True)
 
     def start_bead_generation(self):
         selected_files = self.get_selected_files()
@@ -379,7 +388,7 @@ class MainWindow(QMainWindow):
             f for f in selected_files if f.path != reference_item.path
         ]
 
-        dialog = CycleAssignmentWidget(files_for_assignment, self, zero_indexed=True, start_cycle=1)
+        dialog = CycleAssignmentWidget(files_for_assignment, self, zero_indexed=False, start_cycle=1)
         if dialog.exec():
             assignments_from_dialog = dialog.get_assignments()
             if assignments_from_dialog is None:
@@ -392,11 +401,13 @@ class MainWindow(QMainWindow):
 
             self.vm.store_uploaded_beads(csv_path, reference_item, cycle_assignments)
 
-            if reference_item.beads is not None and not reference_item.beads.empty:
-                self.calculate_statistics_for_file(
-                    reference_item, self.metadata_vm.protein_df
-                )
-                self.metadata_view.collapse_processing_sections()
+    def on_bead_upload_complete(self, reference_item):
+        print(f"on_bead_upload_complete called, beads: {reference_item.beads is not None}, empty: {reference_item.beads.empty if reference_item.beads is not None else 'N/A'}")
+        if reference_item.beads is not None and not reference_item.beads.empty:
+            self.calculate_statistics_for_file(
+                reference_item, self.metadata_vm.protein_df
+            )
+            self.metadata_view.collapse_processing_sections()
 
     def start_manual_alignment(self):
         """Open manual alignment dialog for selected files."""
@@ -615,6 +626,13 @@ class MainWindow(QMainWindow):
             self.progress_bar.setVisible(False)
             self.cancel_button.setVisible(False)
             self.status_label.setVisible(False)
+        # error case, show modal dialog with error message
+        elif value < 0:
+            self.progress_bar.setVisible(False)
+            self.cancel_button.setVisible(False)
+            self.status_label.setVisible(False)
+            self.show_error(message)
+            
 
     def show_error(self, message):
         # popup error message
@@ -639,7 +657,11 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Alignment complete!")
         self.progress_bar.setVisible(False)
         self.cancel_button.setVisible(False)
-        # Do something with aligned_images
+
+    def on_shading_complete(self, updated_files):
+        self.cancel_button.clicked.disconnect()
+        self.cancel_button.clicked.connect(self.cancel_alignment)
+        self.vm.align_channels(self.vm.selected_files)
 
     def cancel_alignment(self):
         self.vm.cancel_alignment()
@@ -661,6 +683,17 @@ class MainWindow(QMainWindow):
         self.export_progress_bar.setValue(value)
         if value == total:
             self.export_progress_bar.setVisible(False)
+
+    def on_export_complete(self):
+        self.status_label.setText("Export complete!")
+        self.status_label.setVisible(True)
+        QTimer.singleShot(3000, lambda: self.status_label.setVisible(False))
+
+    def _on_folder_loaded(self, file_items):
+        pass
+
+    def _on_file_loaded(self, file_item):
+        pass
 
     def _setup_main_window(self):
         self.setWindowTitle("Decoding-Explorer")

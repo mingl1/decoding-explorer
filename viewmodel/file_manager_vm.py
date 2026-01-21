@@ -33,17 +33,17 @@ class BeadGenerationThread(QThread):
 
     def __init__(
         self,
-        ref_bf,
-        tifs,
-        max_size,
+        ref_file,
+        file_items: list,
+        files: dict,
         signal_to_noise_cutoff,
         use_stardist=False,
         model_name="model_4_400epoch_no_aug",
     ):
         super().__init__()
-        self.ref_bf = ref_bf
-        self.tifs = tifs
-        self.max_size = max_size
+        self.ref_file = ref_file
+        self.file_items = file_items
+        self.files = files
         self.signal_to_noise_cutoff = signal_to_noise_cutoff
         self.use_stardist = use_stardist
         self.model_name = model_name
@@ -52,12 +52,55 @@ class BeadGenerationThread(QThread):
     def run(self):
         self._is_running = True
         try:
+            ref_bf_channel = int(self.ref_file.metadata.reference_channel)
+            ref_max_size = int(self.ref_file.metadata.max_size)
+            ref_img = self.files[self.ref_file.path].working_image
+            ref_bf = None
+            if ref_img is not None:
+                if len(ref_img.shape) == 2:
+                    ref_bf = ref_img
+                elif len(ref_img.shape) == 3:
+                    ref_bf = np.array(ref_img)
+            else:
+                ref_img = load_image(self.files[self.ref_file.path])
+                if len(ref_img.shape) == 3:
+                    ref_bf = np.array(ref_img)[ref_bf_channel, :ref_max_size, :ref_max_size]
+                elif len(ref_img.shape) == 2:
+                    ref_bf = np.array(ref_img)[:ref_max_size, :ref_max_size]
+
+            if ref_bf is None:
+                logger.error("Reference image does not have a valid brightfield channel for bead generation.")
+                return
+
+            tifs = []
+            total_files = len(self.file_items)
+            for i, f in enumerate(self.file_items):
+                if not self._is_running:
+                    break
+                progress_pct = int((i / total_files) * 100)
+                self.progress.emit(progress_pct, f"Loading images ({i + 1}/{total_files})")
+
+                my_f = self.files.get(f.path)
+                if not my_f:
+                    continue
+                max_size = int(f.metadata.max_size)
+                img = load_and_constrain_image(my_f, max_size)
+                tifs.append((img, f))
+
+            if not self._is_running:
+                return
+
+            self.progress.emit(90, "Processing beads...")
+            progress_offset = 90
+            def scaled_progress(p, m):
+                if self._is_running:
+                    self.progress.emit(min(99, progress_offset + p), m)
             results = image_processing.process_beads(
-                self.ref_bf,
-                self.tifs,
-                max_size=self.max_size,
+                ref_bf,
+                tifs,
+                max_size=ref_max_size,
                 signal_to_noise_cutoff=self.signal_to_noise_cutoff,
-                progress_callback=self.progress.emit,
+                progress_callback=scaled_progress,
                 is_running_callback=self.is_running,
                 use_stardist=self.use_stardist,
                 model_name=self.model_name,
@@ -75,6 +118,305 @@ class BeadGenerationThread(QThread):
         return self._is_running
 
 
+class ShadingCorrectionThread(QThread):
+    progress = pyqtSignal(int, str)
+    shading_complete = pyqtSignal(list)
+
+    def __init__(self, selected_files: list, files: dict):
+        super().__init__()
+        self.selected_files = selected_files
+        self.files = files
+        self._is_running = True
+
+    def run(self):
+        self._is_running = True
+        try:
+            to_be_updated = []
+            total_files = len(self.selected_files)
+            for i, f in enumerate(self.selected_files):
+                if not self._is_running:
+                    break
+                progress_pct = int((i / total_files) * 100)
+                self.progress.emit(progress_pct, f"Reading from disk ({i + 1}/{total_files})")
+
+                my_f = self.files.get(f.path)
+                if not my_f:
+                    continue
+
+                image = np.array(load_image(f))
+                bf_channel = int(f.metadata.reference_channel)
+                bright_field = (
+                    image[bf_channel] if bf_channel < image.shape[0] else image[0]
+                )
+                max_size = int(f.metadata.max_size)
+                bright_field = bright_field[:max_size, :max_size]
+
+                self.progress.emit(progress_pct, f"Applying shading correction ({i + 1}/{total_files})")
+                corrected = utils.shading_correction(bright_field)
+                my_f.working_image = corrected
+                my_f.status = FileStatus.SHADE_CORRECTED
+                my_f.metadata.prefix = FileStatus.SHADE_CORRECTED.name.lower()
+                to_be_updated.append(my_f)
+
+            if self._is_running:
+                self.progress.emit(100, "Shading correction complete")
+                self.shading_complete.emit(to_be_updated)
+        except Exception as e:
+            logger.error(f"Error in ShadingCorrectionThread: {e}", exc_info=True)
+            self.progress.emit(-1, f"Error: {str(e)}")
+
+    def cancel(self):
+        self._is_running = False
+
+
+class FolderLoadingThread(QThread):
+    progress = pyqtSignal(int, str)
+    folder_loaded = pyqtSignal(list)
+
+    def __init__(self, folder_path: str):
+        super().__init__()
+        self.folder_path = folder_path
+        self._is_running = True
+
+    def run(self):
+        self._is_running = True
+        try:
+            to_be_emitted = []
+            tiff_files = list_tiff_files(self.folder_path)
+            total_files = len(tiff_files)
+
+            for i, file in enumerate(tiff_files):
+                if not self._is_running:
+                    break
+                progress_pct = int((i / total_files) * 100)
+                self.progress.emit(progress_pct, f"Loading files ({i + 1}/{total_files})")
+
+                status = self._get_status_from_filename(file)
+                try:
+                    shape, dtype = get_tif_info(file)
+                except (OSError, ValueError, TiffFileError):
+                    logger.warning(f"Skipping invalid TIFF file: {file}")
+                    continue
+
+                file_item = FileItem(path=file, status=status)
+                file_item.shape = shape
+                file_item.original_shape = shape
+                file_item.dtype = str(dtype)
+                file_item.metadata.max_size = (
+                    min(shape[-2], shape[-1]) if len(shape) >= 2 else 10000
+                )
+                to_be_emitted.append(file_item)
+
+            if self._is_running:
+                self.progress.emit(100, "Folder loaded")
+                self.folder_loaded.emit(to_be_emitted)
+        except Exception as e:
+            logger.error(f"Error in FolderLoadingThread: {e}", exc_info=True)
+            self.progress.emit(-1, f"Error: {str(e)}")
+
+    def _get_status_from_filename(self, file_path: str) -> FileStatus:
+        filename_base = os.path.basename(file_path).lower()
+        for status in FileStatus:
+            if status.name.startswith("_"):
+                continue
+            assert isinstance(status.value, str)
+            prefix = status.value.lower() + "_"
+            if filename_base.startswith(prefix):
+                return status
+        return FileStatus.RAW
+
+    def cancel(self):
+        self._is_running = False
+
+
+class FileLoadingThread(QThread):
+    progress = pyqtSignal(int, str)
+    file_loaded = pyqtSignal(FileItem)
+
+    def __init__(self, file_path: str):
+        super().__init__()
+        self.file_path = file_path
+        self._is_running = True
+
+    def run(self):
+        self._is_running = True
+        try:
+            self.progress.emit(0, "Loading file...")
+            if os.path.isfile(self.file_path):
+                status = self._get_status_from_filename(self.file_path)
+                file_item = FileItem(path=self.file_path, status=status)
+                try:
+                    shape, dtype = get_tif_info(self.file_path)
+                except (OSError, ValueError, TiffFileError):
+                    try:
+                        arr = np.array(Image.open(self.file_path))
+                        shape = arr.shape
+                        dtype = arr.dtype
+                    except Exception as e:
+                        logger.error(f"Failed to load {self.file_path}: {e}", exc_info=True)
+                        self.progress.emit(-1, f"Error: {str(e)}")
+                        return
+
+                file_item.shape = shape
+                file_item.original_shape = shape
+                file_item.dtype = str(dtype)
+                file_item.metadata.max_size = (
+                    min(shape[-2], shape[-1]) if len(shape) >= 2 else 10000
+                )
+
+                if self._is_running:
+                    self.progress.emit(100, "File loaded")
+                    self.file_loaded.emit(file_item)
+        except Exception as e:
+            logger.error(f"Error in FileLoadingThread: {e}", exc_info=True)
+            self.progress.emit(-1, f"Error: {str(e)}")
+
+    def _get_status_from_filename(self, file_path: str) -> FileStatus:
+        filename_base = os.path.basename(file_path).lower()
+        for status in FileStatus:
+            if status.name.startswith("_"):
+                continue
+            assert isinstance(status.value, str)
+            prefix = status.value.lower() + "_"
+            if filename_base.startswith(prefix):
+                return status
+        return FileStatus.RAW
+
+    def cancel(self):
+        self._is_running = False
+
+
+class ExportThread(QThread):
+    progress = pyqtSignal(int, int)
+    export_complete = pyqtSignal()
+    export_error = pyqtSignal(str)
+
+    def __init__(self, folder_path: str, files: dict, selected_files: list, metadata_changes: dict | None = None):
+        super().__init__()
+        self.folder_path = folder_path
+        self.files = files
+        self.selected_files = selected_files
+        self.metadata_changes = metadata_changes or {}
+        self._is_running = True
+
+    def run(self):
+        self._is_running = True
+        try:
+            total_files = len(self.selected_files)
+            for i, f in enumerate(self.selected_files):
+                if not self._is_running:
+                    break
+                self.progress.emit(i + 1, total_files)
+
+                file_item = self.files.get(f.path)
+                if not file_item:
+                    continue
+
+                export_image = load_image(file_item)
+                if file_item.working_image is not None:
+                    if len(file_item.working_image.shape) == 2:
+                        export_image = np.array(export_image)[:,:file_item.metadata.max_size, :file_item.metadata.max_size]
+                        bf_channel = int(file_item.metadata.reference_channel)
+                        export_image[bf_channel] = file_item.working_image.squeeze()
+                    elif len(file_item.working_image.shape) == 3:
+                        export_image = np.array(file_item.working_image)
+
+                meta_metadata = {
+                    "axes": file_item.metadata.axes,
+                    "unit": file_item.metadata.unit,
+                    "PhysicalSizeX": file_item.metadata.PhysicalSizeX,
+                    "PhysicalSizeY": file_item.metadata.PhysicalSizeY,
+                }
+
+                if len(export_image.shape) > 2:
+                    export_image = export_image[
+                        :,
+                        : int(file_item.metadata.max_size),
+                        : int(file_item.metadata.max_size),
+                    ]
+                elif len(export_image.shape) == 2:
+                    export_image = export_image[
+                        : int(file_item.metadata.max_size),
+                        : int(file_item.metadata.max_size),
+                    ]
+                file_name = os.path.basename(file_item.path)
+
+                for status in FileStatus:
+                    if status.name.startswith("_"):
+                        continue
+                    prefix_to_check = status.value.lower() + "_"
+                    if file_name.lower().startswith(prefix_to_check):
+                        file_name = file_name[len(prefix_to_check):]
+                        break
+
+                if file_item.metadata.prefix:
+                    file_name = f"{file_item.metadata.prefix}_{file_name}"
+
+                export_path = os.path.join(self.folder_path, file_name)
+                tifffile.imwrite(export_path, export_image, metadata=meta_metadata)
+
+            if self._is_running:
+                self.progress.emit(total_files, total_files)
+                self.export_complete.emit()
+        except Exception as e:
+            logger.error(f"Error in ExportThread: {e}", exc_info=True)
+            self.export_error.emit(str(e))
+
+    def cancel(self):
+        self._is_running = False
+
+class BeadUploadThread(QThread):
+    progress = pyqtSignal(int, str)
+    upload_complete = pyqtSignal(FileItem)
+
+    def __init__(self, csv_path: str, reference_file: FileItem, cycle_assignments: dict, files: dict):
+        super().__init__()
+        self.csv_path = csv_path
+        self.reference_file = reference_file
+        self.cycle_assignments = cycle_assignments
+        self.files = files
+        self._is_running = True
+
+    def run(self):
+        self._is_running = True
+        try:
+            print(f"BeadUploadThread.run started, reference_file path: {self.reference_file.path}")
+            self.progress.emit(0, "Loading beads data...")
+            beads_df = pd.read_csv(self.csv_path)
+            print(f"Loaded CSV with {len(beads_df)} rows")
+
+            cycles = {}
+            total_cycles = len(self.cycle_assignments)
+            for cycle_idx, (idx, file_item) in enumerate(self.cycle_assignments.items()):
+                if not self._is_running:
+                    break
+                progress_pct = int((idx / total_cycles) * 100)
+                self.progress.emit(progress_pct, f"Loading cycle {idx}...")
+
+                cycle_name = f"{CYCLE_COLUMN_PREFIX}{idx}"
+                max_size = int(self.reference_file.metadata.max_size)
+                img = load_and_constrain_image(file_item, max_size)
+                cycles[cycle_name] = img
+
+            if not self._is_running:
+                return
+
+            self.reference_file.beads = beads_df
+            self.reference_file.cycles = cycles
+            self.reference_file.cycle_files = self.cycle_assignments
+            self.reference_file.status = FileStatus.BEADS_GENERATED
+            self.reference_file.metadata.prefix = FileStatus.BEADS_GENERATED.name.lower()
+
+            print(f"BeadUploadThread done, beads attached: {self.reference_file.beads is not None}")
+            self.progress.emit(100, "Beads loaded")
+            self.upload_complete.emit(self.reference_file)
+        except Exception as e:
+            logger.error(f"Error in BeadUploadThread: {e}", exc_info=True)
+            self.progress.emit(-1, f"Error: {str(e)}")
+
+    def cancel(self):
+        self._is_running = False
+
 class FileManagerVM(QObject):
     file_list_updated = pyqtSignal(list)
     file_information_update = pyqtSignal(list)
@@ -84,8 +426,18 @@ class FileManagerVM(QObject):
     align_error = pyqtSignal(str)
     align_complete = pyqtSignal(list)
     export_progress = pyqtSignal(int, int)
+    export_complete = pyqtSignal()
+    export_error = pyqtSignal(str)
     beads_generated = pyqtSignal(DataFrame)
     bead_progress = pyqtSignal(int, str)
+    shading_progress = pyqtSignal(int, str)
+    shading_complete = pyqtSignal(list)
+    folder_loaded = pyqtSignal(list)
+    folder_loading_progress = pyqtSignal(int, str)
+    file_loaded = pyqtSignal(FileItem)
+    file_loading_progress = pyqtSignal(int, str)
+    bead_upload_progress = pyqtSignal(int, str)
+    bead_upload_complete = pyqtSignal(FileItem)
     inspect_beads_signal = pyqtSignal(
         dict, DataFrame, dict, Series, np.ndarray, DataFrame, int
     )
@@ -97,7 +449,13 @@ class FileManagerVM(QObject):
         self.emitted_files = set()
         self.register_thread = None
         self.bead_thread = None
+        self.shading_thread = None
+        self.folder_thread = None
+        self.file_thread = None
+        self.export_thread = None
+        self.upload_thread = None
         self.selected_files = []
+        self._pending_files = {}
 
     def set_reference_item(self, file_item: FileItem):
         self.reference_item = file_item
@@ -198,76 +556,54 @@ class FileManagerVM(QObject):
         return FileStatus.RAW
 
     def load_folder(self, folder_path):
+        self._pending_files = {}
+        self.folder_thread = FolderLoadingThread(folder_path)
+        self.folder_thread.progress.connect(self.folder_loading_progress.emit)
+        self.folder_thread.folder_loaded.connect(self._on_folder_loaded)
+        self.folder_thread.start()
+
+    def _on_folder_loaded(self, file_items: list):
         to_be_emitted = []
-        for file in list_tiff_files(folder_path):
-            status = self._get_status_from_filename(file)
-
-            try:
-                shape, dtype = get_tif_info(file)
-            except (OSError, ValueError, TiffFileError):
-                logger.warning(f"Skipping invalid TIFF file: {file}")
-                continue
-
-            self.files[file] = FileItem(path=file, status=status)
-            self.files[file].shape = shape
-            self.files[file].original_shape = shape
-            self.files[file].dtype = str(dtype)
-            self.files[file].metadata.max_size = (
-                min(shape[-2], shape[-1]) if len(shape) >= 2 else 10000
-            )
-            if file not in self.emitted_files:
-                self.emitted_files.add(file)
-                to_be_emitted.append(self.files[file])
+        for file_item in file_items:
+            if file_item.path not in self.emitted_files:
+                self.emitted_files.add(file_item.path)
+                self._pending_files[file_item.path] = file_item
+                to_be_emitted.append(file_item)
+            else:
+                self._pending_files[file_item.path] = file_item
+        self.files.update(self._pending_files)
+        self._pending_files = {}
         self.file_list_updated.emit(to_be_emitted)
 
     def load_file(self, file_path):
-        if os.path.isfile(file_path):
-            status = self._get_status_from_filename(file_path)
-            self.files[file_path] = FileItem(path=file_path, status=status)
-            try:
-                # Try TIFF-specific metadata extraction
-                shape, dtype = get_tif_info(file_path)
-            except (OSError, ValueError, TiffFileError):
-                # Fallback: load as generic image array
-                try:
-                    arr = np.array(Image.open(file_path))
-                    shape = arr.shape
-                    dtype = arr.dtype
-                except Exception as e:
-                    logger.error(f"Failed to load {file_path}: {e}", exc_info=True)
-                    return  # Can't even load as generic image
+        if not os.path.isfile(file_path):
+            return
+        self.file_thread = FileLoadingThread(file_path)
+        self.file_thread.progress.connect(self.file_loading_progress.emit)
+        self.file_thread.file_loaded.connect(self._on_file_loaded)
+        self.file_thread.start()
 
-            self.files[file_path].shape = shape
-            self.files[file_path].original_shape = shape
-            self.files[file_path].dtype = str(dtype)
-            self.files[file_path].metadata.max_size = (
-                min(shape[-2], shape[-1]) if len(shape) >= 2 else 10000
-            )
-
-            if file_path not in self.emitted_files:
-                self.emitted_files.add(file_path)
-                self.file_list_updated.emit([self.files[file_path]])
+    def _on_file_loaded(self, file_item: FileItem):
+        if file_item.path in self.emitted_files:
+            print(f"File {file_item.path} already loaded.")
+            return
+        self.emitted_files.add(file_item.path)
+        self.files[file_item.path] = file_item
+        self.file_list_updated.emit([file_item])
 
     def apply_shading(self, selected_files: list[FileItem]):
-        to_be_updated = []
-        for f in selected_files:
-            image = np.array(load_image(f))
-            bf_channel = int(f.metadata.reference_channel)
-            bright_field = (
-                image[bf_channel] if bf_channel < image.shape[0] else image[0]
-            )
-            # Apply max_size constraint before shading correction
-            max_size = int(f.metadata.max_size)
-            bright_field = bright_field[:max_size, :max_size]
-            my_f = self.files.get(f.path)
-            if not my_f:
-                continue
-            corrected = utils.shading_correction(bright_field)
-            my_f.working_image = corrected
-            my_f.status = FileStatus.SHADE_CORRECTED
-            my_f.metadata.prefix = FileStatus.SHADE_CORRECTED.name.lower()
-            to_be_updated.append(my_f)
+        self.shading_thread = ShadingCorrectionThread(selected_files, self.files)
+        self.shading_thread.progress.connect(self.shading_progress.emit)
+        self.shading_thread.shading_complete.connect(self._on_shading_complete)
+        self.shading_thread.start()
+
+    def _on_shading_complete(self, to_be_updated: list[FileItem]):
         self.file_information_update.emit(to_be_updated)
+        self.shading_complete.emit(to_be_updated)
+
+    def cancel_shading(self):
+        if self.shading_thread:
+            self.shading_thread.cancel()
 
     def apply_crop(
         self,
@@ -396,45 +732,14 @@ class FileManagerVM(QObject):
     def align_channels(self, selected_files: list[FileItem]):
         if not self.reference_item:
             return
-        # import here to avoid startup overhead
         from align_arrays import Register
 
         selected_files = [
             f for f in selected_files if f.path != self.reference_item.path
         ]
-        alignable_images = []
-        for f in selected_files:
-            image = np.array(load_image(f))
-            if len(image.shape) < 3:
-                image = np.expand_dims(image, axis=0)
-            if image.shape[0] < int(f.metadata.reference_channel) + 1:
-                self.align_error.emit(
-                    f"File {os.path.basename(f.path)} reference channel {f.metadata.reference_channel} exceeds number of channels ({image.shape[0]}). Skipping alignment for this file."
-                )
-                continue
-            image = np.array(image)[
-                :, : int(f.metadata.max_size), : int(f.metadata.max_size)
-            ]
-            if f.working_image is not None:
-                image[int(f.metadata.reference_channel)] = np.array(f.working_image)[
-                    : int(f.metadata.max_size), : int(f.metadata.max_size)
-                ]
-            alignable = {
-                "image": image,
-                "max_size": int(f.metadata.max_size),
-                "alignment_layer": int(f.metadata.reference_channel),
-                "num_tiles": f.metadata.num_tiles,
-                "overlap": f.metadata.overlap,
-                "file_path": f.path,
-            }
-            alignable_images.append(alignable)
 
         self.register_thread = Register(
-            np.array(load_image(self.reference_item))[
-                :,
-                : int(self.reference_item.metadata.max_size),
-                : int(self.reference_item.metadata.max_size),
-            ],
+            self.reference_item,
             {
                 "max_size": int(self.reference_item.metadata.max_size),
                 "alignment_layer": int(self.reference_item.metadata.reference_channel),
@@ -443,7 +748,8 @@ class FileManagerVM(QObject):
                 "file_path": self.reference_item.path,
                 "threshold": self.reference_item.threshold,
             },
-            alignable_images,
+            selected_files,
+            self.files,
         )
         self.register_thread.progress.connect(self.align_progress.emit)
         self.register_thread.error.connect(self.align_error.emit)
@@ -492,10 +798,13 @@ class FileManagerVM(QObject):
 
     def delete_files(self, selected_files: list[FileItem]):
         for f in selected_files:
+            print(f"Deleting file: {f.path}")
             if f.path in self.files:
+                print("File found in manager, deleting.")
                 del self.files[f.path]
-                if f.path in self.emitted_files:
-                    self.emitted_files.remove(f.path)
+            if f.path in self.emitted_files:
+                print("File found in emitted files, removing.")
+                self.emitted_files.remove(f.path)
 
     def cancel_alignment(self):
         if self.register_thread:
@@ -513,8 +822,13 @@ class FileManagerVM(QObject):
             self.file_information_update.emit([saved_f])
 
     def set_reference(self, file_item: FileItem):
+        to_be = []
+        prev_ref = self.reference_item
         self.reference_item = file_item
-        self.file_information_update.emit([file_item])
+        to_be.append(file_item)
+        if prev_ref and prev_ref.path != file_item.path:
+            to_be.append(prev_ref)
+        self.file_information_update.emit(to_be)
 
     def clear_reference(self):
         if self.reference_item:
@@ -523,56 +837,18 @@ class FileManagerVM(QObject):
             self.file_information_update.emit([old_ref])
 
     def export_files(self, folder_path: str, selected_files: list[FileItem]):
-        total_files = len(selected_files)
-        self.export_progress.emit(0, total_files)
+        self.export_thread = ExportThread(folder_path, self.files, selected_files)
+        self.export_thread.progress.connect(self.export_progress.emit)
+        self.export_thread.export_complete.connect(self._on_export_complete)
+        self.export_thread.export_error.connect(self.export_error.emit)
+        self.export_thread.start()
 
-        for i, f in enumerate(selected_files):
-            file_item = self.files.get(f.path)
-            if not file_item:
-                continue
-            export_image = load_image(file_item)
-            if file_item.working_image is not None:
-                if len(file_item.working_image.shape) == 2:
-                    export_image = np.array(export_image)
-                    bf_channel = int(file_item.metadata.reference_channel)
-                    export_image[bf_channel] = file_item.working_image.squeeze()
-                elif len(file_item.working_image.shape) == 3:
-                    export_image = np.array(file_item.working_image)
-            metadata = {
-                "axes": file_item.metadata.axes,
-                "unit": file_item.metadata.unit,
-                "PhysicalSizeX": file_item.metadata.PhysicalSizeX,
-                "PhysicalSizeY": file_item.metadata.PhysicalSizeY,
-            }
-            # ensure max size
-            if len(export_image.shape) > 2:
-                export_image = export_image[
-                    :,
-                    : int(file_item.metadata.max_size),
-                    : int(file_item.metadata.max_size),
-                ]
-            elif len(export_image.shape) == 2:
-                export_image = export_image[
-                    : int(file_item.metadata.max_size),
-                    : int(file_item.metadata.max_size),
-                ]
-            file_name = os.path.basename(file_item.path)
+    def _on_export_complete(self):
+        self.export_complete.emit()
 
-            # Check for and remove existing status prefixes
-            for status in FileStatus:
-                if status.name.startswith("_"):
-                    continue
-                prefix_to_check = status.value.lower() + "_"
-                if file_name.lower().startswith(prefix_to_check):
-                    file_name = file_name[len(prefix_to_check) :]
-                    break
-
-            if file_item.metadata.prefix:
-                file_name = f"{file_item.metadata.prefix}_{file_name}"
-
-            export_path = os.path.join(folder_path, file_name)
-            tifffile.imwrite(export_path, export_image, metadata=metadata)
-            self.export_progress.emit(i + 1, total_files)
+    def cancel_export(self):
+        if self.export_thread:
+            self.export_thread.cancel()
 
     def generate_beads(
         self,
@@ -583,45 +859,16 @@ class FileManagerVM(QObject):
         assert self.reference_item is not None, (
             "Reference item must be set before generating beads."
         )
-        tifs = []
 
         sorted_cycles = sorted(cycle_assignments.keys())
         ordered_files = [cycle_assignments[cycle] for cycle in sorted_cycles]
-        ordered_files.insert(0, self.reference_item)  # reference is always first
+        ordered_files.insert(0, self.reference_item)
         curr_ref_path = self.reference_item.path
-        for f in ordered_files:
-            my_f = self.files.get(f.path)
-            if not my_f:
-                continue
-            max_size = int(f.metadata.max_size)
-            img = load_and_constrain_image(my_f, max_size)
-            tifs.append((img, f))
-        ref_bf_path = self.reference_item.path
-        ref_bf_channel = int(self.reference_item.metadata.reference_channel)
-        ref_img = self.files[self.reference_item.path].working_image
-        ref_bf = None
-        if ref_img is not None:
-            if len(ref_img.shape) == 2:
-                ref_bf = ref_img
-            elif len(ref_img.shape) == 3:
-                ref_bf = np.array(ref_img)
-        else:
-            ref_img = load_image(self.files[ref_bf_path])
-            ref_max_size = int(self.reference_item.metadata.max_size)
-            if len(ref_img.shape) == 3:
-                ref_bf = np.array(ref_img)[ref_bf_channel, :ref_max_size, :ref_max_size]
-            elif len(ref_img.shape) == 2:
-                ref_bf = np.array(ref_img)[:ref_max_size, :ref_max_size]
-        if ref_bf is None:
-            self.align_error.emit(
-                "Reference image does not have a valid brightfield channel for bead generation."
-            )
-            return
-        # cy0 cy1 cy2 based on order in tifs, reference is always first
+
         self.bead_thread = BeadGenerationThread(
-            ref_bf,
-            tifs,
-            max_size=int(self.reference_item.metadata.max_size),
+            self.reference_item,
+            ordered_files,
+            self.files,
             signal_to_noise_cutoff=0.1,
             use_stardist=use_stardist,
             model_name=model_name,
@@ -709,33 +956,17 @@ class FileManagerVM(QObject):
         reference_file: FileItem,
         cycle_assignments: dict[int, FileItem],
     ):
-        """Store uploaded bead CSV data and cycle images in reference FileItem.
+        print(f"store_uploaded_beads called, reference_file path: {reference_file.path}")
+        print(f"files dict keys before: {list(self.files.keys())[:5]}...")
+        self.upload_thread = BeadUploadThread(csv_path, reference_file, cycle_assignments, self.files)
+        self.upload_thread.progress.connect(self.bead_upload_progress.emit)
+        self.upload_thread.upload_complete.connect(self._on_beads_uploaded)
+        self.upload_thread.start()
 
-        Args:
-            csv_path: Path to the bead CSV file
-            reference_file: FileItem to store beads and cycles
-            cycle_assignments: Dict mapping cycle index to FileItem
-        """
-        # Load beads DataFrame
-        beads_df = pd.read_csv(csv_path)
-        reference_file.beads = beads_df
-
-        # Load cycle images and store in cycles dict
-        cycles = {}
-        max_size = int(reference_file.metadata.max_size)
-        for cycle_idx, file_item in cycle_assignments.items():
-            cycle_name = f"{CYCLE_COLUMN_PREFIX}{cycle_idx}"
-            img = load_and_constrain_image(file_item, max_size)
-            cycles[cycle_name] = img
-
-        reference_file.cycles = cycles
-        reference_file.cycle_files = cycle_assignments
-        reference_file.status = FileStatus.BEADS_GENERATED
-        reference_file.metadata.prefix = FileStatus.BEADS_GENERATED.name.lower()
-
-        # Emit signal to update UI
+    def _on_beads_uploaded(self, reference_file: FileItem):
+        print(f"_on_beads_uploaded called, beads: {reference_file.beads is not None}")
         self.file_information_update.emit([reference_file])
-
+        self.bead_upload_complete.emit(reference_file)
 
 def list_tiff_files(folder_path):
     tiff_files = []

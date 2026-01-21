@@ -317,3 +317,67 @@ class TestFileManagerVM:
         vm.apply_metadata({"max_size": new_max_size}, [item])
 
         assert signal_recorder.get_call_count() == 0
+
+    def test_load_file_duplicate_detection(self, mock_file_manager_vm, tmp_tiff_path):
+        """Loading the same file twice should emit error and skip second load."""
+        from unittest.mock import patch
+        vm = mock_file_manager_vm
+        path = tmp_tiff_path()
+
+        with patch('viewmodel.file_manager_vm.get_tif_info') as mock_info:
+            mock_info.return_value = ((1, 512, 512), np.uint16)
+            
+            # First load - should succeed
+            vm.load_file(path)
+            assert path in vm.files
+            assert len(vm.files) == 1
+            
+            # Mock the align_error signal to track calls
+            error_calls = []
+            def capture_error(msg):
+                error_calls.append(msg)
+            vm.align_error.connect(capture_error)
+            
+            # Second load - should be skipped
+            vm.load_file(path)
+            
+            # File should still exist only once
+            assert len(vm.files) == 1
+            assert path in vm.files
+            
+            # Error should be emitted
+            assert len(error_calls) == 1
+            assert "already loaded" in error_calls[0]
+
+    def test_load_folder_duplicate_detection(self, mock_file_manager_vm, tmp_tiff_folder):
+        """Loading folder with already loaded files should skip duplicates and emit error."""
+        from unittest.mock import patch
+        vm = mock_file_manager_vm
+        folder = tmp_tiff_folder()
+        
+        with patch('viewmodel.file_manager_vm.list_tiff_files') as mock_list_files, \
+             patch('viewmodel.file_manager_vm.get_tif_info') as mock_info:
+            
+            mock_list_files.return_value = [f"{folder}/file1.tif", f"{folder}/file2.tif"]
+            mock_info.return_value = ((1, 512, 512), np.uint16)
+            
+            # First load - should load both files
+            vm.load_folder(folder)
+            assert len(vm.files) == 2
+            
+            # Mock the align_error signal to track calls
+            error_calls = []
+            def capture_error(msg):
+                error_calls.append(msg)
+            vm.align_error.connect(capture_error)
+            
+            # Second load - should skip both files
+            vm.load_folder(folder)
+            
+            # Files should still exist only once each
+            assert len(vm.files) == 2
+            
+            # Error should be emitted about skipped files
+            assert len(error_calls) == 1
+            assert "Skipped 2" in error_calls[0]
+            assert "already loaded" in error_calls[0]

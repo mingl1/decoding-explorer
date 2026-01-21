@@ -3,7 +3,6 @@ from collections import defaultdict
 from typing import List, Tuple
 
 import cv2
-
 # import diplib as dip
 import numpy as np
 import pandas as pd
@@ -1326,6 +1325,8 @@ def get_adaptive_low_percentile(
 
     return low_percentile
 
+from utils import resource_path
+
 
 def prepare_data_for_resolution(
     beads,
@@ -1415,7 +1416,7 @@ def prepare_data_for_resolution(
     update_progress(10, "Getting activation regions from cycles")
     # Conditionally load StarDist model
     if use_stardist:
-        model = StarDist2D(None, name=model_name, basedir=model_name)
+        model = StarDist2D(None, name=model_name, basedir=resource_path("assets/"+model_name))
     else:
         model = None  # Not needed for watershed
 
@@ -1960,7 +1961,11 @@ def process_beads(
         return None
     brightfield = brightfield[:max_size, :max_size]
     log("Initial bead detection...")
-    beads = beadfinding(brightfield, is_running_callback=is_running)
+    try:
+        beads = beadfinding(brightfield, is_running_callback=is_running)
+    except Exception as e:
+        log(f"Error during beadfinding: {e}")
+        return None
     if beads is None:
         return None
     initial_bead_count = len(beads)
@@ -1989,17 +1994,22 @@ def process_beads(
         return None
     log(f"Signal-to-noise cutoff: {signal_to_noise_cutoff}")
     gc.collect()
-    df, post_resoluton_df = get_excel(
-        beads,
-        signal_to_noise_cutoff,
-        tifs,
-        max_size,
-        progress_callback=progress_callback,
-        is_running_callback=is_running,
-        use_stardist=use_stardist,
-        model_name=model_name,
-        # roi_coords=roi_coords,
-    )
+    try:
+        df, post_resoluton_df = get_excel(
+            beads,
+            signal_to_noise_cutoff,
+            tifs,
+            max_size,
+            progress_callback=progress_callback,
+            is_running_callback=is_running,
+            use_stardist=use_stardist,
+            model_name=model_name,
+            # roi_coords=roi_coords,
+        )
+    except Exception as e:
+        log(f"Error during get_excel: {e}")
+        update_progress(-1, f"Error during bead processing., {e}")
+        return None
     log("Done getting excel")
 
     # if not is_running():
