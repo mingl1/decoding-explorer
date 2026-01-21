@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         self.file_table_widget.itemSelectionChanged.connect(
             self.handle_selection_change
         )
+        self.file_table_widget.table_emptied.connect(self.handle_table_emptied)
         self.metadata_vm.metadata_applied_sig.connect(self.handle_metadata_applied)
         self.vm.metadata_corrected_sig.connect(self.handle_metadata_corrected)
         self.metadata_vm.align_channels_sig.connect(self.start_alignment)
@@ -265,6 +266,10 @@ class MainWindow(QMainWindow):
         self.metadata_vm.update_selected_items(selected_files)
         self.vm.selected_files = selected_files
         print(f"Selected {len(selected_files)} files")
+
+    def handle_table_emptied(self):
+        """Hide metadata view when no files remain in the table."""
+        self.metadata_view.hide()
 
     def handle_dropped_paths(self, paths: List[str]):
         dirs = []

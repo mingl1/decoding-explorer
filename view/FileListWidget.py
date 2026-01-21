@@ -1,7 +1,7 @@
 import os
 from typing import List
 
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QFont, QPainter
 from PyQt6.QtSvg import QSvgRenderer  # For rendering SVGs
 from PyQt6.QtWidgets import (QFileDialog, QHeaderView, QMenu, QPushButton,
@@ -41,6 +41,9 @@ def format_shape_by_axes(shape: tuple, axes: str) -> str:
 
 
 class FileTableWidget(QTableWidget):
+    # Signal emitted when table becomes empty
+    table_emptied = pyqtSignal()
+
     def __init__(self, file_dropped_callback, vm: FileManagerVM):
         super().__init__(0, 7)  # columns: filename, status, shape, dtype, physical_size_x, physical_size_y, alignment_channel
         self.setAcceptDrops(True)
@@ -84,6 +87,16 @@ class FileTableWidget(QTableWidget):
         is_empty = self.rowCount() == 0
         self.browse_files_button.setVisible(is_empty)
         self.browse_folder_button.setVisible(is_empty)
+
+        # Show/hide table header based on whether there are files
+        header = self.horizontalHeader()
+        if header:
+            if is_empty:
+                header.hide()
+                # Emit signal to notify MainWindow
+                self.table_emptied.emit()
+            # Note: header.show() is called in MainWindow.update_file_list()
+
         if is_empty:
             # Position buttons in center of viewport
             self._position_buttons()
@@ -367,6 +380,9 @@ class FileTableWidget(QTableWidget):
         menu.exec(self.viewport().mapToGlobal(position))
 
     def handle_delete_selected(self):
+        # Get selected files before deleting rows
+        selected_files = self.get_selected_files()
+
         # delete ui rows:
         selection_model = self.selectionModel()
         assert selection_model is not None
@@ -382,3 +398,9 @@ class FileTableWidget(QTableWidget):
         
         for row in rows:
             my_model.removeRow(row)
+
+        # delete from vm:
+        self.vm.delete_files(selected_files)
+
+        # Update button/table visibility after deletion
+        self.update_button_visibility()
