@@ -267,13 +267,16 @@ class MainWindow(QMainWindow):
         print(f"Selected {len(selected_files)} files")
 
     def handle_dropped_paths(self, paths: List[str]):
+        dirs = []
+        files = []
         for path in paths:
             if os.path.isdir(path):
-                self.vm.load_folder(path)
+                dirs.append(path)
             elif os.path.isfile(path):
                 print("loading file:", path)
-                self.vm.load_file(path)
-
+                files.append(path)
+        self.vm.load_folder(dirs)
+        self.vm.load_file(files)
     def on_load_folder(self):
         folder = QFileDialog.getExistingDirectory()
         if folder:

@@ -155,6 +155,7 @@ class FileTableWidget(QTableWidget):
     def dropEvent(self, event):
         if event.mimeData().hasUrls():
             paths = [url.toLocalFile() for url in event.mimeData().urls()]
+            print(paths)
             if self.file_dropped_callback:
                 self.file_dropped_callback(paths)
             event.acceptProposedAction()
