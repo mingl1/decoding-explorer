@@ -2,15 +2,18 @@ import math
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
+    QDoubleValidator,
     QImage,
+    QIntValidator,
     QKeyEvent,
     QPainter,
     QPixmap,
     QTransform,
 )
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QDialog,
     QFormLayout,
@@ -20,11 +23,21 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QMessageBox,
     QPushButton,
+    QRadioButton,
     QVBoxLayout,
 )
 
 from utils import adjust_contrast, to_uint8
+
+
+class NullableIntValidator(QIntValidator):
+    def validate(self, input_str, pos):
+        if input_str == "":
+            return (self.State.Acceptable, input_str, pos)
+        return super().validate(input_str, pos)
 
 
 class ZoomableImageView(QGraphicsView):
@@ -89,6 +102,9 @@ class ZoomableImageView(QGraphicsView):
 
 
 class AlignmentPreviewDialog(QDialog):
+    moving_images_changed = pyqtSignal(list)
+    transformation_matrices = pyqtSignal(list)
+
     def __init__(
         self,
         target_image: np.ndarray,
@@ -100,10 +116,13 @@ class AlignmentPreviewDialog(QDialog):
 
         self.target_image = target_image.copy()
         self.moving_images = [img.copy() for img in moving_images]
+        self.original_moving_images = [img.copy() for img in moving_images]
         self.can_edit = can_edit
         self.can_emit = can_emit
         self.adjust_contrast = True
         self.result_accepted = False
+        self.selected_moving_index = 0 if moving_images else -1
+        self.move_step = 1
 
         self._setup_ui()
         self.create_direct_overlay()
@@ -120,11 +139,19 @@ class AlignmentPreviewDialog(QDialog):
             self._on_contrast_checkbox_changed
         )
 
-        instruction_text = "Mouse wheel: zoom, Drag: pan, Double-click: reset view"
+        instruction_text = (
+            "Arrow keys/Inputs: move, Mouse wheel: zoom, Drag: pan, Double-click: reset view"
+            if self.can_edit
+            else "Mouse wheel: zoom, Drag: pan, Double-click: reset view"
+        )
         self.preview_label = QLabel(
             f"Red = Target, Other colors = Aligned | {instruction_text}"
         )
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.offset_label = QLabel()
+        self.offset_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.offset_label.setVisible(self.can_edit)
 
         self.image_view = ZoomableImageView(self)
         self.image_view.setMinimumSize(800, 500)
@@ -132,29 +159,47 @@ class AlignmentPreviewDialog(QDialog):
         self.control_layout = QHBoxLayout()
         self.button_layout = QHBoxLayout()
 
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        if self.can_emit:
-            self._setup_confirm_cancel_buttons()
+        if self.can_edit:
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            self._setup_editable_controls()
         else:
-            self._setup_view_only_controls()
+            self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            if self.can_emit:
+                self._setup_confirm_cancel_buttons()
+            else:
+                self._setup_view_only_controls()
 
         main_layout.addWidget(self.preview_label)
+        main_layout.addWidget(self.offset_label)
         main_layout.addWidget(self.enhance_contrast_checkbox)
         main_layout.addWidget(self.image_view)
 
         self.visibility_groupbox = QGroupBox("Moving Layers")
         visibility_layout = QVBoxLayout()
         self.visibility_checkboxes = []
+        self.selection_buttons = []
+        self.button_group = QButtonGroup(self)
+
         for i in range(len(self.moving_images)):
+            layer_layout = QHBoxLayout()
+
+            if self.can_edit:
+                radio = QRadioButton()
+                radio.setChecked(i == self.selected_moving_index)
+                radio.toggled.connect(lambda checked, index=i: self._on_layer_selected(index) if checked else None)
+                self.selection_buttons.append(radio)
+                self.button_group.addButton(radio)
+                layer_layout.addWidget(radio)
+
             checkbox = QCheckBox(f"Moving Image {i + 1}")
             checkbox.setChecked(True)
             checkbox.stateChanged.connect(
-                lambda state, index=i: self.image_view.toggle_moving_item_visibility(
-                    index, state == Qt.CheckState.Checked.value
-                )
+                lambda state, index=i: self._on_visibility_changed(index, state)
             )
             self.visibility_checkboxes.append(checkbox)
-            visibility_layout.addWidget(checkbox)
+            layer_layout.addWidget(checkbox)
+            visibility_layout.addLayout(layer_layout)
+
         self.visibility_groupbox.setLayout(visibility_layout)
         self.control_layout.addWidget(self.visibility_groupbox)
         self.control_layout.addStretch()
@@ -163,9 +208,97 @@ class AlignmentPreviewDialog(QDialog):
         main_layout.addLayout(self.button_layout)
         self.setLayout(main_layout)
 
+        if self.can_edit:
+            self.update_offset_label()
+
     def _on_contrast_checkbox_changed(self, state):
         self.adjust_contrast = self.enhance_contrast_checkbox.isChecked()
         self.create_direct_overlay()
+
+    def _on_layer_selected(self, index: int):
+        """Called when a different moving layer is selected for editing."""
+        self.selected_moving_index = index
+        self.update_offset_label()
+
+    def _on_visibility_changed(self, index: int, state):
+        """Called when a moving layer visibility checkbox is toggled."""
+        visible = state == Qt.CheckState.Checked.value
+        self.image_view.toggle_moving_item_visibility(index, visible)
+
+        # If editing is enabled and this layer is hidden, deselect it
+        if self.can_edit and not visible and index == self.selected_moving_index:
+            # Try to select another visible layer
+            for i in range(len(self.moving_images)):
+                if i != index and self.visibility_checkboxes[i].isChecked():
+                    self.selection_buttons[i].setChecked(True)
+                    break
+
+    def _setup_editable_controls(self):
+        """Create UI controls for when manual editing is enabled."""
+        trans_group = QGroupBox("Translate (Display Pixels)")
+        trans_layout = QHBoxLayout()
+        int_validator = NullableIntValidator(-99999, 99999)
+
+        self.dx_input = QLineEdit("0")
+        self.dx_input.setValidator(int_validator)
+        self.dx_input.setFixedWidth(50)
+
+        self.dy_input = QLineEdit("0")
+        self.dy_input.setValidator(int_validator)
+        self.dy_input.setFixedWidth(50)
+
+        self.apply_trans_button = QPushButton("Apply")
+        trans_layout.addWidget(QLabel("dx:"))
+        trans_layout.addWidget(self.dx_input)
+        trans_layout.addWidget(QLabel("dy:"))
+        trans_layout.addWidget(self.dy_input)
+        trans_layout.addWidget(self.apply_trans_button)
+        trans_group.setLayout(trans_layout)
+
+        rot_group = QGroupBox("Rotate (°)")
+        rot_layout = QHBoxLayout()
+        self.rotation_input = QLineEdit()
+        self.rotation_input.setPlaceholderText("Angle")
+        self.rotation_input.setValidator(QDoubleValidator(-360.0, 360.0, 6))
+        self.rotate_button = QPushButton("Apply")
+        rot_layout.addWidget(self.rotation_input)
+        rot_layout.addWidget(self.rotate_button)
+        rot_group.setLayout(rot_layout)
+
+        scale_group = QGroupBox("Scale")
+        scale_layout = QHBoxLayout()
+        self.scale_input = QLineEdit()
+        self.scale_input.setPlaceholderText("1.0")
+        self.scale_input.setValidator(QDoubleValidator(0.000001, 10000, 6))
+        self.scale_button = QPushButton("Apply")
+        scale_layout.addWidget(self.scale_input)
+        scale_layout.addWidget(self.scale_button)
+        scale_group.setLayout(scale_layout)
+
+        flip_group = QGroupBox("Flip")
+        flip_layout = QHBoxLayout()
+        self.flip_horizontal_btn = QPushButton("Flip Horizontal")
+        self.flip_vertical_btn = QPushButton("Flip Vertical")
+        flip_layout.addWidget(self.flip_horizontal_btn)
+        flip_layout.addWidget(self.flip_vertical_btn)
+        flip_group.setLayout(flip_layout)
+
+        self.apply_trans_button.clicked.connect(self.apply_manual_translation)
+        self.rotate_button.clicked.connect(self.apply_rotation)
+        self.scale_button.clicked.connect(self.apply_scale)
+        self.flip_horizontal_btn.clicked.connect(self.apply_flip_horizontal)
+        self.flip_vertical_btn.clicked.connect(self.apply_flip_vertical)
+
+        self.reset_button = QPushButton("Reset Transformations")
+        self.reset_button.clicked.connect(self.reset_transformations)
+
+        self.control_layout.addWidget(trans_group)
+        self.control_layout.addWidget(rot_group)
+        self.control_layout.addWidget(scale_group)
+        self.control_layout.addWidget(flip_group)
+        self.control_layout.addStretch()
+        self.control_layout.addWidget(self.reset_button)
+        self._setup_confirm_cancel_buttons()
 
     def _setup_confirm_cancel_buttons(self):
         self.confirm_button = QPushButton("Confirm Alignment")
@@ -184,15 +317,248 @@ class AlignmentPreviewDialog(QDialog):
         self.button_layout.addWidget(self.close_button)
         self.button_layout.addStretch()
 
+    def apply_manual_translation(self):
+        """Applies translation based on the dx/dy input fields to selected moving image."""
+        if self.selected_moving_index < 0 or self.selected_moving_index >= len(self.moving_images):
+            return
+
+        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+            QMessageBox.warning(
+                self,
+                "Layer Hidden",
+                "Cannot edit a hidden layer. Please make the layer visible first.",
+            )
+            return
+
+        try:
+            xtext = self.dx_input.text()
+            ytext = self.dy_input.text()
+            if xtext == "":
+                xtext = "0"
+            if ytext == "":
+                ytext = "0"
+            dx = int(xtext)
+            dy = int(ytext)
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                "Invalid Input",
+                "Please enter valid integer values for dx and dy.",
+            )
+            return
+
+        if dx == 0 and dy == 0:
+            return
+
+        self.move_aligned_image(dx, dy)
+
+    def apply_rotation(self):
+        """Apply rotation to selected moving image."""
+        if self.selected_moving_index < 0 or self.selected_moving_index >= len(self.moving_images):
+            return
+
+        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+            QMessageBox.warning(
+                self,
+                "Layer Hidden",
+                "Cannot edit a hidden layer. Please make the layer visible first.",
+            )
+            return
+
+        if not self.rotation_input.text():
+            return
+
+        try:
+            angle = float(self.rotation_input.text())
+            item = self.image_view.moving_items[self.selected_moving_index]
+            transform = item.transform()
+            center = item.boundingRect().center()
+
+            t = QTransform()
+            t.translate(center.x(), center.y())
+            t.rotate(angle)
+            t.translate(-center.x(), -center.y())
+
+            item.setTransform(transform * t)
+            self.update_offset_label()
+        except ValueError:
+            QMessageBox.warning(
+                self, "Invalid Input", "Please enter a valid rotation angle."
+            )
+
+    def apply_scale(self):
+        """Apply scale to selected moving image."""
+        if self.selected_moving_index < 0 or self.selected_moving_index >= len(self.moving_images):
+            return
+
+        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+            QMessageBox.warning(
+                self,
+                "Layer Hidden",
+                "Cannot edit a hidden layer. Please make the layer visible first.",
+            )
+            return
+
+        if not self.scale_input.text():
+            return
+
+        try:
+            scale = float(self.scale_input.text())
+            item = self.image_view.moving_items[self.selected_moving_index]
+            transform = item.transform()
+            center = item.boundingRect().center()
+
+            t = QTransform()
+            t.translate(center.x(), center.y())
+            t.scale(scale, scale)
+            t.translate(-center.x(), -center.y())
+
+            item.setTransform(transform * t)
+            self.update_offset_label()
+        except ValueError:
+            QMessageBox.warning(
+                self, "Invalid Input", "Please enter a valid scale factor."
+            )
+
+    def apply_flip_horizontal(self):
+        """Apply horizontal flip to selected moving image."""
+        if self.selected_moving_index < 0 or self.selected_moving_index >= len(self.moving_images):
+            return
+
+        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+            QMessageBox.warning(
+                self,
+                "Layer Hidden",
+                "Cannot edit a hidden layer. Please make the layer visible first.",
+            )
+            return
+
+        item = self.image_view.moving_items[self.selected_moving_index]
+        transform = item.transform()
+        center = item.boundingRect().center()
+
+        t = QTransform()
+        t.translate(center.x(), center.y())
+        t.scale(-1, 1)
+        t.translate(-center.x(), -center.y())
+
+        item.setTransform(transform * t)
+        self.update_offset_label()
+
+    def apply_flip_vertical(self):
+        """Apply vertical flip to selected moving image."""
+        if self.selected_moving_index < 0 or self.selected_moving_index >= len(self.moving_images):
+            return
+
+        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+            QMessageBox.warning(
+                self,
+                "Layer Hidden",
+                "Cannot edit a hidden layer. Please make the layer visible first.",
+            )
+            return
+
+        item = self.image_view.moving_items[self.selected_moving_index]
+        transform = item.transform()
+        center = item.boundingRect().center()
+
+        t = QTransform()
+        t.translate(center.x(), center.y())
+        t.scale(1, -1)
+        t.translate(-center.x(), -center.y())
+
+        item.setTransform(transform * t)
+        self.update_offset_label()
+
+    def move_aligned_image(self, dx, dy):
+        """Move the selected moving image by dx, dy pixels."""
+        if self.selected_moving_index < 0 or self.selected_moving_index >= len(self.moving_images):
+            return
+
+        item = self.image_view.moving_items[self.selected_moving_index]
+        transform = item.transform()
+        transform.translate(dx, dy)
+        item.setTransform(transform)
+        self.update_offset_label()
+
+    def update_offset_label(self):
+        """Update the label showing the current transformation matrix of selected moving image."""
+        if self.selected_moving_index < 0 or self.selected_moving_index >= len(self.image_view.moving_items):
+            self.offset_label.setText("No layer selected")
+            return
+
+        item = self.image_view.moving_items[self.selected_moving_index]
+        transform_matrix = item.transform()
+        transform_text = readable_matrix_string(transform_to_matrix(transform_matrix))
+        self.offset_label.setText(f"Layer {self.selected_moving_index + 1}: {transform_text}")
+
+    def reset_transformations(self):
+        """Reset all transformations on all moving images."""
+        for item in self.image_view.moving_items:
+            item.resetTransform()
+        self.image_view.reset_zoom()
+        self.update_offset_label()
+
     def accept_alignment(self):
+        """Accept the alignment and emit transformed images if editing was enabled."""
         self.result_accepted = True
+
+        if self.can_edit and self.can_emit:
+            # Apply transformations to original images and emit them
+            transformed_images = []
+            transformation_matrices_list = []
+
+            h, w = self.target_image.shape[:2]
+
+            for i, item in enumerate(self.image_view.moving_items):
+                final_transformation = item.transform()
+                transf_matrix = transform_to_matrix(final_transformation)
+                transformation_matrices_list.append(transf_matrix)
+
+                final_image = cv2.warpAffine(
+                    self.original_moving_images[i], transf_matrix, (w, h)
+                )
+                transformed_images.append(final_image)
+
+            self.transformation_matrices.emit(transformation_matrices_list)
+            self.moving_images_changed.emit(transformed_images)
+
         self.accept()
 
     def keyPressEvent(self, event: QKeyEvent):
+        """Handle keyboard events for arrow key movement when editing."""
         if not self.can_edit:
             super().keyPressEvent(event)
             return
-        # Editable key events would go here
+
+        # Prevent arrow keys from being processed if a text input has focus
+        if self.focusWidget() in [
+            self.dx_input,
+            self.dy_input,
+            self.rotation_input,
+            self.scale_input,
+        ]:
+            super().keyPressEvent(event)
+            return
+
+        # Check if selected layer is visible
+        if self.selected_moving_index >= 0 and not self.visibility_checkboxes[
+            self.selected_moving_index
+        ].isChecked():
+            super().keyPressEvent(event)
+            return
+
+        key_map = {
+            Qt.Key.Key_Left: (-self.move_step, 0),
+            Qt.Key.Key_Right: (self.move_step, 0),
+            Qt.Key.Key_Up: (0, -self.move_step),
+            Qt.Key.Key_Down: (0, self.move_step),
+        }
+
+        if event.key() in key_map:
+            self.move_aligned_image(*key_map[event.key()])
+        else:
+            super().keyPressEvent(event)
 
     def create_direct_overlay(self):
         target_img = self.target_image
@@ -229,6 +595,19 @@ class AlignmentPreviewDialog(QDialog):
         self.image_view.reset_zoom()
         if event:
             event.accept()
+
+
+def readable_matrix_string(matrix: np.ndarray) -> str:
+    """Convert a 2x3 transformation matrix to a human-readable string."""
+    if matrix.shape != (2, 3):
+        return str(matrix)
+    a, b, tx = matrix[0]
+    c, d, ty = matrix[1]
+    angle_rad = math.atan2(c, a)
+    angle_deg = math.degrees(angle_rad)
+    scale_x = math.sqrt(a**2 + c**2)
+    scale_y = math.sqrt(b**2 + d**2)
+    return f"Translation: ({tx:.2f}, {ty:.2f}), Rotation: {angle_deg:.2f}°, Scale: (x: {scale_x:.2f}, y: {scale_y:.2f})"
 
 
 def colorize_grayscale(gray_img: np.ndarray, color: str) -> QPixmap:

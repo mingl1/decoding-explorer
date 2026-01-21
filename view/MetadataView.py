@@ -28,6 +28,7 @@ class MetadataView(QWidget):
     generate_beads_sig = pyqtSignal()
     protein_files_uploaded = pyqtSignal(list)
     upload_beads_sig = pyqtSignal()
+    manually_align_sig = pyqtSignal()
 
     def __init__(self, parent, vm: MetadataVM):
         super().__init__(parent)
@@ -157,6 +158,9 @@ class MetadataView(QWidget):
         self.align_channels_btn = QPushButton("Align to Reference")
         self.align_channels_btn.clicked.connect(self.vm.align_channels)
 
+        self.manually_align_btn = QPushButton("Manually Align Selected")
+        self.manually_align_btn.clicked.connect(self.manually_align_sig.emit)
+
         # StarDist controls
         self.use_stardist_checkbox = QCheckBox("Use StarDist(Recommended)")
         self.use_stardist_checkbox.setChecked(True)
@@ -251,6 +255,7 @@ class MetadataView(QWidget):
         self.apply_shading_checkbox = QCheckBox("Apply shading correction")
         self.apply_shading_checkbox.setChecked(True)
         self.form_layout.addRow(self.align_channels_btn)
+        self.form_layout.addRow(self.manually_align_btn)
         self.form_layout.addRow(self.apply_shading_checkbox)
         self._section_widgets["align_arrays"] = [
             self.num_tiles_label,
@@ -260,6 +265,7 @@ class MetadataView(QWidget):
             self.ncc_thresh_label,
             self.threshold_container,
             self.align_channels_btn,
+            self.manually_align_btn,
             self.apply_shading_checkbox,
             align_arrays_sep,
         ]

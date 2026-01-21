@@ -4,6 +4,8 @@ import sys
 import warnings
 from typing import List
 
+import cv2
+import numpy as np
 from pandas import DataFrame
 from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
 from PyQt6.QtWidgets import (
@@ -25,12 +27,14 @@ from PyQt6.QtWidgets import (
 )
 
 from model.file_item import FileItem
+from model.status_enum import FileStatus
 from utils import find_min_std_partition, is_dark_mode
+from view.alignment_preview_dialog import AlignmentPreviewDialog
 from view.CycleAssignmentWidget import CycleAssignmentWidget
 from view.FileListWidget import FileTableWidget
 from view.MetadataView import MetadataView
 from view.roi_inspector import ROI_Inspector
-from viewmodel.file_manager_vm import FileManagerVM
+from viewmodel.file_manager_vm import FileManagerVM, load_image
 from viewmodel.metadata_vm import MetadataVM
 
 warnings.filterwarnings("ignore")
@@ -119,6 +123,7 @@ class MainWindow(QMainWindow):
         self.metadata_view.export_all_sig.connect(self.vm.export_files)
         self.metadata_view.generate_beads_sig.connect(self.start_bead_generation)
         self.metadata_view.upload_beads_sig.connect(self.upload_bead_csv)
+        self.metadata_view.manually_align_sig.connect(self.start_manual_alignment)
         self.metadata_vm.inspect_beads_sig.connect(self.vm.inspect_beads)
         self.metadata_view.protein_files_uploaded.connect(
             self.metadata_vm.set_protein_files
@@ -390,6 +395,124 @@ class MainWindow(QMainWindow):
                     reference_item, self.metadata_vm.protein_df
                 )
                 self.metadata_view.collapse_processing_sections()
+
+    def start_manual_alignment(self):
+        """Open manual alignment dialog for selected files."""
+        selected_files = self.get_selected_files()
+        if not selected_files:
+            self.show_error("No files selected for manual alignment.")
+            return
+
+        reference_item = self.vm.reference_item
+        if not reference_item:
+            self.show_error("Please set a reference image first.")
+            return
+
+        # Get brightfield image from reference
+        target_image = self.vm._get_brightfield_image(reference_item)
+        if target_image is None:
+            self.show_error("Could not load reference image for preview.")
+            return
+
+        # Separate reference from other files
+        files_for_assignment = [
+            f for f in selected_files if f.path != reference_item.path
+        ]
+
+        if not files_for_assignment:
+            self.show_error("Please select at least one file besides the reference to align.")
+            return
+
+        # Use CycleAssignmentWidget to assign files
+        dialog = CycleAssignmentWidget(files_for_assignment, self)
+        if not dialog.exec():
+            return
+
+        assignments_from_dialog = dialog.get_assignments()
+        if assignments_from_dialog is None:
+            self.show_error("Each file must be assigned to exactly one cycle.")
+            return
+
+        # Get moving images from assigned files
+        moving_images = []
+        assigned_files = []
+        for cycle_num in sorted(assignments_from_dialog.keys()):
+            file_item = assignments_from_dialog[cycle_num]
+            moving_img = self.vm._get_brightfield_image(file_item)
+            if moving_img is None:
+                self.show_error(f"Could not load image for {os.path.basename(file_item.path)}")
+                return
+            moving_images.append(moving_img)
+            assigned_files.append(file_item)
+
+        # Open alignment preview dialog in edit mode
+        preview_dialog = AlignmentPreviewDialog(
+            target_image,
+            moving_images,
+            can_edit=True,
+            can_emit=True
+        )
+
+        # Store assigned files in dialog for later use
+        preview_dialog.assigned_files = assigned_files
+
+        # Connect signals to handle transformed results
+        preview_dialog.transformation_matrices.connect(
+            lambda matrices: self._on_manual_alignment_complete(
+                matrices, assigned_files
+            )
+        )
+
+        preview_dialog.exec()
+
+    def _on_manual_alignment_complete(
+        self,
+        transformation_matrices: list[np.ndarray],
+        assigned_files: list[FileItem]
+    ):
+        """Handle completion of manual alignment."""
+        if len(transformation_matrices) != len(assigned_files):
+            self.show_error("Mismatch between transformation matrices and assigned files.")
+            return
+
+        to_be_updated = []
+        for i, file_item in enumerate(assigned_files):
+            my_f = self.vm.files.get(file_item.path)
+            if not my_f:
+                continue
+
+            # Get the full multi-channel image
+            full_image = my_f.working_image if my_f.working_image is not None else load_image(my_f)
+            transf_matrix = transformation_matrices[i]
+
+            # Apply the transformation to all channels
+            if len(full_image.shape) == 2:
+                # Single channel image
+                h, w = full_image.shape
+                my_f.working_image = cv2.warpAffine(full_image, transf_matrix, (w, h))
+            else:
+                # Multi-channel image - apply transformation to all channels
+                num_channels, h, w = full_image.shape
+                transformed_full = np.zeros_like(full_image)
+
+                for ch in range(num_channels):
+                    transformed_full[ch] = cv2.warpAffine(
+                        full_image[ch], transf_matrix, (w, h)
+                    )
+
+                my_f.working_image = transformed_full
+
+            my_f.status = FileStatus.ALIGNED
+            my_f.metadata.prefix = FileStatus.ALIGNED.name.lower()
+            to_be_updated.append(my_f)
+
+        if to_be_updated:
+            self.vm.file_information_update.emit(to_be_updated)
+            QMessageBox.information(
+                self,
+                "Alignment Complete",
+                f"Successfully aligned {len(to_be_updated)} image(s)."
+            )
 
     def update_progress(self, value, message):
         if not self.progress_bar.isVisible():
