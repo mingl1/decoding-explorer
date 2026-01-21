@@ -157,15 +157,16 @@ class FileManagerVM(QObject):
 
     def _get_brightfield_image(self, file_item: FileItem) -> Optional[np.ndarray]:
         """Retrieve the brightfield image from the file item, considering shading correction."""
+        max_size = int(file_item.metadata.max_size)
         image = load_image(file_item)
         bf_channel = int(file_item.metadata.reference_channel)
         if file_item.working_image is not None:
             # If shade corrected or aligned image exists, use it
             if len(file_item.working_image.shape) == 2:
-                return file_item.working_image
+                return file_item.working_image[:max_size, :max_size]
             elif len(file_item.working_image.shape) > 2:
                 if bf_channel < file_item.working_image.shape[0]:
-                    return file_item.working_image[bf_channel]
+                    return file_item.working_image[bf_channel, :max_size, :max_size]
                 else:
                     self.align_error.emit(
                         f"Brightfield channel {bf_channel} exceeds number of channels in working image for file {os.path.basename(file_item.path)}."
@@ -174,14 +175,14 @@ class FileManagerVM(QObject):
         # Fallback to original image
         if len(image.shape) > 2:
             if bf_channel < image.shape[0]:
-                return image[bf_channel]
+                return image[bf_channel, :max_size, :max_size]
             else:
                 self.align_error.emit(
                     f"Brightfield channel {bf_channel} exceeds number of channels in original image for file {os.path.basename(file_item.path)}."
                 )
                 return None
         elif len(image.shape) == 2:
-            return image
+            return image[:max_size, :max_size]
         return None
 
     def _get_status_from_filename(self, file_path: str) -> FileStatus:
@@ -267,6 +268,63 @@ class FileManagerVM(QObject):
             my_f.metadata.prefix = FileStatus.SHADE_CORRECTED.name.lower()
             to_be_updated.append(my_f)
         self.file_information_update.emit(to_be_updated)
+
+    def apply_crop(
+        self,
+        file_items: list[FileItem],
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int
+    ):
+        """
+        Apply crop to selected files by updating working_image.
+
+        Args:
+            file_items: Files to crop
+            x1, y1: Top-left corner coordinates
+            x2, y2: Bottom-right corner coordinates
+        """
+        to_be_updated = []
+
+        for f in file_items:
+            my_f = self.files.get(f.path)
+            if not my_f:
+                continue
+
+            # Get full image (use working_image if available, otherwise load original)
+            if my_f.working_image is not None:
+                full_image = my_f.working_image
+            else:
+                full_image = np.array(load_image(my_f))
+
+            # Validate bounds
+            if len(full_image.shape) == 3:
+                num_channels, h, w = full_image.shape
+            else:
+                h, w = full_image.shape
+
+            if x1 < 0 or y1 < 0 or x2 > w or y2 > h or x2 <= x1 or y2 <= y1:
+                print(f"Invalid crop bounds for {my_f.path}: ({x1},{y1}) to ({x2},{y2})")
+                continue
+
+            # Apply crop to all channels
+            if len(full_image.shape) == 3:
+                cropped = full_image[:, y1:y2, x1:x2]
+            else:
+                cropped = full_image[y1:y2, x1:x2]
+
+            # Update FileItem
+            my_f.working_image = cropped
+            my_f.shape = cropped.shape
+
+            # Update metadata crop_bounds for reference
+            my_f.metadata.crop_bounds = (x1, y1, x2, y2)
+
+            to_be_updated.append(my_f)
+
+        if to_be_updated:
+            self.file_information_update.emit(to_be_updated)
 
     # appy metadata changes to selected files
     def apply_metadata(self, metadata_changes: dict, selected_files: list[FileItem]):

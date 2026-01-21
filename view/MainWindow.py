@@ -30,6 +30,7 @@ from model.file_item import FileItem
 from model.status_enum import FileStatus
 from utils import find_min_std_partition, is_dark_mode
 from view.alignment_preview_dialog import AlignmentPreviewDialog
+from view.CropDialog import CropDialog
 from view.CycleAssignmentWidget import CycleAssignmentWidget
 from view.FileListWidget import FileTableWidget
 from view.MetadataView import MetadataView
@@ -124,6 +125,7 @@ class MainWindow(QMainWindow):
         self.metadata_view.generate_beads_sig.connect(self.start_bead_generation)
         self.metadata_view.upload_beads_sig.connect(self.upload_bead_csv)
         self.metadata_view.manually_align_sig.connect(self.start_manual_alignment)
+        self.metadata_view.crop_selected_sig.connect(self.start_crop)
         self.metadata_vm.inspect_beads_sig.connect(self.vm.inspect_beads)
         self.metadata_view.protein_files_uploaded.connect(
             self.metadata_vm.set_protein_files
@@ -513,6 +515,94 @@ class MainWindow(QMainWindow):
                 "Alignment Complete",
                 f"Successfully aligned {len(to_be_updated)} image(s)."
             )
+
+    def start_crop(self):
+        """Handle crop operation for single or multiple files."""
+        selected_files = self.get_selected_files()
+        if not selected_files:
+            self.show_error("No files selected for cropping.")
+            return
+
+        # Single file mode
+        if len(selected_files) == 1:
+            file_item = selected_files[0]
+            image = self.vm._get_brightfield_image(file_item)
+            if image is None:
+                self.show_error("Could not load image.")
+                return
+
+            dialog = CropDialog([image], self)
+            dialog.crop_confirmed.connect(
+                lambda x1, y1, x2, y2: self._apply_crop_single(file_item, x1, y1, x2, y2)
+            )
+            dialog.exec()
+
+        # Multi-file mode
+        else:
+            reference_item = self.vm.reference_item
+            if not reference_item:
+                self.show_error("Please set a reference image first.")
+                return
+
+            # Check reference is in selection
+            if reference_item.path not in [f.path for f in selected_files]:
+                self.show_error("Reference file must be included in selection for multi-file crop.")
+                return
+
+            # Filter reference from assignment
+            files_for_assignment = [
+                f for f in selected_files if f.path != reference_item.path
+            ]
+
+            if not files_for_assignment:
+                self.show_error("Please select at least one file besides the reference.")
+                return
+
+            # Use CycleAssignmentWidget
+            dialog = CycleAssignmentWidget(files_for_assignment, self)
+            if not dialog.exec():
+                return
+
+            assignments = dialog.get_assignments()
+            if assignments is None:
+                self.show_error("Each file must be assigned to exactly one cycle.")
+                return
+
+            # Load images for overlay
+            target_image = self.vm._get_brightfield_image(reference_item)
+            moving_images = []
+            assigned_files = [reference_item]  # Reference first
+
+            for cycle_num in sorted(assignments.keys()):
+                file_item = assignments[cycle_num]
+                img = self.vm._get_brightfield_image(file_item)
+                if img is None:
+                    self.show_error(f"Could not load {os.path.basename(file_item.path)}")
+                    return
+                moving_images.append(img)
+                assigned_files.append(file_item)
+
+            # Create overlay crop dialog
+            all_images = [target_image] + moving_images
+            crop_dialog = CropDialog(all_images, self)
+            crop_dialog.crop_confirmed.connect(
+                lambda x1, y1, x2, y2: self._apply_crop_multiple(assigned_files, x1, y1, x2, y2)
+            )
+            crop_dialog.exec()
+
+    def _apply_crop_single(self, file_item: FileItem, x1: int, y1: int, x2: int, y2: int):
+        """Apply crop to single file."""
+        self.vm.apply_crop([file_item], x1, y1, x2, y2)
+        QMessageBox.information(self, "Crop Complete", "Image cropped successfully.")
+
+    def _apply_crop_multiple(self, file_items: list[FileItem], x1: int, y1: int, x2: int, y2: int):
+        """Apply crop to multiple files."""
+        self.vm.apply_crop(file_items, x1, y1, x2, y2)
+        QMessageBox.information(
+            self,
+            "Crop Complete",
+            f"Successfully cropped {len(file_items)} image(s)."
+        )
 
     def update_progress(self, value, message):
         if not self.progress_bar.isVisible():

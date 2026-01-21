@@ -29,6 +29,7 @@ class MetadataView(QWidget):
     protein_files_uploaded = pyqtSignal(list)
     upload_beads_sig = pyqtSignal()
     manually_align_sig = pyqtSignal()
+    crop_selected_sig = pyqtSignal()
 
     def __init__(self, parent, vm: MetadataVM):
         super().__init__(parent)
@@ -96,12 +97,14 @@ class MetadataView(QWidget):
             "metadata": [],
             "align_arrays": [],
             "bead_generation": [],
+            "crop": [],
             "statistics": [],
         }
         self._section_collapsed = {
             "metadata": False,
             "align_arrays": False,
             "bead_generation": False,
+            "crop": False,
             "statistics": False,
         }
 
@@ -116,7 +119,7 @@ class MetadataView(QWidget):
             widget.setVisible(not collapsed)
 
     def collapse_processing_sections(self):
-        for section in ["metadata", "align_arrays", "bead_generation"]:
+        for section in ["metadata", "align_arrays", "bead_generation", "crop"]:
             self._section_collapsed[section] = True
             for widget in self._section_widgets[section]:
                 widget.setVisible(False)
@@ -251,11 +254,14 @@ class MetadataView(QWidget):
         self.form_layout.addRow(self.num_tiles_label, self.num_tiles_input)
         self.form_layout.addRow(self.overlap_label, self.overlap_input)
         self.form_layout.addRow(self.ncc_thresh_label, self.threshold_container)
+        self.crop_btn = QPushButton("Crop Selected")
+        self.crop_btn.clicked.connect(self.crop_selected_sig.emit)
 
         self.apply_shading_checkbox = QCheckBox("Apply shading correction")
         self.apply_shading_checkbox.setChecked(True)
-        self.form_layout.addRow(self.align_channels_btn)
+        self.form_layout.addRow(self.crop_btn)
         self.form_layout.addRow(self.manually_align_btn)
+        self.form_layout.addRow(self.align_channels_btn)
         self.form_layout.addRow(self.apply_shading_checkbox)
         self._section_widgets["align_arrays"] = [
             self.num_tiles_label,
@@ -266,6 +272,7 @@ class MetadataView(QWidget):
             self.threshold_container,
             self.align_channels_btn,
             self.manually_align_btn,
+            self.crop_btn,
             self.apply_shading_checkbox,
             align_arrays_sep,
         ]
@@ -294,6 +301,18 @@ class MetadataView(QWidget):
             # self.inspect_beads_btn,
             bead_generation_sep,
         ]
+
+        # Crop section
+        # crop_title = make_section_title("Crop", "crop")
+        # crop_sep = make_separator()
+
+        # self.form_layout.addRow(crop_title)
+        # self.form_layout.addRow(crop_sep)
+
+        # self._section_widgets["crop"] = [
+        #     self.crop_btn,
+        #     crop_sep,
+        # ]
 
         self.form_layout.addRow(stats_title)
         self.form_layout.addRow(stats_sep)

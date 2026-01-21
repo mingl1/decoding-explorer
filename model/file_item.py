@@ -22,6 +22,7 @@ class MetaData:
     overlap: int = 250
     num_tiles: int = 10
     flors_layers: list[int] | None = None  # filled in later
+    crop_bounds: Optional[tuple[int, int, int, int]] = None  # (x1, y1, x2, y2)
 
 
 @dataclass
