@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = "==3.10.16"
 dependencies = [
+    "setuptools",
     "astroalign>=2.6.1",
     "csbdeep>=0.8.1",
     "diplib>=3.5.2",
@@ -22,7 +23,6 @@ dependencies = [
     "tifffile>=2025.5.10",
     "stardist",
     "scikit-learn",
-    "setuptools",
     "tensorflow"
 ]
 
