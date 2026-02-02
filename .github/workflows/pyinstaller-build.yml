@@ -30,11 +30,12 @@ jobs:
       - name: Install Visual C++ Redistributable
         if: runner.os == 'Windows'
         run: choco install vcredist2013 vcredist2015 -y
-
+      - name: preinstall
+        run: |
+          uv add --no-build-package llvmlite llvmlite
       - name: Install dependencies (uv sync)
         run: |
           uv sync
-
       - name: Build with PyInstaller (Linux/macOS)
         if: runner.os != 'Windows'
         run: |

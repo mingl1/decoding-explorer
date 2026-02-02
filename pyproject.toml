@@ -23,7 +23,8 @@ dependencies = [
     "tifffile>=2025.5.10",
     "stardist",
     "scikit-learn",
-    "tensorflow"
+    "tensorflow",
+    "llvmlite>=0.45.1",
 ]
 
 
