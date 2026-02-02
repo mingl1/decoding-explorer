@@ -51,6 +51,10 @@ jobs:
             --copy-metadata scanpy \
             --copy-metadata scikit-learn
 
+      - name: use uv env
+        run: |
+          source .venv/bin/activate
+
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
         run: |
