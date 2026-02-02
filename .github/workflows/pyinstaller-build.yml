@@ -48,7 +48,6 @@ jobs:
             --collect-submodules="scikit-learn" \
             --collect-submodules="stardist" \
             --hidden-import="metadata" \
-            --copy-metadata scanpy \
             --copy-metadata scikit-learn
 
       - name: Build with PyInstaller (Windows)
