@@ -33,7 +33,7 @@ jobs:
 
       - name: Install dependencies (uv sync)
         run: |
-          uv sync --frozen
+          uv sync
 
       - name: Build with PyInstaller (Linux/macOS)
         if: runner.os != 'Windows'
