@@ -42,7 +42,7 @@ jobs:
       - name: Build with PyInstaller (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          uv run pyinstaller main.py \
+          pyinstaller main.py \
             --onedir \
             --windowed \
             --name "Decoding-Explorer" \
@@ -58,7 +58,7 @@ jobs:
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
         run: |
-          uv run pyinstaller main.py `
+          pyinstaller main.py `
             --onefile `
             --windowed `
             --name "Decoding-Explorer" `
