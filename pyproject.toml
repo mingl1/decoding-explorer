@@ -25,6 +25,7 @@ dependencies = [
     "scikit-learn",
     "tensorflow",
     "llvmlite>=0.45.1",
+    "pyinstaller>=6.18.0",
 ]
 
 

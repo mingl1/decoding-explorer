@@ -36,13 +36,10 @@ jobs:
       - name: Install dependencies (uv sync)
         run: |
           uv sync
-      - name: use uv env
-        run: |
-          source .venv/bin/activate
       - name: Build with PyInstaller (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          pyinstaller main.py \
+          uv run pyinstaller main.py \
             --onedir \
             --windowed \
             --name "Decoding-Explorer" \
@@ -54,11 +51,10 @@ jobs:
             --copy-metadata scanpy \
             --copy-metadata scikit-learn
 
-
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
         run: |
-          pyinstaller main.py `
+          uv run pyinstaller main.py `
             --onefile `
             --windowed `
             --name "Decoding-Explorer" `
