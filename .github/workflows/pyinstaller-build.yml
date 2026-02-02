@@ -36,6 +36,9 @@ jobs:
       - name: Install dependencies (uv sync)
         run: |
           uv sync
+      - name: use uv env
+        run: |
+          source .venv/bin/activate
       - name: Build with PyInstaller (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
@@ -51,9 +54,6 @@ jobs:
             --copy-metadata scanpy \
             --copy-metadata scikit-learn
 
-      - name: use uv env
-        run: |
-          source .venv/bin/activate
 
       - name: Build with PyInstaller (Windows)
         if: runner.os == 'Windows'
