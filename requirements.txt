@@ -1,7 +1,7 @@
 antspyx==0.6.1
 astroalign==2.6.1
 diplib==3.5.2
-itk-elastix==0.23.0
+itk-elastix
 matplotlib==3.10.3
 numpy==1.26.4
 opencv-contrib-python==4.11.0.86

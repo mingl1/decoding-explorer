@@ -3,6 +3,7 @@ from collections import defaultdict
 from typing import List, Tuple
 
 import cv2
+
 # import diplib as dip
 import numpy as np
 import pandas as pd
@@ -1113,10 +1114,13 @@ def get_labels_from_cycles(
     border_erode=1,
     use_stardist=False,  # Toggle between watershed and StarDist
     model=None,  # StarDist model (required if use_stardist=True)
+    normalize_method="none",  # Exposure normalization method
 ):
     cycle_labels = []
     for i in range(len(cycles)):
-        cycles[i] = process_cycle(cycles[i], cycles_metadata[i])[:max_size, :max_size]
+        cycles[i] = process_cycle(cycles[i], cycles_metadata[i], normalize_method)[
+            :max_size, :max_size
+        ]
 
     for i, cycle in enumerate(cycles):
         flor_layers = cycles_metadata[i].flors_layers
@@ -1209,12 +1213,286 @@ def stardist_segmentation(
     return stardist_labels
 
 
-def process_cycle(cycle, metadata: MetaData):
+def quantile_normalize_layers(cycle_img, flor_layers):
     """
-    Process one imaging cycle:
+    Normalize fluorescence layers to have identical intensity distributions.
+
+    Matches intensity distributions across layers by aligning quantiles.
+    This makes all layers have the same statistical distribution.
+
+    Args:
+        cycle_img: (C, H, W) array
+        flor_layers: List of fluorescence layer indices
+
+    Returns:
+        Normalized cycle_img with matched distributions
+    """
+    cycle_img = cycle_img.copy()
+
+    # Extract fluorescence layers
+    flor_data = cycle_img[flor_layers].astype(np.float32)
+
+    # Compute target distribution (mean across all layers)
+    all_intensities = flor_data.flatten()
+    sorted_target = np.sort(all_intensities)
+
+    # For each layer, match to target distribution
+    for i, layer_idx in enumerate(flor_layers):
+        layer = flor_data[i].flatten()
+        sorted_layer = np.sort(layer)
+        ranks = np.argsort(np.argsort(layer))  # Get rank order
+
+        # Map ranks to target quantiles
+        normalized = sorted_target[ranks].reshape(cycle_img[layer_idx].shape)
+        cycle_img[layer_idx] = np.clip(normalized, 0, 65535).astype(np.uint16)
+
+    return cycle_img
+
+
+def robust_zscore_normalize_layers(cycle_img, flor_layers):
+    """
+    Z-score normalize using median and MAD (Median Absolute Deviation).
+
+    More robust to outliers than standard z-score. Normalizes each layer
+    to have median=0 and MAD-based scale=1.
+
+    Args:
+        cycle_img: (C, H, W) array
+        flor_layers: List of fluorescence layer indices
+
+    Returns:
+        Normalized cycle_img with z-score scaling
+    """
+    cycle_img = cycle_img.copy()
+
+    for layer_idx in flor_layers:
+        layer = cycle_img[layer_idx].astype(np.float32)
+
+        # Robust statistics
+        median = np.median(layer)
+        mad = np.median(np.abs(layer - median))
+        scale = 1.4826 * mad  # Scale factor for normal distribution
+
+        if scale > 1e-8:
+            # Normalize: (x - median) / scale
+            layer_normalized = (layer - median) / scale
+        else:
+            layer_normalized = layer - median
+
+        # Rescale to uint16 range (shift and scale to use full range)
+        # Center around 32768 (middle of uint16 range)
+        layer_rescaled = layer_normalized * 5000 + 32768
+        cycle_img[layer_idx] = np.clip(layer_rescaled, 0, 65535).astype(np.uint16)
+
+    return cycle_img
+
+
+def percentile_match_layers(cycle_img, flor_layers, target_percentiles=None):
+    """
+    Match specific percentiles (1st, 50th, 99th) across layers.
+
+    Uses linear mapping to align key intensity landmarks across all layers.
+    Preserves uint16 range and is robust to outliers.
+
+    Args:
+        cycle_img: (C, H, W) array
+        flor_layers: List of fluorescence layer indices
+        target_percentiles: (p1, p50, p99) target values, or None for mean
+
+    Returns:
+        Normalized cycle_img with matched percentiles
+    """
+    cycle_img = cycle_img.copy()
+
+    if target_percentiles is None:
+        # Compute target as mean across all layers
+        all_data = cycle_img[flor_layers].flatten()
+        p1, p50, p99 = np.percentile(all_data, [1, 50, 99])
+        target_percentiles = (p1, p50, p99)
+
+    for layer_idx in flor_layers:
+        layer = cycle_img[layer_idx].astype(np.float32)
+
+        # Get current percentiles
+        curr_p1, curr_p50, curr_p99 = np.percentile(layer, [1, 50, 99])
+
+        # Linear mapping: map current percentiles to target
+        # Using 1st and 99th for robustness
+        if curr_p99 - curr_p1 > 1e-8:
+            scale = (target_percentiles[2] - target_percentiles[0]) / (
+                curr_p99 - curr_p1
+            )
+            offset = target_percentiles[0] - scale * curr_p1
+
+            layer_normalized = scale * layer + offset
+            cycle_img[layer_idx] = np.clip(layer_normalized, 0, 65535).astype(np.uint16)
+
+    return cycle_img
+
+
+def clahe_normalize_layers(cycle_img, flor_layers, clip_limit=2.0, tile_size=8):
+    """
+    Apply CLAHE to enhance local contrast in each layer.
+
+    CLAHE (Contrast Limited Adaptive Histogram Equalization) enhances
+    local contrast while limiting noise amplification.
+
+    Args:
+        cycle_img: (C, H, W) array
+        flor_layers: List of fluorescence layer indices
+        clip_limit: Contrast limiting threshold
+        tile_size: Size of tiles for local histogram equalization
+
+    Returns:
+        Normalized cycle_img with enhanced local contrast
+    """
+    cycle_img = cycle_img.copy()
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
+
+    for layer_idx in flor_layers:
+        layer = cycle_img[layer_idx]
+
+        # Convert to uint8 for CLAHE
+        layer_uint8 = cv2.normalize(layer, None, 0, 255, cv2.NORM_MINMAX).astype(
+            np.uint8
+        )
+
+        # Apply CLAHE
+        layer_clahe = clahe.apply(layer_uint8)
+
+        # Convert back to uint16
+        cycle_img[layer_idx] = layer_clahe.astype(np.uint16) * 256
+
+    return cycle_img
+
+
+def gain_offset_correction_layers(cycle_img, flor_layers):
+    """
+    Correct gain and offset by estimating background and signal statistics.
+
+    Models acquisition as: observed = gain * signal + offset
+    Estimates background (offset) and signal scale (gain) per layer,
+    then normalizes to common values.
+
+    Args:
+        cycle_img: (C, H, W) array
+        flor_layers: List of fluorescence layer indices
+
+    Returns:
+        Normalized cycle_img with corrected gain and offset
+    """
+    cycle_img = cycle_img.copy()
+
+    # Compute statistics for each layer
+    backgrounds = []
+    signals = []
+
+    for layer_idx in flor_layers:
+        layer = cycle_img[layer_idx].astype(np.float32)
+
+        # Estimate background (5th percentile)
+        bg = np.percentile(layer, 5)
+        backgrounds.append(bg)
+
+        # Estimate signal (95th percentile after bg subtraction)
+        signal = np.percentile(layer - bg, 95)
+        signals.append(signal)
+
+    # Target statistics (median across layers)
+    target_bg = np.median(backgrounds)
+    target_signal = np.median(signals)
+
+    # Correct each layer
+    for i, layer_idx in enumerate(flor_layers):
+        layer = cycle_img[layer_idx].astype(np.float32)
+
+        # Remove background
+        layer_corrected = layer - backgrounds[i]
+
+        # Apply gain correction
+        if signals[i] > 1e-8:
+            gain = target_signal / signals[i]
+            layer_corrected = layer_corrected * gain
+
+        # Add target background
+        layer_corrected = layer_corrected + target_bg
+
+        # Clip to valid range
+        cycle_img[layer_idx] = np.clip(layer_corrected, 0, 65535).astype(np.uint16)
+
+    return cycle_img
+
+
+def enhanced_histogram_matching(cycle_img, flor_layers):
+    """
+    Enhanced version of current histogram matching.
+
+    Improvements over basic histogram matching:
+    1. Use layer with best SNR as reference
+    2. Apply percentile clipping before matching
+    3. Preserve intensity range
+
+    Args:
+        cycle_img: (C, H, W) array
+        flor_layers: List of fluorescence layer indices
+
+    Returns:
+        Normalized cycle_img with matched histograms
+    """
+    cycle_img = cycle_img.copy()
+
+    # Step 1: Select best reference layer (highest signal-to-noise)
+    snr_scores = []
+    for layer_idx in flor_layers:
+        layer = cycle_img[layer_idx].astype(np.float32)
+        signal = np.percentile(layer, 95)
+        noise = np.std(layer[layer < np.percentile(layer, 10)])
+        snr = signal / (noise + 1e-8)
+        snr_scores.append(snr)
+
+    reference_layer_idx = flor_layers[np.argmax(snr_scores)]
+    reference = cycle_img[reference_layer_idx]
+
+    # Step 2: Match all other layers to reference
+    for layer_idx in flor_layers:
+        if layer_idx != reference_layer_idx:
+            layer = cycle_img[layer_idx]
+
+            # Clip extreme values before matching
+            p1, p99 = np.percentile(layer, [1, 99])
+            layer_clipped = np.clip(layer, p1, p99)
+
+            # Match histogram
+            matched = match_histograms(layer_clipped, reference)
+
+            cycle_img[layer_idx] = matched.astype(np.uint16)
+
+    return cycle_img
+
+
+def process_cycle(cycle, metadata: MetaData, normalize_method="none"):
+    """
+    Process one imaging cycle with configurable normalization.
+
     - Leave channels before reference untouched
     - Use (reference_channel+1) as reference, equalize it
     - Match all later channels to the reference, then adjust sigmoid
+    - Apply exposure normalization to fluorescence layers
+
+    Args:
+        cycle: (C, H, W) array
+        metadata: MetaData with reference_channel and flors_layers
+        normalize_method: One of:
+            - 'none': No normalization (current behavior)
+            - 'histogram': Enhanced histogram matching (improved current)
+            - 'percentile': Percentile-based matching (recommended)
+            - 'quantile': Full quantile normalization
+            - 'zscore': Robust z-score normalization
+            - 'clahe': CLAHE local contrast enhancement
+            - 'gain_offset': Gain/offset correction with background subtraction
+
+    Returns:
+        Processed cycle with normalized fluorescence layers
     """
     num_layers = cycle.shape[0]
     processed = []
@@ -1238,7 +1516,24 @@ def process_cycle(cycle, metadata: MetaData):
         # matched = adjust_sigmoid(matched, cutoff=0.1, gain=1)
         processed.append(img_as_uint(matched))
 
-    return np.stack(processed, axis=0)
+    processed = np.stack(processed, axis=0)
+
+    # Apply exposure normalization to fluorescence layers
+    if normalize_method != "none" and metadata.flors_layers is not None:
+        if normalize_method == "percentile":
+            processed = percentile_match_layers(processed, metadata.flors_layers)
+        elif normalize_method == "quantile":
+            processed = quantile_normalize_layers(processed, metadata.flors_layers)
+        elif normalize_method == "zscore":
+            processed = robust_zscore_normalize_layers(processed, metadata.flors_layers)
+        elif normalize_method == "clahe":
+            processed = clahe_normalize_layers(processed, metadata.flors_layers)
+        elif normalize_method == "gain_offset":
+            processed = gain_offset_correction_layers(processed, metadata.flors_layers)
+        elif normalize_method == "histogram":
+            processed = enhanced_histogram_matching(processed, metadata.flors_layers)
+
+    return processed
 
 
 import numpy as np
@@ -1325,6 +1620,7 @@ def get_adaptive_low_percentile(
 
     return low_percentile
 
+
 from utils import resource_path
 
 
@@ -1347,6 +1643,7 @@ def prepare_data_for_resolution(
     fill=True,
     use_stardist=False,  # Toggle between watershed and StarDist
     model_name="model_4_400epoch_no_aug",  # Model path for StarDist
+    normalize_method="none",  # Exposure normalization method
 ):
     """
 
@@ -1416,7 +1713,9 @@ def prepare_data_for_resolution(
     update_progress(10, "Getting activation regions from cycles")
     # Conditionally load StarDist model
     if use_stardist:
-        model = StarDist2D(None, name=model_name, basedir=resource_path("assets/"+model_name))
+        model = StarDist2D(
+            None, name=model_name, basedir=resource_path("assets/" + model_name)
+        )
     else:
         model = None  # Not needed for watershed
 
@@ -1432,6 +1731,7 @@ def prepare_data_for_resolution(
         border_erode=border_erode,
         use_stardist=use_stardist,
         model=model,
+        normalize_method=normalize_method,
     )
 
     update_progress(50, "Assigning beads labels")
