@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Labeling Benchmark Trace Viewer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; background: #0e0e10; color: #e0e0e0; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 16px; color: #fff; }
+  .toolbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 24px; }
+  .toolbar label { font-size: 0.85rem; color: #888; }
+  .toolbar select { font-size: 0.9rem; background: #1a1a2e; color: #e0e0e0; border: 1px solid #2a2a40; border-radius: 4px; padding: 6px 10px; min-width: 360px; }
+
+  .config-bar { display: flex; gap: 24px; flex-wrap: wrap; background: #1a1a2e; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 0.85rem; }
+  .config-bar span { color: #888; }
+  .config-bar b { color: #ccc; }
+
+  /* Summary table */
+  table.summary { width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 0.9rem; }
+  table.summary th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #333; color: #aaa; }
+  table.summary td { padding: 8px 12px; border-bottom: 1px solid #222; }
+  .c-valid { color: #4ade80; }
+  .c-invalid { color: #f87171; }
+  .c-filtered { color: #fb923c; }
+  .c-time { color: #93c5fd; }
+
+  /* Method details */
+  details { background: #161625; border: 1px solid #2a2a40; border-radius: 8px; margin-bottom: 12px; }
+  summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 1rem; }
+  summary:hover { background: #1e1e35; }
+  .method-body { padding: 16px; }
+  h3 { font-size: 0.95rem; color: #aaa; margin: 12px 0 8px; border-bottom: 1px solid #2a2a40; padding-bottom: 4px; }
+  h3:first-child { margin-top: 0; }
+
+  /* Charts */
+  .chart-row { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 12px; }
+  .chart-box { background: #111; border: 1px solid #2a2a40; border-radius: 6px; padding: 12px; }
+  .chart-box h4 { font-size: 0.8rem; color: #888; margin-bottom: 8px; }
+
+  /* Grid results */
+  table.grid { border-collapse: collapse; font-size: 0.8rem; margin-bottom: 12px; }
+  table.grid th, table.grid td { padding: 4px 10px; border: 1px solid #2a2a40; }
+  table.grid tr.best { background: #1a3a1a; }
+
+  /* Voronoi sweep table */
+  table.sweep { border-collapse: collapse; font-size: 0.85rem; margin-bottom: 12px; }
+  table.sweep th { text-align: right; padding: 5px 12px; border-bottom: 2px solid #333; color: #aaa; }
+  table.sweep th:first-child { text-align: left; }
+  table.sweep td { padding: 5px 12px; border-bottom: 1px solid #222; text-align: right; font-variant-numeric: tabular-nums; }
+  table.sweep td:first-child { text-align: left; }
+  table.sweep tr.sweep-best { background: #1a2a3a; }
+
+  /* Voronoi per-cycle */
+  .voronoi-cycles { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
+  .voronoi-cycle { background: #111; border: 1px solid #2a2a40; border-radius: 6px; padding: 10px 16px; font-size: 0.85rem; }
+  .voronoi-cycle .label { color: #888; font-size: 0.75rem; }
+  .voronoi-cycle .val { color: #ccc; font-weight: 600; }
+
+  /* Previews */
+  .previews { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .previews figure { text-align: center; }
+  .previews img { border: 1px solid #333; border-radius: 4px; image-rendering: pixelated; width: 180px; height: auto; }
+  .previews figcaption { font-size: 0.7rem; color: #888; margin-top: 4px; }
+
+  /* Pipeline */
+  dl.pipeline { margin-bottom: 12px; }
+  dl.pipeline dt { font-weight: 600; color: #93c5fd; margin-top: 8px; }
+  dl.pipeline dd { margin-left: 16px; color: #bbb; font-size: 0.85rem; }
+
+  #loading { color: #888; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>Labeling Benchmark Trace Viewer</h1>
+<div class="toolbar">
+  <div>
+    <label>Run:</label><br>
+    <select id="runSelect"><option>Loading...</option></select>
+  </div>
+</div>
+<div id="content"><p id="loading">Fetching runs...</p></div>
+
+<script>
+// --- Auto-load runs from /api/runs ---
+async function init() {
+  try {
+    const resp = await fetch('/api/runs');
+    const runs = await resp.json();
+
+    const sel = document.getElementById('runSelect');
+    sel.innerHTML = '';
+
+    if (runs.length === 0) {
+      sel.innerHTML = '<option>— no runs found —</option>';
+      document.getElementById('content').innerHTML = '<p style="color:#888">No trace.json files found in runs/</p>';
+      return;
+    }
+
+    for (const name of runs) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    }
+
+    sel.addEventListener('change', () => loadRun(sel.value));
+    loadRun(runs[0]);
+  } catch (err) {
+    document.getElementById('content').innerHTML =
+      '<p style="color:#f87171">Failed to fetch runs. Make sure you started the server:<br>' +
+      '<code style="color:#93c5fd">python3 trace_viewer_serve.py</code></p>';
+  }
+}
+
+async function loadRun(name) {
+  document.getElementById('content').innerHTML = '<p id="loading">Loading ' + name + '...</p>';
+  try {
+    const resp = await fetch('/runs/' + encodeURIComponent(name) + '/trace.json');
+    const data = await resp.json();
+    render(data, name);
+  } catch (err) {
+    document.getElementById('content').innerHTML = '<p style="color:red">Error loading trace: ' + err.message + '</p>';
+  }
+}
+
+init();
+
+// --- Render ---
+function render(data, runName) {
+  const el = document.getElementById('content');
+  let html = '';
+
+  // Config bar
+  const cfg = data.config || {};
+  html += '<div class="config-bar">';
+  if (runName) html += '<span>Run: <b>' + esc(runName) + '</b></span>';
+  if (cfg.crop_size) html += '<span>Crop: <b>' + cfg.crop_size + '</b></span>';
+  if (cfg.num_beads != null) html += '<span>Beads: <b>' + cfg.num_beads.toLocaleString() + '</b></span>';
+  if (cfg.num_cycles != null) html += '<span>Cycles: <b>' + cfg.num_cycles + '</b></span>';
+  if (data.timestamp) html += '<span>Time: <b>' + data.timestamp + '</b></span>';
+  for (const [k, v] of Object.entries(cfg)) {
+    if (!['crop_size','num_beads','num_cycles'].includes(k)) {
+      html += '<span>' + esc(k) + ': <b>' + esc(String(v)) + '</b></span>';
+    }
+  }
+  html += '</div>';
+
+  // Summary table
+  const methods = data.methods || {};
+  const names = Object.keys(methods);
+  html += '<table class="summary"><tr><th>Method</th><th>Valid%</th><th>Invalid%</th><th>Filtered%</th><th>Time</th></tr>';
+  for (const name of names) {
+    const m = methods[name];
+    const s = m.final_stats || {};
+    html += '<tr>';
+    html += '<td>' + esc(name) + '</td>';
+    html += '<td class="c-valid">' + fmt(s.valid_pct) + '%</td>';
+    html += '<td class="c-invalid">' + fmt(s.invalid_pct) + '%</td>';
+    html += '<td class="c-filtered">' + fmt(s.filtered_pct) + '%</td>';
+    html += '<td class="c-time">' + (m.elapsed_s != null ? m.elapsed_s.toFixed(1) + 's' : '-') + '</td>';
+    html += '</tr>';
+  }
+  html += '</table>';
+
+  // Per-method details
+  for (const name of names) {
+    const m = methods[name];
+    html += '<details><summary>' + esc(name) + '</summary><div class="method-body">';
+
+    // --- Voronoi analysis ---
+    const vor = m.voronoi_analysis;
+    if (vor) {
+      html += renderVoronoiAnalysis(vor);
+    }
+
+    // --- Margin sweep (pipeline stage) ---
+    const pipeline = m.pipeline || [];
+    const marginStage = pipeline.find(s => s.stage === 'margin_sweep');
+    if (marginStage) {
+      html += renderMarginSweep(marginStage.counts, m.final_stats);
+    }
+
+    // --- Percentile sweep (pipeline stage) ---
+    const sweepStage = pipeline.find(s => s.stage === 'percentile_sweep');
+    if (sweepStage) {
+      html += renderPercentileSweep(sweepStage.counts, m.final_stats);
+    }
+
+    // Optimization
+    const opt = m.optimization || {};
+    if (opt.type === 'sa' && opt.layers) {
+      html += '<h3>SA Optimization</h3><div class="chart-row">';
+      for (const [layerKey, layerData] of Object.entries(opt.layers)) {
+        const steps = layerData.steps || [];
+        if (steps.length === 0) continue;
+        html += '<div class="chart-box"><h4>' + esc(layerKey) + ' — Score</h4>';
+        html += svgLineChart(steps, 'step', 'score', s => s.accepted ? '#4ade80' : '#666', 300, 120);
+        html += '</div>';
+        const cfg2 = opt.config || {};
+        html += '<div class="chart-box"><h4>' + esc(layerKey) + ' — Instances</h4>';
+        html += svgLineChart(steps, 'step', 'n_instances', s => s.accepted ? '#60a5fa' : '#666', 300, 120,
+          cfg2.target_min, cfg2.target_max);
+        html += '</div>';
+      }
+      html += '</div>';
+      for (const [layerKey, layerData] of Object.entries(opt.layers)) {
+        if (layerData.best) {
+          const b = layerData.best;
+          html += '<div style="font-size:0.8rem;color:#aaa;margin-bottom:4px">' + esc(layerKey) +
+            ' best: prob=' + b.prob.toFixed(4) + ' nms=' + b.nms.toFixed(3) + ' n=' + b.n_instances + '</div>';
+        }
+      }
+    } else if (opt.type === 'grid' && opt.results) {
+      html += '<h3>Grid Search</h3>';
+      const results = opt.results.slice().sort((a, b) => a.score - b.score);
+      const bestScore = opt.best ? opt.best.score : (results.length > 0 ? results[0].score : null);
+      const paramKeys = results.length > 0 ? Object.keys(results[0].params) : [];
+      html += '<table class="grid"><tr>';
+      for (const k of paramKeys) html += '<th>' + esc(k) + '</th>';
+      html += '<th>Score (invalid%)</th><th></th></tr>';
+      const maxScore = results.length > 0 ? Math.max(...results.map(r => r.score)) : 1;
+      for (const r of results) {
+        const isBest = r.score === bestScore;
+        html += '<tr' + (isBest ? ' class="best"' : '') + '>';
+        for (const k of paramKeys) html += '<td>' + r.params[k] + '</td>';
+        html += '<td>' + r.score.toFixed(2) + '%</td>';
+        const barW = maxScore > 0 ? (r.score / maxScore * 120) : 0;
+        const barColor = r.score <= 5 ? '#4ade80' : r.score <= 7 ? '#fb923c' : '#f87171';
+        html += '<td><div style="width:' + barW.toFixed(0) + 'px;height:10px;background:' + barColor + ';border-radius:2px;display:inline-block"></div></td>';
+        html += '</tr>';
+      }
+      html += '</table>';
+    }
+
+    // Segmentation previews
+    const segs = m.segmentation || [];
+    if (segs.length > 0) {
+      html += '<h3>Segmentation Previews</h3><div class="previews">';
+      for (const seg of segs) {
+        html += '<figure>';
+        if (seg.preview) {
+          html += '<img src="' + seg.preview + '" alt="cy' + seg.cycle + '_layer' + seg.layer + '">';
+        }
+        html += '<figcaption>cy' + seg.cycle + ' layer' + seg.layer + ' — ' + seg.n_instances + ' instances</figcaption>';
+        html += '</figure>';
+      }
+      html += '</div>';
+    }
+
+    // Median activation stats (equalize_median method)
+    const medianStages = pipeline.filter(s => s.stage.startsWith('median_activation_'));
+    if (medianStages.length > 0) {
+      html += '<h3>Median Activation per Layer</h3>';
+      html += '<table class="grid"><tr><th>Layer</th><th>Instances</th><th>Min</th><th>Mean</th><th>Max</th><th>Range</th></tr>';
+      for (const s of medianStages) {
+        const c = s.counts;
+        const label = s.stage.replace('median_activation_', '');
+        const range = ((c.median_max || 0) - (c.median_min || 0)).toFixed(4);
+        html += '<tr><td>' + esc(label) + '</td><td>' + (c.n_instances || 0) + '</td>';
+        html += '<td>' + (c.median_min != null ? c.median_min : '-') + '</td>';
+        html += '<td>' + (c.median_mean != null ? c.median_mean : '-') + '</td>';
+        html += '<td>' + (c.median_max != null ? c.median_max : '-') + '</td>';
+        html += '<td>' + range + '</td></tr>';
+      }
+      html += '</table>';
+    }
+
+    // Params source
+    const paramsSrc = pipeline.find(s => s.stage === 'params_source');
+    if (paramsSrc) {
+      const c = paramsSrc.counts;
+      html += '<h3>Parameters</h3><div style="font-size:0.85rem;color:#bbb;margin-bottom:12px">';
+      html += 'Source: <b style="color:#93c5fd">' + esc(c.source || 'unknown') + '</b>';
+      for (const [k, v] of Object.entries(c)) {
+        if (k !== 'source') html += ' &middot; ' + esc(k) + ': <b>' + esc(String(v)) + '</b>';
+      }
+      html += '</div>';
+    }
+
+    // Pipeline (excluding already-rendered stages)
+    const skipStages = new Set(['percentile_sweep', 'margin_sweep', 'params_source']);
+    const otherPipeline = pipeline.filter(s => !s.stage.startsWith('median_activation_') && !skipStages.has(s.stage));
+    if (otherPipeline.length > 0) {
+      html += '<h3>Pipeline Stages</h3><dl class="pipeline">';
+      for (const stage of otherPipeline) {
+        html += '<dt>' + esc(stage.stage) + '</dt>';
+        for (const [k, v] of Object.entries(stage.counts)) {
+          if (v != null && typeof v === 'object') {
+            html += '<dd><b>' + esc(k) + '</b></dd>';
+            for (const [k2, v2] of Object.entries(v)) {
+              html += '<dd style="margin-left:32px">' + esc(k2) + ': ' + esc(String(v2)) + '</dd>';
+            }
+          } else {
+            html += '<dd>' + esc(k) + ': ' + esc(String(v)) + '</dd>';
+          }
+        }
+      }
+      html += '</dl>';
+    }
+
+    html += '</div></details>';
+  }
+
+  el.innerHTML = html;
+}
+
+// --- Voronoi analysis renderer ---
+function renderVoronoiAnalysis(vor) {
+  let html = '<h3>Voronoi Median Analysis</h3>';
+
+  html += '<div style="font-size:0.85rem;margin-bottom:12px">';
+  html += 'Total beads: <b>' + vor.n_beads_total.toLocaleString() + '</b>';
+  html += ' &middot; After filter (min_assigned=' + vor.min_assigned_value + '): <b>' + vor.n_beads_after_filter.toLocaleString() + '</b>';
+  const pctKept = (100 * vor.n_beads_after_filter / vor.n_beads_total).toFixed(1);
+  html += ' (' + pctKept + '% kept)';
+  html += '</div>';
+
+  const cycles = vor.per_cycle_stats;
+  if (cycles && Object.keys(cycles).length > 0) {
+    html += '<div class="voronoi-cycles">';
+    for (const [cy, st] of Object.entries(cycles)) {
+      html += '<div class="voronoi-cycle">';
+      html += '<div class="label">' + esc(cy) + '</div>';
+      html += '<div>Mean: <span class="val">' + st.mean_assigned.toFixed(4) + '</span></div>';
+      html += '<div>Median: <span class="val">' + st.median_assigned.toFixed(4) + '</span></div>';
+      html += '<div>Surviving: <span class="val">' + st.n_surviving.toLocaleString() + '</span></div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  return html;
+}
+
+// --- Percentile sweep renderer ---
+function renderPercentileSweep(counts, finalStats) {
+  let html = '<h3>Percentile Sweep — Filtering Tradeoff</h3>';
+
+  const usedThreshold = finalStats ? finalStats.filtered_pct : null;
+  const entries = Object.entries(counts).sort((a, b) => a[1].threshold - b[1].threshold);
+
+  html += '<table class="sweep">';
+  html += '<tr><th style="text-align:left">Percentile</th><th>Threshold</th><th>Valid%</th><th>Invalid%</th><th>Filtered%</th><th>Kept</th></tr>';
+  for (const [pKey, d] of entries) {
+    const kept = d.n_valid + d.n_invalid;
+    const isActive = usedThreshold != null && Math.abs(d.filtered_pct - usedThreshold) < 1.5;
+    html += '<tr' + (isActive ? ' class="sweep-best"' : '') + '>';
+    html += '<td style="text-align:left">' + esc(pKey) + '</td>';
+    html += '<td>' + d.threshold.toFixed(4) + '</td>';
+    html += '<td class="c-valid">' + d.valid_pct.toFixed(1) + '%</td>';
+    html += '<td class="c-invalid">' + d.invalid_pct.toFixed(1) + '%</td>';
+    html += '<td class="c-filtered">' + d.filtered_pct.toFixed(1) + '%</td>';
+    html += '<td>' + kept.toLocaleString() + '</td>';
+    html += '</tr>';
+  }
+  html += '</table>';
+
+  if (entries.length > 1) {
+    html += '<div class="chart-row">';
+    const chartData = entries.map(([pKey, d]) => ({
+      label: pKey,
+      threshold: d.threshold,
+      valid_pct: d.valid_pct,
+      invalid_pct: d.invalid_pct,
+      filtered_pct: d.filtered_pct,
+    }));
+    html += '<div class="chart-box"><h4>Valid% vs Threshold</h4>';
+    html += svgLineChart(chartData, 'threshold', 'valid_pct', '#4ade80', 360, 140);
+    html += '</div>';
+    html += '<div class="chart-box"><h4>Invalid% vs Threshold</h4>';
+    html += svgLineChart(chartData, 'threshold', 'invalid_pct', '#f87171', 360, 140);
+    html += '</div>';
+    html += '<div class="chart-box"><h4>Filtered% vs Threshold</h4>';
+    html += svgLineChart(chartData, 'threshold', 'filtered_pct', '#fb923c', 360, 140);
+    html += '</div>';
+    html += '</div>';
+  }
+
+  return html;
+}
+
+// --- Margin sweep renderer ---
+function renderMarginSweep(counts, finalStats) {
+  let html = '<h3>Margin Ratio Sweep — Confidence Filtering</h3>';
+
+  const entries = Object.entries(counts).sort((a, b) => a[1].min_margin_ratio - b[1].min_margin_ratio);
+
+  html += '<table class="sweep">';
+  html += '<tr><th style="text-align:left">Ratio</th><th>Valid%</th><th>Invalid%</th><th>Filtered%</th><th>Kept</th></tr>';
+  for (const [rKey, d] of entries) {
+    const kept = d.n_valid + d.n_invalid;
+    html += '<tr>';
+    html += '<td style="text-align:left">' + d.min_margin_ratio.toFixed(1) + 'x</td>';
+    html += '<td class="c-valid">' + d.valid_pct.toFixed(1) + '%</td>';
+    html += '<td class="c-invalid">' + d.invalid_pct.toFixed(1) + '%</td>';
+    html += '<td class="c-filtered">' + d.filtered_pct.toFixed(1) + '%</td>';
+    html += '<td>' + kept.toLocaleString() + '</td>';
+    html += '</tr>';
+  }
+  html += '</table>';
+
+  if (entries.length > 1) {
+    html += '<div class="chart-row">';
+    const chartData = entries.map(([rKey, d]) => ({
+      ratio: d.min_margin_ratio,
+      valid_pct: d.valid_pct,
+      invalid_pct: d.invalid_pct,
+    }));
+    html += '<div class="chart-box"><h4>Valid% vs Margin Ratio</h4>';
+    html += svgLineChart(chartData, 'ratio', 'valid_pct', '#4ade80', 360, 140);
+    html += '</div>';
+    html += '<div class="chart-box"><h4>Invalid% vs Margin Ratio</h4>';
+    html += svgLineChart(chartData, 'ratio', 'invalid_pct', '#f87171', 360, 140);
+    html += '</div>';
+    html += '</div>';
+  }
+
+  return html;
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function fmt(v) {
+  return v != null ? Number(v).toFixed(1) : '-';
+}
+
+function svgLineChart(data, xKey, yKey, colorFn, w, h, bandMin, bandMax) {
+  if (data.length === 0) return '';
+  const pad = { t: 8, r: 8, b: 20, l: 48 };
+  const cw = w - pad.l - pad.r;
+  const ch = h - pad.t - pad.b;
+
+  const xs = data.map(d => d[xKey]);
+  const ys = data.map(d => d[yKey]);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys, bandMin != null ? bandMin : Infinity, 0);
+  const yMax = Math.max(...ys, bandMax != null ? bandMax : -Infinity);
+  const xRange = xMax - xMin || 1;
+  const yRange = yMax - yMin || 1;
+
+  const sx = v => pad.l + (v - xMin) / xRange * cw;
+  const sy = v => pad.t + ch - (v - yMin) / yRange * ch;
+
+  let svg = '<svg width="' + w + '" height="' + h + '" xmlns="http://www.w3.org/2000/svg" style="display:block">';
+
+  if (bandMin != null && bandMax != null) {
+    const y1 = sy(bandMax), y2 = sy(bandMin);
+    svg += '<rect x="' + pad.l + '" y="' + y1 + '" width="' + cw + '" height="' + (y2 - y1) +
+      '" fill="rgba(74,222,128,0.1)" />';
+  }
+
+  svg += '<line x1="' + pad.l + '" y1="' + (pad.t + ch) + '" x2="' + (pad.l + cw) + '" y2="' + (pad.t + ch) +
+    '" stroke="#444" />';
+  svg += '<line x1="' + pad.l + '" y1="' + pad.t + '" x2="' + pad.l + '" y2="' + (pad.t + ch) + '" stroke="#444" />';
+
+  svg += '<text x="' + (pad.l - 4) + '" y="' + (pad.t + 4) + '" text-anchor="end" fill="#666" font-size="9">' +
+    yMax.toFixed(1) + '</text>';
+  svg += '<text x="' + (pad.l - 4) + '" y="' + (pad.t + ch) + '" text-anchor="end" fill="#666" font-size="9">' +
+    yMin.toFixed(1) + '</text>';
+
+  let path = '';
+  for (let i = 0; i < data.length; i++) {
+    const x = sx(data[i][xKey]), y = sy(data[i][yKey]);
+    path += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+  }
+  const lineColor = typeof colorFn === 'string' ? colorFn : '#555';
+  svg += '<path d="' + path + '" fill="none" stroke="' + lineColor + '" stroke-width="1.5" />';
+
+  for (let i = 0; i < data.length; i++) {
+    const x = sx(data[i][xKey]), y = sy(data[i][yKey]);
+    const c = typeof colorFn === 'function' ? colorFn(data[i]) : colorFn;
+    svg += '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="3" fill="' + c + '" />';
+  }
+
+  svg += '</svg>';
+  return svg;
+}
+</script>
+</body>
+</html>
