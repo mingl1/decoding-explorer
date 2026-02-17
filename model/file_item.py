@@ -44,3 +44,4 @@ class FileItem:
         None  # mapping cycle number to file item to retrieve brightfield images
     )
     threshold: float = 0.7
+    bead_crop_bounds: Optional[tuple[int, int, int, int]] = None  # (x1, y1, x2, y2)

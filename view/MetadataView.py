@@ -30,6 +30,7 @@ class MetadataView(QWidget):
     upload_beads_sig = pyqtSignal()
     manually_align_sig = pyqtSignal()
     crop_selected_sig = pyqtSignal()
+    crop_beads_sig = pyqtSignal()
 
     def __init__(self, parent, vm: MetadataVM):
         super().__init__(parent)
@@ -182,6 +183,8 @@ class MetadataView(QWidget):
         self.upload_beads_btn.clicked.connect(self.upload_beads_sig.emit)
         self.inspect_beads_btn = QPushButton("Inspect Beads")
         self.inspect_beads_btn.clicked.connect(self.vm.inspect_beads)
+        self.crop_beads_btn = QPushButton("Crop Beads")
+        self.crop_beads_btn.clicked.connect(self.crop_beads_sig.emit)
         stats_title = make_section_title("Statistics", "statistics")
         stats_sep = make_separator()
         self.total_beads_label = QLabel("Total Beads: N/A")
@@ -322,6 +325,7 @@ class MetadataView(QWidget):
         self.form_layout.addRow(self.filtered_beads_label)
         self.form_layout.addRow(self.error_label)
         self.form_layout.addRow(self.inspect_beads_btn)
+        self.form_layout.addRow(self.crop_beads_btn)
         self.form_layout.addRow(self.counts_table_container)
         self._section_widgets["statistics"] = [
             self.total_beads_label,
@@ -329,6 +333,7 @@ class MetadataView(QWidget):
             self.filtered_beads_label,
             self.error_label,
             self.inspect_beads_btn,
+            self.crop_beads_btn,
             self.counts_table_container,
             stats_sep,
         ]

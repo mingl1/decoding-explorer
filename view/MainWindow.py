@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
         self.metadata_view.upload_beads_sig.connect(self.upload_bead_csv)
         self.metadata_view.manually_align_sig.connect(self.start_manual_alignment)
         self.metadata_view.crop_selected_sig.connect(self.start_crop)
+        self.metadata_view.crop_beads_sig.connect(self.start_bead_crop)
         self.metadata_vm.inspect_beads_sig.connect(self.vm.inspect_beads)
         self.metadata_view.protein_files_uploaded.connect(
             self.metadata_vm.set_protein_files
@@ -158,11 +159,17 @@ class MainWindow(QMainWindow):
     ):
         if file_item.beads is None or file_item.beads.empty:
             return
-        total_beads = len(file_item.beads)
 
-        merge_columns = [col for col in file_item.beads.columns if col.startswith("cy")]
+        beads = file_item.beads
+        if file_item.bead_crop_bounds is not None:
+            x1, y1, x2, y2 = file_item.bead_crop_bounds
+            beads = beads[(beads['x'] >= x1) & (beads['x'] < x2) & (beads['y'] >= y1) & (beads['y'] < y2)]
 
-        beads_for_merge = file_item.beads.copy()
+        total_beads = len(beads)
+
+        merge_columns = [col for col in beads.columns if col.startswith("cy")]
+
+        beads_for_merge = beads.copy()
         for col in merge_columns:
             if col not in beads_for_merge.columns:
                 self.show_error(
@@ -238,6 +245,11 @@ class MainWindow(QMainWindow):
         self.roi_inspector.show()
 
     def save_beads(self, beads):
+        # Apply bead crop bounds if set on reference item
+        if self.vm.reference_item and self.vm.reference_item.bead_crop_bounds is not None:
+            x1, y1, x2, y2 = self.vm.reference_item.bead_crop_bounds
+            beads = beads[(beads['x'] >= x1) & (beads['x'] < x2) & (beads['y'] >= y1) & (beads['y'] < y2)]
+
         self.status_label.setText(f"Beads generated: {len(beads)}")
         self.progress_bar.setVisible(False)
         self.cancel_button.setVisible(False)
@@ -608,6 +620,58 @@ class MainWindow(QMainWindow):
                 lambda x1, y1, x2, y2: self._apply_crop_multiple(assigned_files, x1, y1, x2, y2)
             )
             crop_dialog.exec()
+
+    def start_bead_crop(self):
+        """Open CropDialog to select a region for filtering beads."""
+        reference_item = self.vm.reference_item
+        if not reference_item:
+            self.show_error("Please set a reference image first.")
+            return
+
+        if reference_item.beads is None or reference_item.beads.empty:
+            self.show_error("No beads available. Generate or upload beads first.")
+            return
+
+        # Collect brightfield images from cycles
+        images = []
+        if reference_item.cycles:
+            for key in sorted(reference_item.cycles.keys()):
+                images.append(reference_item.cycles[key])
+        elif reference_item.cycle_files:
+            for cycle_num in sorted(reference_item.cycle_files.keys()):
+                img = self.vm._get_brightfield_image(reference_item.cycle_files[cycle_num])
+                if img is not None:
+                    images.append(img)
+
+        if not images:
+            # Fallback to reference brightfield
+            img = self.vm._get_brightfield_image(reference_item)
+            if img is not None:
+                images.append(img)
+
+        if not images:
+            self.show_error("Could not load brightfield images for crop.")
+            return
+
+        total_before = len(reference_item.beads)
+        dialog = CropDialog(images, self)
+        dialog.crop_confirmed.connect(
+            lambda x1, y1, x2, y2: self._apply_bead_crop(reference_item, x1, y1, x2, y2, total_before)
+        )
+        dialog.exec()
+
+    def _apply_bead_crop(self, reference_item: FileItem, x1: int, y1: int, x2: int, y2: int, total_before: int):
+        """Store bead crop bounds and recalculate statistics."""
+        reference_item.bead_crop_bounds = (x1, y1, x2, y2)
+        beads = reference_item.beads
+        filtered = beads[(beads['x'] >= x1) & (beads['x'] < x2) & (beads['y'] >= y1) & (beads['y'] < y2)]
+        total_after = len(filtered)
+        self.calculate_statistics_for_file(reference_item, self.metadata_vm.protein_df)
+        QMessageBox.information(
+            self,
+            "Bead Crop Applied",
+            f"Beads: {total_before} → {total_after} (cropped {total_before - total_after})"
+        )
 
     def _apply_crop_single(self, file_item: FileItem, x1: int, y1: int, x2: int, y2: int):
         """Apply crop to single file."""
