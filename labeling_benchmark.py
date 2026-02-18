@@ -47,6 +47,23 @@ class MetaData:
 
 
 # ---------------------------------------------------------------------------
+# Margin ratio helpers
+# ---------------------------------------------------------------------------
+def _parse_margin_ratios(s: str) -> list[float]:
+    """Parse '1.2' → [1.2]  or  '1.0-1.5' → [1.0, 1.05, 1.1, …, 1.5] (0.05 steps)."""
+    s = str(s)
+    if "-" in s:
+        lo_s, hi_s = s.split("-", 1)
+        lo, hi = float(lo_s), float(hi_s)
+        ratios, r = [], lo
+        while r <= hi + 1e-9:
+            ratios.append(round(r, 4))
+            r += 0.05
+        return ratios
+    return [float(s)]
+
+
+# ---------------------------------------------------------------------------
 # Optimization cache
 # ---------------------------------------------------------------------------
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".benchmark_cache")
@@ -74,11 +91,13 @@ def _save_cache(path: str, data):
 # ---------------------------------------------------------------------------
 # IO
 # ---------------------------------------------------------------------------
-def load_tiff(path: str, crop_size: int) -> np.ndarray:
-    """Load a TIFF and return (C, H, W) cropped to crop_size."""
+def load_tiff(path: str, crop_size: int | None) -> np.ndarray:
+    """Load a TIFF and return (C, H, W) cropped to crop_size. If None, returns full image."""
     img = tifffile.imread(path)
     if img.ndim == 2:
         img = img[np.newaxis]
+    if crop_size is None:
+        return img
     return img[:, :crop_size, :crop_size]
 
 
@@ -1400,8 +1419,9 @@ def benchmark_voronoi_median(
     tracer=None,
     output_folder: str | None = None,
     min_assigned_value: float = 0.1,
-    min_margin_ratio: float = 1.0,
+    min_margin_ratio: float | list[float] = 1.0,
     border_erosion: int = 0,
+    voronoi_cache_path: str | None = None,
 ) -> dict:
     """Run voronoi median labeling end-to-end and print stats."""
     num_cycles = len(cycles)
@@ -1427,37 +1447,70 @@ def benchmark_voronoi_median(
             shape=(crop_size, crop_size),
             min_assigned_value=min_assigned_value,
             border_erosion=border_erosion,
+            voronoi_cache_path=voronoi_cache_path,
         )
     )
     elapsed = time.time() - t0
 
-    # --- Margin ratio sweep: show how filtering on confidence affects quality ---
-    margin_ratios = [1.0, 1.2, 1.5, 2.0, 3.0, 5.0]
-    print(f"\n  Margin ratio sweep (min_assigned_value={min_assigned_value}):")
-    print(f"  {'Ratio':>6}  {'Filt%':>7}  {'Valid%':>7}  {'Invld%':>7}  {'Kept':>6}")
-    print(f"  {'-'*43}")
+    # --- Margin ratio sweep ---
+    # If a list of ratios is given, sweep them and auto-select best valid%-invalid%.
+    # Otherwise fall back to the fixed diagnostic set.
+    if isinstance(min_margin_ratio, (list, tuple)):
+        sweep_ratios = list(min_margin_ratio)
+        auto_select = len(sweep_ratios) > 1
+    else:
+        sweep_ratios = [float(min_margin_ratio)]
+        auto_select = False
+
+    display_ratios = sweep_ratios if auto_select else [1.0, 1.2, 1.5, 2.0, 3.0, 5.0]
+
+    print(f"\n  Margin ratio sweep (min_assigned_value={min_assigned_value}"
+          + (" — auto-selecting best" if auto_select else "") + "):")
+    print(f"  {'Ratio':>6}  {'Filt%':>7}  {'Valid%':>7}  {'Invld%':>7}  {'Score':>7}  {'Kept':>6}")
+    print(f"  {'-'*52}")
 
     margin_sweep = {}
-    for ratio in margin_ratios:
+    for ratio in display_ratios:
         rdf = _build_voronoi_resolved_df(
             bead_df, assigned_layers, assigned_values, min_assigned_value,
             assigned_margins, ratio,
         )
         s = compute_stats(rdf, protein_df, num_cycles)
+        _inv = s["invalid_pct"]
+        _penalty = (_inv - 0.4) / 4 if _inv > 0.4 else 0
+        score = round(s["valid_pct"] - _penalty, 2)
         margin_sweep[f"r{ratio}"] = {
             "min_margin_ratio": ratio,
             "valid_pct": round(s["valid_pct"], 1),
             "invalid_pct": round(s["invalid_pct"], 1),
             "filtered_pct": round(s["filtered_pct"], 1),
+            "score": score,
             "n_valid": s["n_valid"],
             "n_invalid": s["n_invalid"],
             "n_filtered": s["n_filtered"],
         }
         print(
-            f"  {ratio:>5.1f}x  {s['filtered_pct']:>6.1f}%  "
+            f"  {ratio:>5.2f}x  {s['filtered_pct']:>6.1f}%  "
             f"{s['valid_pct']:>6.1f}%  {s['invalid_pct']:>6.1f}%  "
-            f"{s['n_valid'] + s['n_invalid']:>6}"
+            f"{score:>7.2f}  {s['n_valid'] + s['n_invalid']:>6}"
         )
+
+    if auto_select:
+        # Walk from highest ratio (most filtered) down; stop when
+        # the invalid% gain exceeds the valid% gain at that step.
+        desc = sorted(sweep_ratios, reverse=True)
+        selected_margin_ratio = desc[0]  # fallback: most filtered
+        for i in range(1, len(desc)):
+            prev_r, curr_r = desc[i - 1], desc[i]
+            d_valid   = margin_sweep[f"r{curr_r}"]["valid_pct"]   - margin_sweep[f"r{prev_r}"]["valid_pct"]
+            d_invalid = margin_sweep[f"r{curr_r}"]["invalid_pct"] - margin_sweep[f"r{prev_r}"]["invalid_pct"]
+            if 0.9 * d_invalid > d_valid:
+                break  # this step costs more than it gains — keep prev
+            selected_margin_ratio = curr_r  # gain still worth it, keep going
+        print(f"\n  Auto-selected min_margin_ratio={selected_margin_ratio} "
+              f"(next step: Δvalid={d_valid:.1f}% Δinvalid={d_invalid:.1f}%)")
+    else:
+        selected_margin_ratio = sweep_ratios[0]
 
     if tracer:
         tracer.record_pipeline_stage("margin_sweep", margin_sweep)
@@ -1493,12 +1546,12 @@ def benchmark_voronoi_median(
     if tracer:
         tracer.record_pipeline_stage("percentile_sweep", percentile_sweep)
 
-    # --- Primary stats (using both filters) ---
+    # --- Primary stats (using selected ratio) ---
     resolved_df = _build_voronoi_resolved_df(
         bead_df, assigned_layers, assigned_values, min_assigned_value,
-        assigned_margins, min_margin_ratio,
+        assigned_margins, selected_margin_ratio,
     )
-    print(f"\n  Using min_assigned_value={min_assigned_value}, min_margin_ratio={min_margin_ratio}:")
+    print(f"\n  Using min_assigned_value={min_assigned_value}, min_margin_ratio={selected_margin_ratio}:")
     stats = compute_stats(resolved_df, protein_df, num_cycles)
     print_stats(stats)
     stats["elapsed_s"] = elapsed
@@ -1509,6 +1562,15 @@ def benchmark_voronoi_median(
         csv_path = os.path.join(output_folder, f"{name}.csv")
         resolved_df[out_cols].to_csv(csv_path, index=False)
         print(f"  Saved {csv_path}")
+
+        if auto_select:
+            sweep_path = os.path.join(output_folder, "margin_sweep.json")
+            with open(sweep_path, "w") as _sf:
+                json_mod.dump({
+                    "selected_margin_ratio": selected_margin_ratio,
+                    "sweep": margin_sweep,
+                }, _sf, indent=2)
+            print(f"  Saved margin sweep → {sweep_path}")
 
     if tracer:
         tracer.record_pipeline_stage(
@@ -1545,7 +1607,8 @@ def main():
         "--protein-csvs", nargs="+", required=True, help="Protein profile CSV(s)"
     )
     parser.add_argument(
-        "--crop-size", type=int, default=1000, help="Crop size (default 1000)"
+        "--crop-size", type=int, default=None,
+        help="Crop size (default: min of image width and height)"
     )
     parser.add_argument(
         "--stardist-model", default=None, help="Path to StarDist model dir"
@@ -1603,10 +1666,11 @@ def main():
     )
     parser.add_argument(
         "--min-margin-ratio",
-        type=float,
-        default=1.0,
+        type=str,
+        default="1.0",
         help="Voronoi: min best/second-best ratio to keep a bead (default: 1.0 = disabled). "
-        "E.g. 1.5 requires the winning layer to be 50%% stronger than runner-up.",
+        "Single value (e.g. 1.5) or range (e.g. 1.0-1.5) at 0.05 steps; "
+        "range auto-selects the ratio with highest valid%% - invalid%%.",
     )
     parser.add_argument(
         "--border-erosion",
@@ -1619,7 +1683,11 @@ def main():
 
     # Load data
     print("Loading TIFFs...")
-    cy1 = load_tiff(args.cycle1, args.crop_size)
+    cy1 = load_tiff(args.cycle1, None)
+    if args.crop_size is None:
+        args.crop_size = min(cy1.shape[-2], cy1.shape[-1])
+        print(f"Auto crop-size: {args.crop_size} (min of image dims)")
+    cy1 = cy1[:, :args.crop_size, :args.crop_size]
     cy2 = load_tiff(args.cycle2, args.crop_size)
     cycles = [cy1, cy2]
 
@@ -1770,6 +1838,8 @@ def main():
     all_stats = {}
     for method_name in methods:
         if method_name == "voronoi_median":
+            cy1_stem = os.path.splitext(os.path.basename(args.cycle1))[0]
+            _vor_cache = os.path.join(_CACHE_DIR, f"voronoi_{cy1_stem}_{args.crop_size}.npy")
             stats = benchmark_voronoi_median(
                 method_name,
                 bead_df,
@@ -1779,8 +1849,9 @@ def main():
                 crop_size=args.crop_size,
                 tracer=tracer,
                 output_folder=args.output_folder,
-                min_margin_ratio=args.min_margin_ratio,
+                min_margin_ratio=_parse_margin_ratios(args.min_margin_ratio),
                 border_erosion=args.border_erosion,
+                voronoi_cache_path=_vor_cache,
             )
             all_stats[method_name] = stats
             continue

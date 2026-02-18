@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import time
 from datetime import datetime
 
@@ -69,6 +70,7 @@ def voronoi_from_centers_tiled(
     leaf_size=40,
     dtype=np.int32,
     show_progress=True,
+    cache_path=None,
 ):
     """
     Returns:
@@ -78,6 +80,10 @@ def voronoi_from_centers_tiled(
     xy = np.asarray(xy, dtype=np.float64)
     if xy.ndim != 2 or xy.shape[1] != 2:
         raise ValueError("xy must be (N,2) in (x,y) order")
+
+    if cache_path and os.path.exists(cache_path):
+        print(f"  Voronoi: loading from cache {os.path.basename(cache_path)}")
+        return np.load(cache_path)
 
     tree = KDTree(xy, leaf_size=leaf_size)
     labels = np.empty((H, W), dtype=dtype)
@@ -107,6 +113,12 @@ def voronoi_from_centers_tiled(
             pbar.update(1)
 
     pbar.close()
+
+    if cache_path:
+        os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
+        np.save(cache_path, labels)
+        print(f"  Voronoi: saved cache to {os.path.basename(cache_path)}")
+
     return labels
 
 
@@ -266,6 +278,7 @@ class BenchmarkTracer:
         min_assigned_value=0.01,
         border_erosion=0,
         tile=2048,
+        voronoi_cache_path=None,
     ):
         from scipy.ndimage import distance_transform_edt
 
@@ -273,7 +286,7 @@ class BenchmarkTracer:
         N = len(xy)
 
         # a. Build voronoi regions
-        vor_lbl = voronoi_from_centers_tiled(xy, shape, tile=tile)
+        vor_lbl = voronoi_from_centers_tiled(xy, shape, tile=tile, cache_path=voronoi_cache_path)
         H0 = min(max_size, shape[0])
         W0 = min(max_size, shape[1])
         vor = vor_lbl[:H0, :W0]

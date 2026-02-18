@@ -1,0 +1,146 @@
+{
+  "input_dir": "H:/unprocessed/aligned_corrected",
+  "output_dir": "./KC_out_aggressive",
+  "runs": [
+    {
+      "name": "KC22 262",
+      "bead_df": "KC22 262/bead_df.csv",
+      "results_df": "KC22 262/results_df.csv",
+      "protein_profiles": [
+        "KC22 262/Lupus Biotin.csv",
+        "KC22 262/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC22 262/corrected_KC22 262 Cycle 1.ome.tif",
+        "cycle2": "KC22 262/aligned_KC22 262 Cycle 2.ome.tif",
+        "bead_csv": "KC22 262/bead_df.csv"
+      }
+    },
+    {
+      "name": "KC23 2570",
+      "bead_df": "KC23 2570/bead_df.csv",
+      "results_df": "KC23 2570/results_df.csv",
+      "protein_profiles": [
+        "KC23 2570/Lupus Biotin.csv",
+        "KC23 2570/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC23 2570/corrected_KC23 2570 Cycle 1.ome.tif",
+        "cycle2": "KC23 2570/aligned_KC23 2570 Cycle 2.ome.tif",
+        "bead_csv": "KC23 2570/bead_df.csv"
+      }
+    },
+    {
+      "name": "KC23 3124",
+      "bead_df": "KC23 3124/bead_df.csv",
+      "results_df": "KC23 3124/results_df.csv",
+      "protein_profiles": [
+        "KC23 3124/Lupus Biotin.csv",
+        "KC23 3124/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC23 3124/corrected_KC23 3124 Cycle 1.ome.tif",
+        "cycle2": "KC23 3124/aligned_KC23 3124 Cycle 2.ome.tif",
+        "bead_csv": "KC23 3124/bead_df.csv"
+      }
+    },
+    {
+      "name": "KC24 2512",
+      "bead_df": "KC24 2512/bead_df.csv",
+      "results_df": "KC24 2512/results_df.csv",
+      "protein_profiles": [
+        "KC24 2512/Lupus Biotin.csv",
+        "KC24 2512/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC24 2512/corrected_KC24 2512 Cycle 1.ome.tif",
+        "cycle2": "KC24 2512/aligned_KC24 2512 Cycle 2.ome.tif",
+        "bead_csv": "KC24 2512/bead_df.csv"
+      }
+    },
+    {
+      "name": "KC24 2555",
+      "bead_df": "KC24 2555/bead_df.csv",
+      "results_df": "KC24 2555/results_df.csv",
+      "protein_profiles": [
+        "KC24 2555/Lupus Biotin.csv",
+        "KC24 2555/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC24 2555/corrected_KC24 2555 Cycle 1.ome.tif",
+        "cycle2": "KC24 2555/aligned_KC24 2555 Cycle 2.ome.tif",
+        "bead_csv": "KC24 2555/bead_df.csv"
+      }
+    },
+    {
+      "name": "KC24 299",
+      "bead_df": "KC24 299/bead_df.csv",
+      "results_df": "KC24 299/results_df.csv",
+      "protein_profiles": [
+        "KC24 299/Lupus Biotin.csv",
+        "KC24 299/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC24 299/corrected_KC24 299 Cycle 1.ome.tif",
+        "cycle2": "KC24 299/aligned_KC24 299 Cycle 2.ome.tif",
+        "bead_csv": "KC24 299/bead_df.csv"
+      }
+    },
+    {
+      "name": "KC24 4540",
+      "bead_df": "KC24 4540/bead_df.csv",
+      "results_df": "KC24 4540/results_df.csv",
+      "protein_profiles": [
+        "KC24 4540/Lupus Biotin.csv",
+        "KC24 4540/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC24 4540/corrected_KC24 4540 Cycle 1.ome.tif",
+        "cycle2": "KC24 4540/aligned_KC24 4540 Cycle 2.ome.tif",
+        "bead_csv": "KC24 4540/bead_df.csv"
+      }
+    },
+    {
+      "name": "KC25 1525",
+      "bead_df": "KC25 1525/bead_df.csv",
+      "results_df": "KC25 1525/results_df.csv",
+      "protein_profiles": [
+        "KC25 1525/Lupus Biotin.csv",
+        "KC25 1525/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC25 1525/corrected_KC25 1525 Cycle 1.ome.tif",
+        "cycle2": "KC25 1525/aligned_KC25 1525 Cycle 2.ome.tif",
+        "bead_csv": "KC25 1525/bead_df.csv"
+      }
+    },
+    {
+      "name": "KC25 2464",
+      "bead_df": "KC25 2464/bead_df.csv",
+      "results_df": "KC25 2464/results_df.csv",
+      "protein_profiles": [
+        "KC25 2464/Lupus Biotin.csv",
+        "KC25 2464/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC25 2464/corrected_KC25 2464 Cycle 1.ome.tif",
+        "cycle2": "KC25 2464/aligned_KC25 2464 Cycle 2.ome.tif",
+        "bead_csv": "KC25 2464/bead_df.csv"
+      }
+    },
+    {
+      "name": "KC25 4242",
+      "bead_df": "KC25 4242/bead_df.csv",
+      "results_df": "KC25 4242/results_df.csv",
+      "protein_profiles": [
+        "KC25 4242/Lupus Biotin.csv",
+        "KC25 4242/Lupus KDIG.csv"
+      ],
+      "create_trace": {
+        "cycle1": "KC25 4242/corrected_KC25 4242 Cycle 1.ome.tif",
+        "cycle2": "KC25 4242/aligned_KC25 4242 Cycle 2.ome.tif",
+        "bead_csv": "KC25 4242/bead_df.csv"
+      }
+    }
+  ]
+}
