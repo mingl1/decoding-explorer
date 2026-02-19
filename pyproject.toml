@@ -24,6 +24,7 @@ dependencies = [
     "stardist",
     "scikit-learn",
     "tensorflow",
+    "tensorflow-cpu",
     "llvmlite>=0.45.1",
     "pyinstaller>=6.18.0",
 ]

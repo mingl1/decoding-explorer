@@ -1,3 +1,4 @@
+import os
 import time
 from collections import defaultdict
 from typing import List, Tuple
@@ -1213,6 +1214,22 @@ def stardist_segmentation(
     return stardist_labels
 
 
+def beadfinding_notebook_stardist(brightfield, scale=1.0, block_size=700):
+    model = StarDist2D.from_pretrained("2D_versatile_fluo")
+    label_image = stardist_segmentation(
+        brightfield, model, block_size=block_size, scale=scale
+    )
+    num_labels = int(label_image.max())
+    if num_labels == 0:
+        return np.array([]).reshape(0, 2)
+    centroids = ndimage.center_of_mass(
+        label_image, label_image, range(1, num_labels + 1)
+    )
+    centers = np.array(centroids, dtype=np.float32)
+    centers = np.array([[x, y] for y, x in centers], dtype=np.float32)
+    return centers
+
+
 def quantile_normalize_layers(cycle_img, flor_layers):
     """
     Normalize fluorescence layers to have identical intensity distributions.
@@ -1622,6 +1639,390 @@ def get_adaptive_low_percentile(
 
 
 from utils import resource_path
+
+
+def _resolve_model_dir(model_name: str) -> str:
+    model_dir = resource_path(f"assets/{model_name}")
+    if os.path.isdir(model_dir):
+        return model_dir
+    if os.path.isdir(model_name):
+        return model_name
+    raise ValueError(f"StarDist model directory not found: {model_name}")
+
+
+def load_custom_model(model_dir: str):
+    if os.path.exists(os.path.join(model_dir, "config.json")):
+        return StarDist2D(
+            None, name=os.path.basename(model_dir), basedir=os.path.dirname(model_dir)
+        )
+    for item in os.listdir(model_dir):
+        subpath = os.path.join(model_dir, item)
+        if os.path.isdir(subpath) and os.path.exists(os.path.join(subpath, "config.json")):
+            return StarDist2D(None, name=item, basedir=model_dir)
+    raise ValueError(f"No StarDist model found in {model_dir}")
+
+
+def get_labels_from_cycles_with_prob(
+    cycles,
+    metadata_list: List[MetaData],
+    max_size,
+    model,
+    block_size=700,
+    prob_thresh=0.1,
+    n_tiles=1,
+    nms_thresh=0.1,
+):
+    n_tiles_tuple = (n_tiles, n_tiles)
+    cycle_labels = []
+    for i, cycle in enumerate(tqdm(cycles, desc="Processing cycles")):
+        layers_out = []
+        flors_layers = metadata_list[i].flors_layers
+        if flors_layers is None:
+            raise ValueError("Fluorescence layers are not initialized.")
+        for layer_idx in flors_layers:
+            img = cycle[layer_idx].astype(np.float32)[:max_size, :max_size]
+            img = (img - img.min()) / (img.max() - img.min() + 1e-8)
+            img = normalize(img, 1, 99.8)
+            lbl, det = model.predict_instances_big(
+                img,
+                axes="YX",
+                prob_thresh=prob_thresh,
+                nms_thresh=nms_thresh,
+                min_overlap=24,
+                n_tiles=n_tiles_tuple,
+                block_size=block_size,
+                show_progress=True,
+            )
+            n_obj = int(lbl.max())
+            prob_lut = np.zeros(n_obj + 1, dtype=np.float32)
+            if n_obj > 0 and "prob" in det and det["prob"] is not None:
+                probs = np.asarray(det["prob"], dtype=np.float32)
+                m = min(n_obj, probs.shape[0])
+                prob_lut[1 : m + 1] = probs[:m]
+            layers_out.append({"lbl": lbl.astype(np.int32), "prob_lut": prob_lut})
+        cycle_labels.append(layers_out)
+    return cycle_labels
+
+
+def assign_beads_labels_with_prob_patch3x3_fallback(
+    bead_df,
+    cycle_labels,
+    min_center_prob=None,
+    min_patch_prob=None,
+    min_patch_support=2,
+    min_prob_margin=None,
+    center_vs_patch_margin=None,
+    invalid_value=0,
+    prob_col_suffix="_prob",
+    chunk_size=200_000,
+):
+    bead_df = bead_df.copy()
+    xs0 = np.rint(bead_df["x"].to_numpy()).astype(np.int32)
+    ys0 = np.rint(bead_df["y"].to_numpy()).astype(np.int32)
+    n_rows = xs0.size
+    dx = np.array(
+        [
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+        ],
+        dtype=np.int32,
+    )
+    dy = np.array(
+        [
+            -2,
+            -2,
+            -2,
+            -2,
+            -2,
+            -1,
+            -1,
+            -1,
+            -1,
+            -1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            2,
+            2,
+            2,
+            2,
+        ],
+        dtype=np.int32,
+    )
+    for i, cycle_layers in enumerate(cycle_labels):
+        for j, layer in enumerate(cycle_layers):
+            lbl = layer["lbl"]
+            prob_lut = layer["prob_lut"]
+            h, w = lbl.shape[:2]
+            out_id = np.empty(n_rows, dtype=np.int32)
+            out_prob = np.empty(n_rows, dtype=np.float32)
+            chunks = range(0, n_rows, chunk_size)
+            total = (n_rows + chunk_size - 1) // chunk_size
+            for s in tqdm(chunks, desc=f"assign cy{i}_{j}", total=total):
+                e = min(s + chunk_size, n_rows)
+                xs = np.clip(xs0[s:e], 0, w - 1)
+                ys = np.clip(ys0[s:e], 0, h - 1)
+                center_id = lbl[ys, xs].astype(np.int32)
+                center_prob = prob_lut[center_id].astype(np.float32)
+                trust_center = center_id > 0
+                if min_center_prob is not None:
+                    trust_center &= center_prob >= float(min_center_prob)
+                best_id = np.where(trust_center, center_id, invalid_value).astype(np.int32)
+                best_prob = np.where(trust_center, center_prob, 0.0).astype(np.float32)
+
+                def _eval_patch(xs_sub, ys_sub):
+                    xs_n = xs_sub[:, None] + dx[None, :]
+                    ys_n = ys_sub[:, None] + dy[None, :]
+                    np.clip(xs_n, 0, w - 1, out=xs_n)
+                    np.clip(ys_n, 0, h - 1, out=ys_n)
+                    ids = lbl[ys_n, xs_n].astype(np.int32)
+                    probs = prob_lut[ids].astype(np.float32)
+                    probs_sel = np.where(ids > 0, probs, -np.inf)
+                    best_k = np.argmax(probs_sel, axis=1)
+                    row = np.arange(ids.shape[0])
+                    patch_best_id = ids[row, best_k]
+                    patch_best_prob = prob_lut[patch_best_id].astype(np.float32)
+                    ok_support = np.ones(ids.shape[0], dtype=bool)
+                    if min_patch_support is not None and int(min_patch_support) > 1:
+                        support = (ids == patch_best_id[:, None]).sum(axis=1)
+                        ok_support = support >= int(min_patch_support)
+                    ok_prob = np.ones(ids.shape[0], dtype=bool)
+                    if min_patch_prob is not None:
+                        ok_prob = patch_best_prob >= float(min_patch_prob)
+                    ok_margin = np.ones(ids.shape[0], dtype=bool)
+                    if min_prob_margin is not None:
+                        finite_mask = np.isfinite(probs_sel)
+                        n_finite = finite_mask.sum(axis=1)
+                        top2 = np.sort(probs_sel, axis=1)[:, -2:]
+                        margin = np.zeros(ids.shape[0], dtype=np.float32)
+                        ok_2plus = n_finite >= 2
+                        margin[ok_2plus] = top2[ok_2plus, 1] - top2[ok_2plus, 0]
+                        ok_margin = margin >= float(min_prob_margin)
+                    ok = (
+                        ok_support
+                        & ok_prob
+                        & ok_margin
+                        & (patch_best_id > 0)
+                        & np.isfinite(patch_best_prob)
+                    )
+                    return patch_best_id, patch_best_prob, ok
+
+                need_patch = ~trust_center
+                if np.any(need_patch):
+                    idxs = np.flatnonzero(need_patch)
+                    patch_best_id, patch_best_prob, ok = _eval_patch(
+                        xs[need_patch], ys[need_patch]
+                    )
+                    good_idxs = idxs[ok]
+                    best_id[good_idxs] = patch_best_id[ok]
+                    best_prob[good_idxs] = patch_best_prob[ok]
+
+                if center_vs_patch_margin is not None:
+                    maybe_override = trust_center
+                    if np.any(maybe_override):
+                        idxs = np.flatnonzero(maybe_override)
+                        patch_best_id, patch_best_prob, ok = _eval_patch(
+                            xs[maybe_override], ys[maybe_override]
+                        )
+                        delta = patch_best_prob - center_prob[maybe_override]
+                        ok_override = ok & (delta >= float(center_vs_patch_margin))
+                        good_idxs = idxs[ok_override]
+                        best_id[good_idxs] = patch_best_id[ok_override]
+                        best_prob[good_idxs] = patch_best_prob[ok_override]
+
+                out_id[s:e] = best_id
+                out_prob[s:e] = best_prob
+
+            bead_df[f"cy{i}_{j}"] = out_id
+            bead_df[f"cy{i}_{j}{prob_col_suffix}"] = out_prob
+    return bead_df
+
+
+def enforce_single_layer_per_cycle(
+    df,
+    num_cycles=2,
+    num_layers=4,
+    min_prob=0.02,
+    invalid_value=255,
+):
+    df = df.copy()
+    for i in range(num_cycles):
+        layer_cols = [f"cy{i}_{j}" for j in range(num_layers)]
+        prob_cols = [f"cy{i}_{j}_prob" for j in range(num_layers)]
+        layers = df[layer_cols].to_numpy(copy=True)
+        probs = df[prob_cols].to_numpy(copy=True)
+        valid_mask = (layers != invalid_value) & (layers > 0) & (probs >= float(min_prob))
+        valid_counts = valid_mask.sum(axis=1)
+        enforce_mask = valid_counts == 2
+        if not np.any(enforce_mask):
+            continue
+        masked_probs = probs.copy()
+        masked_probs[~valid_mask] = -np.inf
+        best_layers = np.argmax(masked_probs, axis=1)
+        keep_mask = np.zeros_like(valid_mask, dtype=bool)
+        keep_mask[np.arange(len(df)), best_layers] = True
+        invalidate_mask = valid_mask & ~keep_mask
+        invalidate_mask &= enforce_mask[:, None]
+        layers[invalidate_mask] = invalid_value
+        probs[invalidate_mask] = 0.0
+        df[layer_cols] = layers
+        df[prob_cols] = probs
+    return df
+
+
+def resolve_layers_to_cycles(df, num_cycles, num_layers, invalid_value=255):
+    final_df = df[["x", "y"]].copy()
+    out_cols = [f"cy{i}" for i in range(num_cycles)]
+    final_df[out_cols] = np.uint16(invalid_value)
+    counts = []
+    valid_layer_masks = []
+    for i in range(num_cycles):
+        layer_cols = [f"cy{i}_{j}" for j in range(num_layers)]
+        labs = df[layer_cols].to_numpy()
+        valid = (labs != invalid_value) & (labs > 0)
+        valid_layer_masks.append(valid)
+        counts.append(valid.sum(axis=1))
+    counts = np.stack(counts, axis=1)
+    valid_mask = (counts == 1).all(axis=1)
+    if valid_mask.any():
+        for i in range(num_cycles):
+            valid = valid_layer_masks[i]
+            layer_idx = valid.argmax(axis=1).astype(np.uint16)
+            final_df.loc[valid_mask, f"cy{i}"] = layer_idx[valid_mask]
+    return final_df
+
+
+def _validate_fluorescence_layers(tif_metadata: List[MetaData]) -> int:
+    if len(tif_metadata) == 0:
+        raise ValueError("No cycle metadata found.")
+    expected_layers = None
+    for i, md in enumerate(tif_metadata):
+        flors_layers = md.flors_layers
+        if flors_layers is None or len(flors_layers) == 0:
+            raise ValueError(f"Cycle {i} has no fluorescence layers.")
+        if expected_layers is None:
+            expected_layers = len(flors_layers)
+        elif len(flors_layers) != expected_layers:
+            raise ValueError("Cycle fluorescence-layer counts are inconsistent.")
+    assert expected_layers is not None
+    return expected_layers
+
+
+def _process_beads_notebook_stardist(
+    brightfield,
+    tifs,
+    max_size,
+    model_name,
+    update_progress,
+    is_running,
+):
+    bead_detection_scale = 2
+    stardist_prob_thresh = 0.1
+    stardist_nms_thresh = 0.1
+    stardist_n_tiles = 1 if max_size <= 2000 else 2
+    stardist_block_size = 700 if max_size <= 2000 else 2000
+    bead_detection_block_size = 700 if max_size <= 2000 else 2000
+
+    update_progress(10, "Initial bead detection...")
+    bf = brightfield[:max_size, :max_size]
+    beads = beadfinding_notebook_stardist(
+        bf,
+        scale=bead_detection_scale,
+        block_size=bead_detection_block_size,
+    )
+    beads = np.unique(beads, axis=0)
+    bead_df = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
+    bead_df = bead_df.query("10 <= x < @max_size-10 and 10 <= y < @max_size-10")
+    if not is_running():
+        return None
+
+    update_progress(30, "Getting activation regions from cycles")
+    tif_metadata = [f.metadata for _, f in tifs]
+    tif_images = [np.ascontiguousarray(img)[:, :max_size, :max_size] for img, _ in tifs]
+    for i, md in enumerate(tif_metadata):
+        assert isinstance(md, MetaData)
+        md.flors_layers = [j for j in range(len(tif_images[i])) if j > int(md.reference_channel)]
+    num_cycles = len(tif_metadata)
+    num_layers = _validate_fluorescence_layers(tif_metadata)
+    model_dir = _resolve_model_dir(model_name)
+    custom_model = load_custom_model(model_dir)
+    cycle_labels = get_labels_from_cycles_with_prob(
+        tif_images,
+        tif_metadata,
+        max_size,
+        custom_model,
+        block_size=stardist_block_size,
+        prob_thresh=stardist_prob_thresh,
+        nms_thresh=stardist_nms_thresh,
+        n_tiles=stardist_n_tiles,
+    )
+    if not is_running():
+        return None
+
+    update_progress(60, "Assigning beads labels")
+    bead_df = assign_beads_labels_with_prob_patch3x3_fallback(
+        bead_df,
+        cycle_labels,
+        invalid_value=0,
+        min_patch_prob=None,
+        center_vs_patch_margin=0.01,
+        min_center_prob=0.35,
+        min_patch_support=21,
+        min_prob_margin=0,
+    )
+    bead_df = enforce_single_layer_per_cycle(
+        bead_df,
+        num_cycles=num_cycles,
+        num_layers=num_layers,
+        min_prob=0,
+        invalid_value=0,
+    )
+    results_df = resolve_layers_to_cycles(
+        bead_df,
+        num_cycles=num_cycles,
+        num_layers=num_layers,
+    )
+    cycles = {}
+    for i in range(len(tifs)):
+        cycles[f"cy{i}"] = tifs[i][0]
+    labeled_image = np.zeros(bf.shape, dtype=np.uint16)
+    return {
+        "beads": results_df,
+        "post_resolution_beads": results_df,
+        "cycles": cycles,
+        "labeled_image": labeled_image,
+    }
 
 
 def prepare_data_for_resolution(
@@ -2253,9 +2654,27 @@ def process_beads(
     update_progress(0, "Preprocessing brightfield image...")
     if not is_running():
         return None
-    # log(f"Preprocessing brightfield image (max_size: {max_size})")
-    # brightfield = preprocess_brightfield(brightfield, max_size)
     log(f"Preprocessed to shape: {brightfield.shape}")
+
+    if use_stardist:
+        try:
+            notebook_results = _process_beads_notebook_stardist(
+                brightfield=brightfield,
+                tifs=tifs,
+                max_size=max_size,
+                model_name=model_name,
+                update_progress=update_progress,
+                is_running=is_running,
+            )
+        except Exception as e:
+            log(f"Error during notebook StarDist bead processing: {e}")
+            update_progress(-1, f"Error during bead processing., {e}")
+            return None
+        if notebook_results is None:
+            return None
+        update_progress(95, "Bead generation complete.")
+        return notebook_results
+
     update_progress(10, "Initial bead detection...")
     if not is_running():
         return None
@@ -2273,8 +2692,6 @@ def process_beads(
     update_progress(20, "Removing duplicate beads...")
     if not is_running():
         return None
-
-    log("Removing duplicate beads...")
     beads = np.unique(beads, axis=0)
     unique_bead_count = len(beads)
     log(
@@ -2283,11 +2700,7 @@ def process_beads(
     update_progress(30, "Performing second pass bead detection...")
     if not is_running():
         return None
-
-    # log("Performing second pass bead detection...")
-    # beads = second_pass_beadfinding(brightfield, beads)
     final_bead_count = len(beads)
-    # log(f"Second pass found {final_bead_count - unique_bead_count} additional beads")
     log(f"Total beads detected from brightfield layer: {final_bead_count}")
     update_progress(40, "Calculating signal-to-noise ratios...")
     if not is_running():
@@ -2302,27 +2715,16 @@ def process_beads(
             max_size,
             progress_callback=progress_callback,
             is_running_callback=is_running,
-            use_stardist=use_stardist,
+            use_stardist=False,
             model_name=model_name,
-            # roi_coords=roi_coords,
         )
     except Exception as e:
         log(f"Error during get_excel: {e}")
         update_progress(-1, f"Error during bead processing., {e}")
         return None
-    log("Done getting excel")
-
-    # if not is_running():
-    # return None
-
     update_progress(90, "Filtering out rows with all zeros...")
     labeled_image = np.zeros(brightfield.shape, dtype=np.uint16)
-
-    # group by cy0,cy1... and find min-std partition
-    log(f"Dataframe created with shape: {df.shape}")
-
     update_progress(95, "Bead generation complete.")
-
     results = {}
     try:
         bboxs = df.pop("bbox")
@@ -2331,14 +2733,10 @@ def process_beads(
     cycles = {}
     for i in range(len(tifs)):
         cycles[f"cy{i}"] = tifs[i][0]
-        print(f"Cycle {i} image shape: {tifs[i][0].shape}")
-
-    # !TODO: Currently returning post resolution df as "beads" for compatibility, once frontend is updated, change to pre-resolution df
     results["beads"] = df
     results["post_resolution_beads"] = post_resoluton_df
     results["cycles"] = cycles
     results["labeled_image"] = labeled_image
-
     return results
 
 

@@ -636,7 +636,23 @@ class MainWindow(QMainWindow):
         images = []
         if reference_item.cycles:
             for key in sorted(reference_item.cycles.keys()):
-                images.append(reference_item.cycles[key])
+                cycle_image = reference_item.cycles[key]
+                if len(cycle_image.shape) == 2:
+                    images.append(cycle_image)
+                    continue
+                if len(cycle_image.shape) == 3:
+                    bf_channel = 0
+                    if reference_item.cycle_files:
+                        try:
+                            cycle_num = int(key.replace("cy", ""))
+                            cycle_file = reference_item.cycle_files.get(cycle_num)
+                            if cycle_file:
+                                bf_channel = int(cycle_file.metadata.reference_channel)
+                        except ValueError:
+                            pass
+                    if bf_channel >= cycle_image.shape[0]:
+                        bf_channel = 0
+                    images.append(cycle_image[bf_channel])
         elif reference_item.cycle_files:
             for cycle_num in sorted(reference_item.cycle_files.keys()):
                 img = self.vm._get_brightfield_image(reference_item.cycle_files[cycle_num])

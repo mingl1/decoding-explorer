@@ -179,6 +179,8 @@ dependencies = [
     { name = "stardist" },
     { name = "tensorflow", version = "2.16.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
     { name = "tensorflow", version = "2.20.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "tensorflow-cpu", version = "2.16.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "tensorflow-cpu", version = "2.20.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
     { name = "tifffile" },
 ]
 
@@ -204,6 +206,7 @@ requires-dist = [
     { name = "simpleitk", specifier = ">=2.5.2" },
     { name = "stardist" },
     { name = "tensorflow" },
+    { name = "tensorflow-cpu" },
     { name = "tifffile", specifier = ">=2025.5.10" },
 ]
 
@@ -1467,6 +1470,78 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ff/07/ea91ac67a9fd36d3372099f5a3e69860ded544f877f5f2117802388f4212/tensorflow-2.20.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:02a0293d94f5c8b7125b66abf622cc4854a33ae9d618a0d41309f95e091bbaea", size = 259307122, upload-time = "2025-08-13T16:50:47.909Z" },
     { url = "https://files.pythonhosted.org/packages/e5/9e/0d57922cf46b9e91de636cd5b5e0d7a424ebe98f3245380a713f1f6c2a0b/tensorflow-2.20.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7abd7f3a010e0d354dc804182372779a722d474c4d8a3db8f4a3f5baef2a591e", size = 620425510, upload-time = "2025-08-13T16:51:02.608Z" },
     { url = "https://files.pythonhosted.org/packages/74/b5/d40e1e389e07de9d113cf8e5d294c04d06124441d57606febfd0fb2cf5a6/tensorflow-2.20.0-cp310-cp310-win_amd64.whl", hash = "sha256:4a69ac2c2ce20720abf3abf917b4e86376326c0976fcec3df330e184b81e4088", size = 331664937, upload-time = "2025-08-13T16:51:17.719Z" },
+]
+
+[[package]]
+name = "tensorflow-cpu"
+version = "2.16.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "absl-py", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "astunparse", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "flatbuffers", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "gast", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "google-pasta", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "grpcio", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "h5py", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "keras", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "libclang", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "ml-dtypes", version = "0.3.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "opt-einsum", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "packaging", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "protobuf", version = "4.25.8", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "requests", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "setuptools", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "six", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "tensorboard", version = "2.16.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "tensorflow-io-gcs-filesystem", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "termcolor", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "wrapt", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/c7/514f64b6e446b1161c30722aec00be1e5b4ae15ecdcb9ec4e3f6966a4314/tensorflow_cpu-2.16.2-cp310-cp310-macosx_10_15_x86_64.whl", hash = "sha256:fe1a52b0303486fc20b9832592f336c3851c41ca4a4cf9dfce1616f0c60a40c2", size = 259544880, upload-time = "2024-06-28T18:53:46.157Z" },
+]
+
+[[package]]
+name = "tensorflow-cpu"
+version = "2.20.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "platform_machine != 'x86_64' and sys_platform == 'darwin'",
+    "platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')",
+]
+dependencies = [
+    { name = "absl-py", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "astunparse", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "flatbuffers", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "gast", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "google-pasta", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "grpcio", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "h5py", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "keras", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "libclang", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "ml-dtypes", version = "0.5.4", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "numpy", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "opt-einsum", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "packaging", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "protobuf", version = "6.33.5", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "requests", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "setuptools", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "six", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "tensorboard", version = "2.20.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "termcolor", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "typing-extensions", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "wrapt", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/38/9fbde70d209bff4d6563ab1bdde62cdedd2dd0e93c81451c1a5e54dc4347/tensorflow_cpu-2.20.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1a3ef238410543ee884b64d222775727504407395785d3719a9ee8d016d1c583", size = 258732432, upload-time = "2025-08-13T16:55:04.285Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/24/560f98aafc800a68a23e7321ed387c2237b0a1f906069b81fe2dbc726020/tensorflow_cpu-2.20.0-cp310-cp310-win_amd64.whl", hash = "sha256:06b4d213f093a72da9c767754bd8d6605f2b1a98c7a683532fc152b0a5d8ce04", size = 331664983, upload-time = "2025-08-13T16:55:15.57Z" },
 ]
 
 [[package]]

@@ -64,12 +64,16 @@ class BeadGenerationThread(QThread):
             else:
                 ref_img = load_image(self.files[self.ref_file.path])
                 if len(ref_img.shape) == 3:
-                    ref_bf = np.array(ref_img)[ref_bf_channel, :ref_max_size, :ref_max_size]
+                    ref_bf = np.array(ref_img)[
+                        ref_bf_channel, :ref_max_size, :ref_max_size
+                    ]
                 elif len(ref_img.shape) == 2:
                     ref_bf = np.array(ref_img)[:ref_max_size, :ref_max_size]
 
             if ref_bf is None:
-                logger.error("Reference image does not have a valid brightfield channel for bead generation.")
+                logger.error(
+                    "Reference image does not have a valid brightfield channel for bead generation."
+                )
                 return
 
             tifs = []
@@ -78,7 +82,9 @@ class BeadGenerationThread(QThread):
                 if not self._is_running:
                     break
                 progress_pct = int((i / total_files) * 100)
-                self.progress.emit(progress_pct, f"Loading images ({i + 1}/{total_files})")
+                self.progress.emit(
+                    progress_pct, f"Loading images ({i + 1}/{total_files})"
+                )
 
                 my_f = self.files.get(f.path)
                 if not my_f:
@@ -92,9 +98,11 @@ class BeadGenerationThread(QThread):
 
             self.progress.emit(90, "Processing beads...")
             progress_offset = 90
+
             def scaled_progress(p, m):
                 if self._is_running:
                     self.progress.emit(min(99, progress_offset + p), m)
+
             results = image_processing.process_beads(
                 ref_bf,
                 tifs,
@@ -137,7 +145,9 @@ class ShadingCorrectionThread(QThread):
                 if not self._is_running:
                     break
                 progress_pct = int((i / total_files) * 100)
-                self.progress.emit(progress_pct, f"Reading from disk ({i + 1}/{total_files})")
+                self.progress.emit(
+                    progress_pct, f"Reading from disk ({i + 1}/{total_files})"
+                )
 
                 my_f = self.files.get(f.path)
                 if not my_f:
@@ -151,7 +161,9 @@ class ShadingCorrectionThread(QThread):
                 max_size = int(f.metadata.max_size)
                 bright_field = bright_field[:max_size, :max_size]
 
-                self.progress.emit(progress_pct, f"Applying shading correction ({i + 1}/{total_files})")
+                self.progress.emit(
+                    progress_pct, f"Applying shading correction ({i + 1}/{total_files})"
+                )
                 corrected = utils.shading_correction(bright_field)
                 my_f.working_image = corrected
                 my_f.status = FileStatus.SHADE_CORRECTED
@@ -173,7 +185,7 @@ class FolderLoadingThread(QThread):
     progress = pyqtSignal(int, str)
     folder_loaded = pyqtSignal(list)
 
-    def __init__(self, folder_path: List[str]|str):
+    def __init__(self, folder_path: List[str] | str):
         super().__init__()
         if isinstance(folder_path, str):
             self.folder_paths = [folder_path]
@@ -193,7 +205,9 @@ class FolderLoadingThread(QThread):
                     if not self._is_running:
                         break
                     progress_pct = int((i / total_files) * 100)
-                    self.progress.emit(progress_pct, f"Loading files ({i + 1}/{total_files})")
+                    self.progress.emit(
+                        progress_pct, f"Loading files ({i + 1}/{total_files})"
+                    )
 
                     status = self._get_status_from_filename(file)
                     try:
@@ -232,10 +246,11 @@ class FolderLoadingThread(QThread):
     def cancel(self):
         self._is_running = False
 
+
 class FileLoadingThread(QThread):
     progress = pyqtSignal(int, str)
     file_loaded = pyqtSignal(list)
-    
+
     def __init__(self, file_paths: List[str] | str):
         super().__init__()
         if isinstance(file_paths, str):
@@ -243,7 +258,7 @@ class FileLoadingThread(QThread):
         else:
             self.file_paths = file_paths
         self._is_running = True
-    
+
     def run(self):
         self._is_running = True
         total_files = len(self.file_paths)
@@ -252,15 +267,17 @@ class FileLoadingThread(QThread):
             for idx, file_path in enumerate(self.file_paths):
                 if not self._is_running:
                     break
-                
+
                 # Update progress for current file
                 file_progress = int((idx / total_files) * 100)
-                self.progress.emit(file_progress, f"Loading file {idx + 1}/{total_files}...")
-                
+                self.progress.emit(
+                    file_progress, f"Loading file {idx + 1}/{total_files}..."
+                )
+
                 if os.path.isfile(file_path):
                     status = self._get_status_from_filename(file_path)
                     file_item = FileItem(path=file_path, status=status)
-                    
+
                     try:
                         shape, dtype = get_tif_info(file_path)
                     except (OSError, ValueError, TiffFileError):
@@ -269,29 +286,34 @@ class FileLoadingThread(QThread):
                             shape = arr.shape
                             dtype = arr.dtype
                         except Exception as e:
-                            logger.error(f"Failed to load {file_path}: {e}", exc_info=True)
-                            self.progress.emit(file_progress, f"Error loading {os.path.basename(file_path)}: {str(e)}")
+                            logger.error(
+                                f"Failed to load {file_path}: {e}", exc_info=True
+                            )
+                            self.progress.emit(
+                                file_progress,
+                                f"Error loading {os.path.basename(file_path)}: {str(e)}",
+                            )
                             continue  # Skip this file and continue with next
-                    
+
                     file_item.shape = shape
                     file_item.original_shape = shape
                     file_item.dtype = str(dtype)
                     file_item.metadata.max_size = (
                         min(shape[-2], shape[-1]) if len(shape) >= 2 else 10000
                     )
-                    
+
                     if self._is_running:
                         loaded_files.append(file_item)
-            
+
             # Final progress update
             if self._is_running:
                 self.file_loaded.emit(loaded_files)
                 self.progress.emit(100, f"Loaded {total_files} file(s)")
-                
+
         except Exception as e:
             logger.error(f"Error in FileLoadingThread: {e}", exc_info=True)
             self.progress.emit(-1, f"Error: {str(e)}")
-    
+
     def _get_status_from_filename(self, file_path: str) -> FileStatus:
         filename_base = os.path.basename(file_path).lower()
         for status in FileStatus:
@@ -302,16 +324,23 @@ class FileLoadingThread(QThread):
             if filename_base.startswith(prefix):
                 return status
         return FileStatus.RAW
-    
+
     def cancel(self):
         self._is_running = False
+
 
 class ExportThread(QThread):
     progress = pyqtSignal(int, int)
     export_complete = pyqtSignal()
     export_error = pyqtSignal(str)
 
-    def __init__(self, folder_path: str, files: dict, selected_files: list, metadata_changes: dict | None = None):
+    def __init__(
+        self,
+        folder_path: str,
+        files: dict,
+        selected_files: list,
+        metadata_changes: dict | None = None,
+    ):
         super().__init__()
         self.folder_path = folder_path
         self.files = files
@@ -335,7 +364,11 @@ class ExportThread(QThread):
                 export_image = load_image(file_item)
                 if file_item.working_image is not None:
                     if len(file_item.working_image.shape) == 2:
-                        export_image = np.array(export_image)[:,:file_item.metadata.max_size, :file_item.metadata.max_size]
+                        export_image = np.array(export_image)[
+                            :,
+                            : file_item.metadata.max_size,
+                            : file_item.metadata.max_size,
+                        ]
                         bf_channel = int(file_item.metadata.reference_channel)
                         export_image[bf_channel] = file_item.working_image.squeeze()
                     elif len(file_item.working_image.shape) == 3:
@@ -366,7 +399,7 @@ class ExportThread(QThread):
                         continue
                     prefix_to_check = status.value.lower() + "_"
                     if file_name.lower().startswith(prefix_to_check):
-                        file_name = file_name[len(prefix_to_check):]
+                        file_name = file_name[len(prefix_to_check) :]
                         break
 
                 if file_item.metadata.prefix:
@@ -385,11 +418,18 @@ class ExportThread(QThread):
     def cancel(self):
         self._is_running = False
 
+
 class BeadUploadThread(QThread):
     progress = pyqtSignal(int, str)
     upload_complete = pyqtSignal(FileItem)
 
-    def __init__(self, csv_path: str, reference_file: FileItem, cycle_assignments: dict, files: dict):
+    def __init__(
+        self,
+        csv_path: str,
+        reference_file: FileItem,
+        cycle_assignments: dict,
+        files: dict,
+    ):
         super().__init__()
         self.csv_path = csv_path
         self.reference_file = reference_file
@@ -400,14 +440,18 @@ class BeadUploadThread(QThread):
     def run(self):
         self._is_running = True
         try:
-            print(f"BeadUploadThread.run started, reference_file path: {self.reference_file.path}")
+            print(
+                f"BeadUploadThread.run started, reference_file path: {self.reference_file.path}"
+            )
             self.progress.emit(0, "Loading beads data...")
             beads_df = pd.read_csv(self.csv_path)
             print(f"Loaded CSV with {len(beads_df)} rows")
 
             cycles = {}
             total_cycles = len(self.cycle_assignments)
-            for cycle_idx, (idx, file_item) in enumerate(self.cycle_assignments.items()):
+            for cycle_idx, (idx, file_item) in enumerate(
+                self.cycle_assignments.items()
+            ):
                 if not self._is_running:
                     break
                 progress_pct = int((idx / total_cycles) * 100)
@@ -425,9 +469,13 @@ class BeadUploadThread(QThread):
             self.reference_file.cycles = cycles
             self.reference_file.cycle_files = self.cycle_assignments
             self.reference_file.status = FileStatus.BEADS_GENERATED
-            self.reference_file.metadata.prefix = FileStatus.BEADS_GENERATED.name.lower()
+            self.reference_file.metadata.prefix = (
+                FileStatus.BEADS_GENERATED.name.lower()
+            )
 
-            print(f"BeadUploadThread done, beads attached: {self.reference_file.beads is not None}")
+            print(
+                f"BeadUploadThread done, beads attached: {self.reference_file.beads is not None}"
+            )
             self.progress.emit(100, "Beads loaded")
             self.upload_complete.emit(self.reference_file)
         except Exception as e:
@@ -436,6 +484,7 @@ class BeadUploadThread(QThread):
 
     def cancel(self):
         self._is_running = False
+
 
 class FileManagerVM(QObject):
     file_list_updated = pyqtSignal(list)
@@ -602,13 +651,15 @@ class FileManagerVM(QObject):
         self.file_thread.start()
 
     def _on_file_loaded(self, file_items: List[FileItem]):
+        to_be_emitted = []
         for file_item in file_items:
             if file_item.path in self.emitted_files:
                 print(f"File {file_item.path} already loaded.")
                 continue
             self.emitted_files.add(file_item.path)
             self.files[file_item.path] = file_item
-        self.file_list_updated.emit(file_items)
+            to_be_emitted.append(file_item)
+        self.file_list_updated.emit(to_be_emitted)
 
     def apply_shading(self, selected_files: List[FileItem]):
         self.shading_thread = ShadingCorrectionThread(selected_files, self.files)
@@ -625,12 +676,7 @@ class FileManagerVM(QObject):
             self.shading_thread.cancel()
 
     def apply_crop(
-        self,
-        file_items: list[FileItem],
-        x1: int,
-        y1: int,
-        x2: int,
-        y2: int
+        self, file_items: list[FileItem], x1: int, y1: int, x2: int, y2: int
     ):
         """
         Apply crop to selected files by updating working_image.
@@ -660,7 +706,9 @@ class FileManagerVM(QObject):
                 h, w = full_image.shape
 
             if x1 < 0 or y1 < 0 or x2 > w or y2 > h or x2 <= x1 or y2 <= y1:
-                print(f"Invalid crop bounds for {my_f.path}: ({x1},{y1}) to ({x2},{y2})")
+                print(
+                    f"Invalid crop bounds for {my_f.path}: ({x1},{y1}) to ({x2},{y2})"
+                )
                 continue
 
             # Apply crop to all channels
@@ -975,9 +1023,13 @@ class FileManagerVM(QObject):
         reference_file: FileItem,
         cycle_assignments: dict[int, FileItem],
     ):
-        print(f"store_uploaded_beads called, reference_file path: {reference_file.path}")
+        print(
+            f"store_uploaded_beads called, reference_file path: {reference_file.path}"
+        )
         print(f"files dict keys before: {list(self.files.keys())[:5]}...")
-        self.upload_thread = BeadUploadThread(csv_path, reference_file, cycle_assignments, self.files)
+        self.upload_thread = BeadUploadThread(
+            csv_path, reference_file, cycle_assignments, self.files
+        )
         self.upload_thread.progress.connect(self.bead_upload_progress.emit)
         self.upload_thread.upload_complete.connect(self._on_beads_uploaded)
         self.upload_thread.start()
@@ -986,6 +1038,7 @@ class FileManagerVM(QObject):
         print(f"_on_beads_uploaded called, beads: {reference_file.beads is not None}")
         self.file_information_update.emit([reference_file])
         self.bead_upload_complete.emit(reference_file)
+
 
 def list_tiff_files(folder_path):
     tiff_files = []
