@@ -1,5 +1,7 @@
 import logging
 import os
+import threading
+import time
 from functools import reduce
 from typing import List, Optional
 
@@ -17,6 +19,7 @@ import utils
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from view.alignment_preview_dialog import AlignmentPreviewDialog
+from viewmodel.bead_progress_estimator import BeadProgressEstimator
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -38,7 +41,10 @@ class BeadGenerationThread(QThread):
         files: dict,
         signal_to_noise_cutoff,
         use_stardist=False,
-        model_name="model_4_400epoch_no_aug",
+        model_name="model_5_400epoch",
+        ensemble_ratio_start=image_processing.DEFAULT_ENSEMBLE_RATIO_START,
+        ensemble_ratio_end=image_processing.DEFAULT_ENSEMBLE_RATIO_END,
+        ensemble_ratio_step=image_processing.DEFAULT_ENSEMBLE_RATIO_STEP,
     ):
         super().__init__()
         self.ref_file = ref_file
@@ -47,10 +53,27 @@ class BeadGenerationThread(QThread):
         self.signal_to_noise_cutoff = signal_to_noise_cutoff
         self.use_stardist = use_stardist
         self.model_name = model_name
+        self.ensemble_ratio_start = float(ensemble_ratio_start)
+        self.ensemble_ratio_end = float(ensemble_ratio_end)
+        self.ensemble_ratio_step = float(ensemble_ratio_step)
         self._is_running = True
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: Optional[threading.Thread] = None
+        self._estimator: Optional[BeadProgressEstimator] = None
+        self._run_started_at: Optional[float] = None
+        self._last_progress_emit_second: int = -1
+        self._last_progress_emit_message = ""
 
     def run(self):
         self._is_running = True
+        self._heartbeat_stop.clear()
+        self._run_started_at = time.monotonic()
+        self._last_progress_emit_second = -1
+        self._last_progress_emit_message = ""
+        self._estimator = BeadProgressEstimator(
+            mode="stardist" if self.use_stardist else "legacy"
+        )
+        success = False
         try:
             ref_bf_channel = int(self.ref_file.metadata.reference_channel)
             ref_max_size = int(self.ref_file.metadata.max_size)
@@ -81,9 +104,22 @@ class BeadGenerationThread(QThread):
             for i, f in enumerate(self.file_items):
                 if not self._is_running:
                     break
-                progress_pct = int((i / total_files) * 100)
-                self.progress.emit(
-                    progress_pct, f"Loading images ({i + 1}/{total_files})"
+                (
+                    progress_value,
+                    progress_message,
+                    total_eta_seconds,
+                    step_eta_seconds,
+                ) = self._estimator.update_stage_units_with_eta_details(
+                    stage="load_images",
+                    done=i + 1,
+                    total=total_files,
+                    message=f"Loading images ({i + 1}/{total_files})",
+                )
+                self._emit_estimated_progress(
+                    progress_value,
+                    progress_message,
+                    total_eta_seconds,
+                    step_eta_seconds,
                 )
 
                 my_f = self.files.get(f.path)
@@ -96,34 +132,157 @@ class BeadGenerationThread(QThread):
             if not self._is_running:
                 return
 
-            self.progress.emit(90, "Processing beads...")
-            progress_offset = 90
+            if self.use_stardist and self._estimator:
+                total_cycle_layers = self._estimate_stardist_cycle_layers(tifs)
+                self._estimator.configure_stardist_layer_workload(total_cycle_layers)
 
-            def scaled_progress(p, m):
-                if self._is_running:
-                    self.progress.emit(min(99, progress_offset + p), m)
+            self._start_heartbeat()
+
+            def estimated_progress(p, m):
+                if not self._is_running:
+                    return
+                if p < 0:
+                    self.progress.emit(-1, m)
+                    return
+                (
+                    progress_value,
+                    progress_message,
+                    total_eta_seconds,
+                    step_eta_seconds,
+                ) = self._estimator.update_from_message_with_eta_details(m)
+                self._emit_estimated_progress(
+                    progress_value,
+                    progress_message,
+                    total_eta_seconds,
+                    step_eta_seconds,
+                )
+
+            def estimated_progress_units(stage, done, total):
+                if not self._is_running:
+                    return
+                (
+                    progress_value,
+                    progress_message,
+                    total_eta_seconds,
+                    step_eta_seconds,
+                ) = self._estimator.update_stage_units_with_eta_details(
+                    stage=stage,
+                    done=done,
+                    total=total,
+                )
+                self._emit_estimated_progress(
+                    progress_value,
+                    progress_message,
+                    total_eta_seconds,
+                    step_eta_seconds,
+                )
 
             results = image_processing.process_beads(
                 ref_bf,
                 tifs,
                 max_size=ref_max_size,
                 signal_to_noise_cutoff=self.signal_to_noise_cutoff,
-                progress_callback=scaled_progress,
+                progress_callback=estimated_progress,
+                progress_units_callback=estimated_progress_units,
                 is_running_callback=self.is_running,
                 use_stardist=self.use_stardist,
                 model_name=self.model_name,
+                ensemble_ratio_start=self.ensemble_ratio_start,
+                ensemble_ratio_end=self.ensemble_ratio_end,
+                ensemble_ratio_step=self.ensemble_ratio_step,
             )
-            if self._is_running:
+            if self._is_running and results is not None:
                 self.bead_generated.emit(results)
+                success = True
         except Exception as e:
             logger.error(f"Error in BeadGenerationThread: {e}", exc_info=True)
+        finally:
+            self._stop_heartbeat()
+            if self._estimator:
+                self._estimator.finish(success=success)
         return None
+
+    def _start_heartbeat(self):
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self):
+        self._heartbeat_stop.set()
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=1.0)
+        self._heartbeat_thread = None
+
+    def _heartbeat_loop(self):
+        while not self._heartbeat_stop.wait(0.5):
+            if not self._is_running or not self._estimator:
+                return
+            (
+                progress_value,
+                progress_message,
+                total_eta_seconds,
+                step_eta_seconds,
+            ) = self._estimator.heartbeat_with_eta_details()
+            self._emit_estimated_progress(
+                progress_value,
+                progress_message,
+                total_eta_seconds,
+                step_eta_seconds,
+            )
+
+    def _emit_estimated_progress(
+        self,
+        progress_value: int,
+        progress_message: str,
+        total_eta_seconds: Optional[float],
+        step_eta_seconds: Optional[float],
+    ):
+        elapsed_seconds = 0.0
+        if self._run_started_at is not None:
+            elapsed_seconds = max(0.0, time.monotonic() - self._run_started_at)
+        elapsed_second_bucket = int(elapsed_seconds)
+        progress_int = int(progress_value)
+        message = str(progress_message or "Processing beads...")
+        if 0 <= progress_int < 100:
+            if (
+                elapsed_second_bucket == self._last_progress_emit_second
+                and message == self._last_progress_emit_message
+            ):
+                return
+            self._last_progress_emit_second = elapsed_second_bucket
+            self._last_progress_emit_message = message
+        if 0 <= progress_int < 100:
+            status_parts = [
+                f"Elapsed {BeadProgressEstimator.format_eta(elapsed_seconds)}"
+            ]
+            if step_eta_seconds is not None and step_eta_seconds > 0:
+                status_parts.append(
+                    f"Step ETA {BeadProgressEstimator.format_eta(step_eta_seconds)}"
+                )
+            if total_eta_seconds is not None and total_eta_seconds > 0:
+                status_parts.append(
+                    f"Total ETA {BeadProgressEstimator.format_eta(total_eta_seconds)}"
+                )
+            message = f"{message} ({', '.join(status_parts)})"
+        self.progress.emit(progress_int, message)
 
     def cancel(self):
         self._is_running = False
+        self._heartbeat_stop.set()
 
     def is_running(self):
         return self._is_running
+
+    def _estimate_stardist_cycle_layers(self, tifs: list) -> int:
+        total_layers = 0
+        for img, file_item in tifs:
+            if not isinstance(img, np.ndarray) or img.ndim != 3:
+                continue
+            reference_channel = int(file_item.metadata.reference_channel)
+            total_layers += max(0, int(img.shape[0]) - reference_channel - 1)
+        return total_layers
 
 
 class ShadingCorrectionThread(QThread):
@@ -466,6 +625,11 @@ class BeadUploadThread(QThread):
                 return
 
             self.reference_file.beads = beads_df
+            self.reference_file.pre_ensemble_beads = None
+            self.reference_file.ensemble_cache = None
+            self.reference_file.ensemble_sweep_stats = None
+            self.reference_file.ensemble_ratio_selected = None
+            self.reference_file.ensemble_ratio_applied = None
             self.reference_file.cycles = cycles
             self.reference_file.cycle_files = self.cycle_assignments
             self.reference_file.status = FileStatus.BEADS_GENERATED
@@ -921,7 +1085,10 @@ class FileManagerVM(QObject):
         self,
         cycle_assignments: dict[int, FileItem],
         use_stardist=False,
-        model_name="model_4_400epoch_no_aug",
+        model_name="model_5_400epoch",
+        ensemble_ratio_start=image_processing.DEFAULT_ENSEMBLE_RATIO_START,
+        ensemble_ratio_end=image_processing.DEFAULT_ENSEMBLE_RATIO_END,
+        ensemble_ratio_step=image_processing.DEFAULT_ENSEMBLE_RATIO_STEP,
     ):
         assert self.reference_item is not None, (
             "Reference item must be set before generating beads."
@@ -939,6 +1106,9 @@ class FileManagerVM(QObject):
             signal_to_noise_cutoff=0.1,
             use_stardist=use_stardist,
             model_name=model_name,
+            ensemble_ratio_start=ensemble_ratio_start,
+            ensemble_ratio_end=ensemble_ratio_end,
+            ensemble_ratio_step=ensemble_ratio_step,
         )
         self.bead_thread.bead_generated.connect(
             lambda res: self._on_beads_generated(res, curr_ref_path, cycle_assignments)
@@ -953,11 +1123,20 @@ class FileManagerVM(QObject):
         bboxs = results.get("bboxs", pd.Series())
         labeled_image = results.get("labeled_image", None)
         beads = results.get("beads", pd.DataFrame())
+        pre_ensemble_beads = results.get("pre_ensemble_beads", None)
+        ensemble_cache = results.get("ensemble_cache", None)
+        ensemble_sweep_stats = results.get("ensemble_sweep_stats", None)
+        ensemble_ratio_applied = results.get("ensemble_ratio_applied", None)
 
         self.files[reference_path].cycles = cycles
         self.files[reference_path].bboxs = bboxs
         self.files[reference_path].labeled_image = labeled_image
         self.files[reference_path].beads = beads
+        self.files[reference_path].pre_ensemble_beads = pre_ensemble_beads
+        self.files[reference_path].ensemble_cache = ensemble_cache
+        self.files[reference_path].ensemble_sweep_stats = ensemble_sweep_stats
+        self.files[reference_path].ensemble_ratio_applied = ensemble_ratio_applied
+        self.files[reference_path].ensemble_ratio_selected = ensemble_ratio_applied
         self.files[reference_path].status = FileStatus.BEADS_GENERATED
         self.files[
             reference_path
@@ -966,6 +1145,72 @@ class FileManagerVM(QObject):
         self.beads_generated.emit(beads)
         self.bead_progress.emit(100, "Done generating beads")
         self.file_information_update.emit([self.files[reference_path]])
+
+    def recompute_ensemble_sweep(
+        self, file_item: FileItem, start: float, end: float, step: float
+    ) -> DataFrame:
+        if file_item.path not in self.files:
+            raise ValueError("File is not managed by the current session.")
+        saved_f = self.files[file_item.path]
+        if saved_f.pre_ensemble_beads is None or saved_f.ensemble_cache is None:
+            raise ValueError("No StarDist ensemble cache found for this file.")
+        sweep_df = image_processing.compute_ensemble_sweep_stats(
+            pre_ensemble_beads=saved_f.pre_ensemble_beads,
+            ensemble_cache=saved_f.ensemble_cache,
+            start=float(start),
+            end=float(end),
+            step=float(step),
+        )
+        saved_f.ensemble_sweep_stats = sweep_df
+        if sweep_df.empty:
+            saved_f.ensemble_ratio_selected = None
+        else:
+            if saved_f.ensemble_ratio_applied is not None:
+                ratio_arr = sweep_df["ratio"].to_numpy(dtype=np.float64)
+                target = float(saved_f.ensemble_ratio_applied)
+                idx = int(np.argmin(np.abs(ratio_arr - target)))
+                saved_f.ensemble_ratio_selected = float(ratio_arr[idx])
+            else:
+                saved_f.ensemble_ratio_selected = float(sweep_df.iloc[0]["ratio"])
+        self.file_information_update.emit([saved_f])
+        return sweep_df
+
+    def apply_ensemble_ratio(self, file_item: FileItem, ratio: float) -> DataFrame:
+        if file_item.path not in self.files:
+            raise ValueError("File is not managed by the current session.")
+        saved_f = self.files[file_item.path]
+        if saved_f.pre_ensemble_beads is None or saved_f.ensemble_cache is None:
+            raise ValueError("No StarDist ensemble cache found for this file.")
+        ensembled_df = image_processing.build_ensembled_beads_from_cache(
+            pre_ensemble_beads=saved_f.pre_ensemble_beads,
+            ensemble_cache=saved_f.ensemble_cache,
+            ratio=float(ratio),
+        )
+        saved_f.beads = ensembled_df
+        saved_f.ensemble_ratio_applied = float(ratio)
+        saved_f.ensemble_ratio_selected = float(ratio)
+        self.file_information_update.emit([saved_f])
+        return ensembled_df
+
+    def remove_ensemble_applied_changes(self, file_item: FileItem) -> DataFrame:
+        if file_item.path not in self.files:
+            raise ValueError("File is not managed by the current session.")
+        saved_f = self.files[file_item.path]
+        if saved_f.pre_ensemble_beads is None:
+            raise ValueError("No pre-ensemble StarDist beads found for this file.")
+        saved_f.beads = saved_f.pre_ensemble_beads.copy()
+        saved_f.ensemble_ratio_applied = None
+        if (
+            saved_f.ensemble_sweep_stats is not None
+            and not saved_f.ensemble_sweep_stats.empty
+        ):
+            saved_f.ensemble_ratio_selected = float(
+                saved_f.ensemble_sweep_stats.iloc[0]["ratio"]
+            )
+        else:
+            saved_f.ensemble_ratio_selected = None
+        self.file_information_update.emit([saved_f])
+        return saved_f.beads
 
     def validate_bead_csv(self, csv_path: str) -> tuple[bool, str | None, int]:
         """Validate the structure of a bead CSV file.

@@ -1,11 +1,14 @@
 import os
+import time
 from unittest.mock import MagicMock, patch, PropertyMock
 
 import numpy as np
+import pandas as pd
 import pytest
 import tifffile
 from model.file_item import FileItem
 from model.status_enum import FileStatus
+from viewmodel.file_manager_vm import BeadGenerationThread
 
 
 class TestFileManagerVM:
@@ -381,3 +384,204 @@ class TestFileManagerVM:
             assert len(error_calls) == 1
             assert "Skipped 2" in error_calls[0]
             assert "already loaded" in error_calls[0]
+
+    def test_recompute_ensemble_sweep_updates_file_item(self, mock_file_manager_vm, mock_file_item):
+        vm = mock_file_manager_vm
+        vm.files[mock_file_item.path] = mock_file_item
+        mock_file_item.pre_ensemble_beads = pd.DataFrame(
+            {"x": [1.0], "y": [1.0], "cy0": [255], "cy1": [255]}
+        )
+        mock_file_item.ensemble_cache = {"cached": True}
+        mock_file_item.ensemble_ratio_applied = 1.0
+
+        expected_sweep = pd.DataFrame(
+            [
+                {"ratio": 1.0, "valid_pct": 20.0, "invalid_pct": 10.0, "filtered_pct": 70.0},
+                {"ratio": 1.05, "valid_pct": 21.0, "invalid_pct": 9.0, "filtered_pct": 70.0},
+            ]
+        )
+
+        with patch("image_processing.compute_ensemble_sweep_stats", return_value=expected_sweep):
+            out = vm.recompute_ensemble_sweep(mock_file_item, 1.0, 1.05, 0.05)
+
+        assert out.equals(expected_sweep)
+        assert vm.files[mock_file_item.path].ensemble_sweep_stats.equals(expected_sweep)
+        assert vm.files[mock_file_item.path].ensemble_ratio_selected == 1.0
+
+    def test_apply_ensemble_ratio_updates_beads(self, mock_file_manager_vm, mock_file_item):
+        vm = mock_file_manager_vm
+        vm.files[mock_file_item.path] = mock_file_item
+        mock_file_item.pre_ensemble_beads = pd.DataFrame(
+            {"x": [1.0], "y": [1.0], "cy0": [255], "cy1": [255]}
+        )
+        mock_file_item.ensemble_cache = {"cached": True}
+        new_beads = pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [1], "cy1": [2]})
+
+        with patch("image_processing.build_ensembled_beads_from_cache", return_value=new_beads):
+            out = vm.apply_ensemble_ratio(mock_file_item, 1.1)
+
+        assert out.equals(new_beads)
+        assert vm.files[mock_file_item.path].beads.equals(new_beads)
+        assert vm.files[mock_file_item.path].ensemble_ratio_applied == 1.1
+        assert vm.files[mock_file_item.path].ensemble_ratio_selected == 1.1
+
+    def test_remove_ensemble_applied_changes_reverts_to_pre_ensemble(self, mock_file_manager_vm, mock_file_item):
+        vm = mock_file_manager_vm
+        vm.files[mock_file_item.path] = mock_file_item
+        pre = pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [255], "cy1": [255]})
+        mock_file_item.pre_ensemble_beads = pre.copy()
+        mock_file_item.beads = pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [1], "cy1": [2]})
+        mock_file_item.ensemble_ratio_applied = 1.1
+        mock_file_item.ensemble_ratio_selected = 1.1
+        mock_file_item.ensemble_sweep_stats = pd.DataFrame(
+            [{"ratio": 1.0}, {"ratio": 1.05}]
+        )
+
+        out = vm.remove_ensemble_applied_changes(mock_file_item)
+
+        assert out.equals(pre)
+        assert vm.files[mock_file_item.path].beads.equals(pre)
+        assert vm.files[mock_file_item.path].ensemble_ratio_applied is None
+        assert vm.files[mock_file_item.path].ensemble_ratio_selected == 1.0
+
+    def test_bead_generation_thread_uses_time_calibrated_progress(self, qapp, tmp_tiff_path):
+        ref_path = tmp_tiff_path("ref.tif")
+        cy1_path = tmp_tiff_path("cy1.tif")
+        ref_item = FileItem(path=ref_path, status=FileStatus.RAW)
+        ref_item.metadata.max_size = 32
+        ref_item.metadata.reference_channel = 0
+        cy1_item = FileItem(path=cy1_path, status=FileStatus.RAW)
+        cy1_item.metadata.max_size = 32
+        cy1_item.metadata.reference_channel = 0
+
+        ref_saved = FileItem(path=ref_path, status=FileStatus.RAW)
+        ref_saved.metadata.max_size = 32
+        ref_saved.metadata.reference_channel = 0
+        ref_saved.working_image = np.zeros((32, 32), dtype=np.uint16)
+        cy1_saved = FileItem(path=cy1_path, status=FileStatus.RAW)
+        cy1_saved.metadata.max_size = 32
+        cy1_saved.metadata.reference_channel = 0
+        cy1_saved.working_image = np.zeros((32, 32), dtype=np.uint16)
+
+        files = {
+            ref_path: ref_saved,
+            cy1_path: cy1_saved,
+        }
+
+        emitted = []
+        generated = []
+
+        def fake_process_beads(
+            brightfield,
+            tifs,
+            max_size,
+            signal_to_noise_cutoff,
+            progress_callback=None,
+            progress_units_callback=None,
+            **kwargs,
+        ):
+            if progress_callback:
+                progress_callback(0, "Preprocessing brightfield image...")
+                progress_callback(10, "Initial bead detection...")
+                progress_callback(30, "Getting activation regions from cycles")
+            if progress_units_callback:
+                progress_units_callback("activation_regions", 1, 4)
+                progress_units_callback("activation_regions", 2, 4)
+                progress_units_callback("activation_regions", 3, 4)
+                progress_units_callback("activation_regions", 4, 4)
+            if progress_callback:
+                progress_callback(60, "Assigning beads labels")
+                progress_callback(95, "Bead generation complete.")
+            return {
+                "beads": pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [0], "cy1": [1]}),
+                "post_resolution_beads": pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [0], "cy1": [1]}),
+                "cycles": {"cy0": np.zeros((2, 32, 32), dtype=np.uint16)},
+                "labeled_image": np.zeros((32, 32), dtype=np.uint16),
+            }
+
+        thread = BeadGenerationThread(
+            ref_item,
+            [ref_item, cy1_item],
+            files,
+            signal_to_noise_cutoff=0.1,
+            use_stardist=True,
+        )
+        thread.progress.connect(lambda v, m: emitted.append((v, m)))
+        thread.bead_generated.connect(lambda res: generated.append(res))
+
+        with patch("viewmodel.file_manager_vm.load_and_constrain_image", return_value=np.zeros((2, 32, 32), dtype=np.uint16)), \
+             patch("image_processing.process_beads", side_effect=fake_process_beads):
+            thread.run()
+
+        assert generated
+        assert emitted
+        pre_values = [v for v, m in emitted if "Preprocessing brightfield image..." in m]
+        assert pre_values
+        assert pre_values[0] < 30
+        assert any("ETA" in m for v, m in emitted if v >= 0 and v < 100)
+        assert any("Elapsed" in m for v, m in emitted if v >= 0 and v < 100)
+        assert max(v for v, _ in emitted if v >= 0) <= 99
+
+    def test_bead_generation_thread_heartbeat_emits_between_sparse_callbacks(self, qapp, tmp_tiff_path):
+        ref_path = tmp_tiff_path("ref2.tif")
+        cy1_path = tmp_tiff_path("cy2.tif")
+        ref_item = FileItem(path=ref_path, status=FileStatus.RAW)
+        ref_item.metadata.max_size = 32
+        ref_item.metadata.reference_channel = 0
+        cy1_item = FileItem(path=cy1_path, status=FileStatus.RAW)
+        cy1_item.metadata.max_size = 32
+        cy1_item.metadata.reference_channel = 0
+
+        ref_saved = FileItem(path=ref_path, status=FileStatus.RAW)
+        ref_saved.metadata.max_size = 32
+        ref_saved.metadata.reference_channel = 0
+        ref_saved.working_image = np.zeros((32, 32), dtype=np.uint16)
+        cy1_saved = FileItem(path=cy1_path, status=FileStatus.RAW)
+        cy1_saved.metadata.max_size = 32
+        cy1_saved.metadata.reference_channel = 0
+        cy1_saved.working_image = np.zeros((32, 32), dtype=np.uint16)
+
+        files = {
+            ref_path: ref_saved,
+            cy1_path: cy1_saved,
+        }
+
+        emitted = []
+
+        def fake_process_beads(
+            brightfield,
+            tifs,
+            max_size,
+            signal_to_noise_cutoff,
+            progress_callback=None,
+            progress_units_callback=None,
+            **kwargs,
+        ):
+            if progress_callback:
+                progress_callback(10, "Initial bead detection...")
+            time.sleep(1.1)
+            if progress_callback:
+                progress_callback(95, "Bead generation complete.")
+            return {
+                "beads": pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [0], "cy1": [1]}),
+                "post_resolution_beads": pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [0], "cy1": [1]}),
+                "cycles": {"cy0": np.zeros((2, 32, 32), dtype=np.uint16)},
+                "labeled_image": np.zeros((32, 32), dtype=np.uint16),
+            }
+
+        thread = BeadGenerationThread(
+            ref_item,
+            [ref_item, cy1_item],
+            files,
+            signal_to_noise_cutoff=0.1,
+            use_stardist=True,
+        )
+        thread.progress.connect(lambda v, m: emitted.append((v, m)))
+
+        with patch("viewmodel.file_manager_vm.load_and_constrain_image", return_value=np.zeros((2, 32, 32), dtype=np.uint16)), \
+             patch("image_processing.process_beads", side_effect=fake_process_beads):
+            thread.run()
+
+        detection_updates = [x for x in emitted if "Initial bead detection..." in x[1]]
+        assert len(detection_updates) >= 2
+        assert len(detection_updates) <= 3

@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ensemble import (get_latest_trace, label_beads_with_proteins,
-                      load_protein_profiles)
+from ensemble import (compute_bead_profile_metrics, get_latest_trace,
+                      label_beads_with_proteins, load_protein_profiles)
 
 
 def create_trace(run, output_dir):
@@ -108,10 +108,12 @@ def process_run(run, output_dir):
     labeled_df[save_cols].to_csv(os.path.join(run_out, "beads.csv"), index=False)
 
     counts = labeled_df["Protein name"].value_counts()
-    total = len(bead_df)
-    invalid = int(counts.get("Invalid", 0))
-    filtered = int(counts.get("Filtered", 0))
-    valid = total - invalid - filtered
+    metrics = compute_bead_profile_metrics(merged_df, protein_df)
+    total = int(metrics["total"])
+    invalid = int(metrics["invalid"])
+    filtered = int(metrics["filtered"])
+    valid = int(metrics["valid"])
+    unique_cycle_combos = int(metrics["unique_cycle_combos"])
     protein_counts = {
         k: int(v) for k, v in counts.items() if k not in ("Invalid", "Filtered")
     }
@@ -123,9 +125,10 @@ def process_run(run, output_dir):
         "valid": valid,
         "valid_pct": round(100 * valid / total, 1) if total else 0,
         "invalid": invalid,
-        "invalid_pct": round(100 * invalid / total, 1) if total else 0,
+        "invalid_pct": round(float(metrics["invalid_pct_formula"]), 2),
         "filtered": filtered,
-        "filtered_pct": round(100 * filtered / total, 1) if total else 0,
+        "filtered_pct": round(float(metrics["filtered_pct"]), 2),
+        "unique_cycle_combos": unique_cycle_combos,
         "protein_counts": protein_counts,
     }
 

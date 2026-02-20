@@ -5,6 +5,94 @@ import numpy as np
 import pandas as pd
 
 
+def _cycle_col_sort_key(name: str):
+    suffix = name[2:]
+    if suffix.isdigit():
+        return int(suffix)
+    return suffix
+
+
+def _shared_cycle_columns(bead_df: pd.DataFrame, protein_df: pd.DataFrame) -> list[str]:
+    protein_cycle_cols = [c for c in protein_df.columns if c.startswith("cy")]
+    shared = [c for c in protein_cycle_cols if c in bead_df.columns]
+    return sorted(shared, key=_cycle_col_sort_key)
+
+
+def _normalize_cycle_values(df: pd.DataFrame, cycle_cols: list[str]) -> pd.DataFrame:
+    normalized = df.loc[:, cycle_cols].apply(pd.to_numeric, errors="coerce")
+    return normalized.fillna(255).astype(np.int64)
+
+
+def compute_bead_profile_metrics(bead_df: pd.DataFrame, protein_df: pd.DataFrame) -> dict:
+    total = int(len(bead_df))
+    cycle_cols = _shared_cycle_columns(bead_df, protein_df)
+
+    if total == 0:
+        empty_mask = np.array([], dtype=bool)
+        return {
+            "total": 0,
+            "valid": 0,
+            "invalid": 0,
+            "filtered": 0,
+            "valid_pct": 0.0,
+            "invalid_pct_formula": 0.0,
+            "filtered_pct": 0.0,
+            "unique_cycle_combos": 0,
+            "cycle_cols": cycle_cols,
+            "valid_mask": empty_mask,
+            "invalid_mask": empty_mask,
+            "filtered_mask": empty_mask,
+        }
+
+    if len(cycle_cols) == 0:
+        filtered_mask = np.zeros(total, dtype=bool)
+        known_combo_mask = np.zeros(total, dtype=bool)
+        unique_cycle_combos = 0
+    else:
+        bead_cycles = _normalize_cycle_values(bead_df, cycle_cols)
+        profile_cycles = _normalize_cycle_values(protein_df, cycle_cols).drop_duplicates()
+        unique_cycle_combos = int(len(profile_cycles))
+        filtered_mask = bead_cycles.ge(254).any(axis=1).to_numpy(dtype=bool)
+        if unique_cycle_combos == 0:
+            known_combo_mask = np.zeros(total, dtype=bool)
+        else:
+            bead_index = pd.MultiIndex.from_frame(bead_cycles, names=cycle_cols)
+            profile_index = pd.MultiIndex.from_frame(profile_cycles, names=cycle_cols)
+            known_combo_mask = bead_index.isin(profile_index)
+
+    valid_mask = (~filtered_mask) & known_combo_mask
+    invalid_mask = (~filtered_mask) & (~known_combo_mask)
+
+    valid = int(valid_mask.sum())
+    invalid = int(invalid_mask.sum())
+    filtered = int(filtered_mask.sum())
+
+    invalid_pct_formula = 0.0
+    if valid > 0 and unique_cycle_combos > 0:
+        invalid_pct_formula = (invalid * unique_cycle_combos / valid) * 100.0
+
+    filtered_pct = 0.0
+    valid_pct = 0.0
+    if total > 0:
+        filtered_pct = (filtered / total) * 100.0
+        valid_pct = (valid / total) * 100.0
+
+    return {
+        "total": total,
+        "valid": valid,
+        "invalid": invalid,
+        "filtered": filtered,
+        "valid_pct": valid_pct,
+        "invalid_pct_formula": invalid_pct_formula,
+        "filtered_pct": filtered_pct,
+        "unique_cycle_combos": unique_cycle_combos,
+        "cycle_cols": cycle_cols,
+        "valid_mask": valid_mask,
+        "invalid_mask": invalid_mask,
+        "filtered_mask": filtered_mask,
+    }
+
+
 def load_protein_profiles(file_paths: list[str]) -> pd.DataFrame:
     """Load protein profiles from CSV/Excel files."""
     dfs = []
@@ -24,7 +112,7 @@ def load_protein_profiles(file_paths: list[str]) -> pd.DataFrame:
 
 
 def label_beads_with_proteins(bead_df, protein_df):
-    cycle_cols = [c for c in protein_df.columns if c.startswith("cy")]
+    cycle_cols = _shared_cycle_columns(bead_df, protein_df)
     for col in cycle_cols:
         if col in bead_df.columns:
             bead_df[col] = bead_df[col].astype(int)
@@ -106,14 +194,11 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"\nTotal beads: {len(bead_df)}")
 
-    counts = results_df_with_protein["Protein name"].value_counts()
-    valid = len(bead_df) - counts.get("Invalid", 0) - counts.get("Filtered", 0)
+    metrics = compute_bead_profile_metrics(merged_df, protein_df)
 
     # print("\nPreview:")
     # print(results_df.head(10))
-    print(f"Valid: {valid} ({100 * valid / len(bead_df):.1f}%)")
-    print(
-        f"invalid_pct: {100 * counts.get('Invalid', 0) / (counts.mean() if counts.mean() > 0 else 1):.1f}%"
-    )
-    print(f"Invalid: {counts.get('Invalid', 0)}")
-    print(f"Filtered: {counts.get('Filtered', 0)}")
+    print(f"Valid: {metrics['valid']} ({metrics['valid_pct']:.1f}%)")
+    print(f"invalid_pct: {metrics['invalid_pct_formula']:.1f}%")
+    print(f"Invalid: {metrics['invalid']}")
+    print(f"Filtered: {metrics['filtered']}")

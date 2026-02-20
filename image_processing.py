@@ -1,7 +1,9 @@
+import json
 import os
 import time
 from collections import defaultdict
-from typing import List, Tuple
+from datetime import datetime
+from typing import Dict, List, Tuple
 
 import cv2
 
@@ -19,6 +21,8 @@ from skimage.segmentation import clear_border
 from sklearn.cluster import KMeans
 from tqdm import tqdm
 
+from benchmark_tracer import _median_per_region, voronoi_from_centers_tiled
+from ensemble import compute_bead_profile_metrics
 from model.file_item import MetaData
 
 
@@ -1116,8 +1120,14 @@ def get_labels_from_cycles(
     use_stardist=False,  # Toggle between watershed and StarDist
     model=None,  # StarDist model (required if use_stardist=True)
     normalize_method="none",  # Exposure normalization method
+    progress_units_callback=None,
 ):
     cycle_labels = []
+    total_units = 0
+    for metadata in cycles_metadata:
+        if metadata.flors_layers is not None:
+            total_units += len(metadata.flors_layers)
+    done_units = 0
     for i in range(len(cycles)):
         cycles[i] = process_cycle(cycles[i], cycles_metadata[i], normalize_method)[
             :max_size, :max_size
@@ -1174,6 +1184,9 @@ def get_labels_from_cycles(
                     )
                 # label = stardist_segmentation(img_array, model)
                 labels.append(label)
+            done_units += 1
+            if progress_units_callback:
+                progress_units_callback("activation_regions", done_units, total_units)
 
         cycle_labels.append(labels)
     return cycle_labels
@@ -1657,7 +1670,9 @@ def load_custom_model(model_dir: str):
         )
     for item in os.listdir(model_dir):
         subpath = os.path.join(model_dir, item)
-        if os.path.isdir(subpath) and os.path.exists(os.path.join(subpath, "config.json")):
+        if os.path.isdir(subpath) and os.path.exists(
+            os.path.join(subpath, "config.json")
+        ):
             return StarDist2D(None, name=item, basedir=model_dir)
     raise ValueError(f"No StarDist model found in {model_dir}")
 
@@ -1671,9 +1686,15 @@ def get_labels_from_cycles_with_prob(
     prob_thresh=0.1,
     n_tiles=1,
     nms_thresh=0.1,
+    progress_units_callback=None,
 ):
     n_tiles_tuple = (n_tiles, n_tiles)
     cycle_labels = []
+    total_units = 0
+    for metadata in metadata_list:
+        if metadata.flors_layers is not None:
+            total_units += len(metadata.flors_layers)
+    done_units = 0
     for i, cycle in enumerate(tqdm(cycles, desc="Processing cycles")):
         layers_out = []
         flors_layers = metadata_list[i].flors_layers
@@ -1700,6 +1721,9 @@ def get_labels_from_cycles_with_prob(
                 m = min(n_obj, probs.shape[0])
                 prob_lut[1 : m + 1] = probs[:m]
             layers_out.append({"lbl": lbl.astype(np.int32), "prob_lut": prob_lut})
+            done_units += 1
+            if progress_units_callback:
+                progress_units_callback("activation_regions", done_units, total_units)
         cycle_labels.append(layers_out)
     return cycle_labels
 
@@ -1798,7 +1822,9 @@ def assign_beads_labels_with_prob_patch3x3_fallback(
                 trust_center = center_id > 0
                 if min_center_prob is not None:
                     trust_center &= center_prob >= float(min_center_prob)
-                best_id = np.where(trust_center, center_id, invalid_value).astype(np.int32)
+                best_id = np.where(trust_center, center_id, invalid_value).astype(
+                    np.int32
+                )
                 best_prob = np.where(trust_center, center_prob, 0.0).astype(np.float32)
 
                 def _eval_patch(xs_sub, ys_sub):
@@ -1882,7 +1908,9 @@ def enforce_single_layer_per_cycle(
         prob_cols = [f"cy{i}_{j}_prob" for j in range(num_layers)]
         layers = df[layer_cols].to_numpy(copy=True)
         probs = df[prob_cols].to_numpy(copy=True)
-        valid_mask = (layers != invalid_value) & (layers > 0) & (probs >= float(min_prob))
+        valid_mask = (
+            (layers != invalid_value) & (layers > 0) & (probs >= float(min_prob))
+        )
         valid_counts = valid_mask.sum(axis=1)
         enforce_mask = valid_counts == 2
         if not np.any(enforce_mask):
@@ -1923,6 +1951,12 @@ def resolve_layers_to_cycles(df, num_cycles, num_layers, invalid_value=255):
     return final_df
 
 
+DEFAULT_ENSEMBLE_RATIO_START = 1.0
+DEFAULT_ENSEMBLE_RATIO_END = 1.5
+DEFAULT_ENSEMBLE_RATIO_STEP = 0.05
+DEFAULT_VORONOI_MIN_ASSIGNED_VALUE = 0.1
+
+
 def _validate_fluorescence_layers(tif_metadata: List[MetaData]) -> int:
     if len(tif_metadata) == 0:
         raise ValueError("No cycle metadata found.")
@@ -1939,6 +1973,307 @@ def _validate_fluorescence_layers(tif_metadata: List[MetaData]) -> int:
     return expected_layers
 
 
+def _validate_ensemble_ratio_range(start: float, end: float, step: float):
+    if step <= 0:
+        raise ValueError("Ensemble ratio step must be > 0.")
+    if end < start:
+        raise ValueError("Ensemble ratio end must be >= start.")
+
+
+def _build_ratio_values(start: float, end: float, step: float) -> list[float]:
+    _validate_ensemble_ratio_range(start, end, step)
+    values = []
+    current = float(start)
+    epsilon = abs(step) * 1e-9 + 1e-12
+    while current <= end + epsilon:
+        values.append(round(current, 4))
+        current += step
+    if len(values) == 0:
+        values = [round(start, 4)]
+    return values
+
+
+def _round_xy_for_merge(df: pd.DataFrame) -> pd.DataFrame:
+    rounded = df.copy()
+    rounded["x"] = np.rint(rounded["x"]).astype(np.float32)
+    rounded["y"] = np.rint(rounded["y"]).astype(np.float32)
+    return rounded
+
+
+def _compute_ensemble_preview_metrics(beads_df: pd.DataFrame) -> dict:
+    total = int(len(beads_df))
+    if total == 0:
+        return {
+            "total": 0,
+            "valid": 0,
+            "valid_pct": 0.0,
+            "invalid_count": 0,
+            "invalid_pct": 0.0,
+            "filtered_count": 0,
+            "filtered_pct": 0.0,
+            "mean_beads_per_protein": 0.0,
+            "invalid_error_percentage": 0.0,
+        }
+    error_stats = get_error(beads_df)
+    invalid_count = int(error_stats.get("invalid_count", 0))
+    filtered_count = int(error_stats.get("filtered_count", 0))
+    valid_count = max(total - invalid_count - filtered_count, 0)
+    filtered_pct = float(
+        error_stats.get("filtered_percentage", 100.0 * filtered_count / total)
+    )
+    return {
+        "total": total,
+        "valid": valid_count,
+        "valid_pct": 100.0 * valid_count / total,
+        "invalid_count": invalid_count,
+        "invalid_pct": 100.0 * invalid_count / total,
+        "filtered_count": filtered_count,
+        "filtered_pct": filtered_pct,
+        "mean_beads_per_protein": float(error_stats.get("mean_beads_per_protein", 0.0)),
+        "invalid_error_percentage": float(
+            error_stats.get("invalid_error_percentage", 0.0)
+        ),
+    }
+
+
+def _build_voronoi_resolved_from_cache(
+    pre_ensemble_beads: pd.DataFrame,
+    ensemble_cache: dict,
+    ratio: float,
+) -> pd.DataFrame:
+    resolved = pre_ensemble_beads[["x", "y"]].copy()
+    assigned_layers = ensemble_cache["assigned_layers"]
+    assigned_values = ensemble_cache["assigned_values"]
+    assigned_margins = ensemble_cache.get("assigned_margins", {})
+    threshold = float(
+        ensemble_cache.get("min_assigned_value", DEFAULT_VORONOI_MIN_ASSIGNED_VALUE)
+    )
+    surviving = np.ones(len(pre_ensemble_beads), dtype=bool)
+    for vals in assigned_values.values():
+        surviving &= vals >= threshold
+    if ratio > 1.0 and len(assigned_margins) > 0:
+        for margins in assigned_margins.values():
+            surviving &= margins >= ratio
+    for cy_key, layers in assigned_layers.items():
+        col = np.full(len(pre_ensemble_beads), 255, dtype=np.uint16)
+        if len(col) > 0:
+            col[surviving] = layers[surviving].astype(np.uint16)
+        resolved[cy_key] = col
+    return resolved
+
+
+def _merge_with_voronoi_candidates(
+    stardist_beads: pd.DataFrame,
+    voronoi_beads: pd.DataFrame,
+) -> pd.DataFrame:
+    if stardist_beads is None:
+        return pd.DataFrame()
+    if stardist_beads.empty:
+        return stardist_beads.copy()
+    if voronoi_beads is None or voronoi_beads.empty:
+        return stardist_beads.copy()
+    required = {"x", "y", "cy0", "cy1"}
+    if not required.issubset(voronoi_beads.columns):
+        return stardist_beads.copy()
+
+    base = _round_xy_for_merge(stardist_beads)
+    other = _round_xy_for_merge(voronoi_beads[["x", "y", "cy0", "cy1"]])
+    merged = base.merge(other, on=["x", "y"], suffixes=("", "_other"), how="left")
+    mask_main_255 = merged["cy0"] == 255
+    mask_other_valid = merged["cy0_other"].notna() & (merged["cy0_other"] != 255)
+    mask_update = mask_main_255 & mask_other_valid
+    if mask_update.any():
+        merged.loc[mask_update, "cy0"] = merged.loc[mask_update, "cy0_other"]
+        merged.loc[mask_update, "cy1"] = merged.loc[mask_update, "cy1_other"]
+    merged = merged.drop(columns=["cy0_other", "cy1_other"], errors="ignore")
+    for col in [c for c in merged.columns if c.startswith("cy")]:
+        merged[col] = (
+            pd.to_numeric(merged[col], errors="coerce").fillna(255).astype(np.uint16)
+        )
+    merged["x"] = merged["x"].astype(np.float32)
+    merged["y"] = merged["y"].astype(np.float32)
+    return merged
+
+
+def build_ensembled_beads_from_cache(
+    pre_ensemble_beads: pd.DataFrame,
+    ensemble_cache: dict,
+    ratio: float,
+) -> pd.DataFrame:
+    if pre_ensemble_beads is None:
+        raise ValueError("Missing pre-ensemble beads for applying ensemble ratio.")
+    if ensemble_cache is None:
+        raise ValueError("Missing ensemble cache for applying ensemble ratio.")
+    voronoi_resolved = _build_voronoi_resolved_from_cache(
+        pre_ensemble_beads=pre_ensemble_beads,
+        ensemble_cache=ensemble_cache,
+        ratio=float(ratio),
+    )
+    return _merge_with_voronoi_candidates(pre_ensemble_beads, voronoi_resolved)
+
+
+def compute_ensemble_sweep_stats(
+    pre_ensemble_beads: pd.DataFrame,
+    ensemble_cache: dict,
+    start: float,
+    end: float,
+    step: float,
+    progress_units_callback=None,
+) -> pd.DataFrame:
+    if pre_ensemble_beads is None:
+        raise ValueError("Missing pre-ensemble beads for ensemble sweep.")
+    if ensemble_cache is None:
+        raise ValueError("Missing ensemble cache for ensemble sweep.")
+    ratios = _build_ratio_values(float(start), float(end), float(step))
+    rows = []
+    total_ratios = len(ratios)
+    for index, ratio in enumerate(ratios):
+        ensembled_df = build_ensembled_beads_from_cache(
+            pre_ensemble_beads=pre_ensemble_beads,
+            ensemble_cache=ensemble_cache,
+            ratio=ratio,
+        )
+        metrics = _compute_ensemble_preview_metrics(ensembled_df)
+        rows.append(
+            {
+                "ratio": float(ratio),
+                "total": metrics["total"],
+                "valid": metrics["valid"],
+                "valid_pct": metrics["valid_pct"],
+                "invalid_count": metrics["invalid_count"],
+                "invalid_pct": metrics["invalid_pct"],
+                "filtered_count": metrics["filtered_count"],
+                "filtered_pct": metrics["filtered_pct"],
+                "mean_beads_per_protein": metrics["mean_beads_per_protein"],
+                "invalid_error_percentage": metrics["invalid_error_percentage"],
+            }
+        )
+        if progress_units_callback:
+            progress_units_callback("voronoi_sweep", index + 1, total_ratios)
+    return pd.DataFrame(rows)
+
+
+def _compute_voronoi_ensemble_cache(
+    bead_df: pd.DataFrame,
+    cycles: list[np.ndarray],
+    metadata_list: List[MetaData],
+    max_size: int,
+    min_assigned_value: float = DEFAULT_VORONOI_MIN_ASSIGNED_VALUE,
+    border_erosion: int = 0,
+    progress_units_callback=None,
+) -> dict:
+    n_beads = len(bead_df)
+    num_cycles = len(cycles)
+    if n_beads == 0:
+        if progress_units_callback:
+            progress_units_callback("voronoi_cache", 1, 1)
+        return {
+            "assigned_layers": {
+                f"cy{i}": np.array([], dtype=np.uint8) for i in range(num_cycles)
+            },
+            "assigned_values": {
+                f"cy{i}": np.array([], dtype=np.float32) for i in range(num_cycles)
+            },
+            "assigned_margins": {
+                f"cy{i}": np.array([], dtype=np.float32) for i in range(num_cycles)
+            },
+            "min_assigned_value": float(min_assigned_value),
+            "num_cycles": num_cycles,
+        }
+
+    total_layer_units = 0
+    for metadata in metadata_list:
+        if metadata.flors_layers is not None:
+            total_layer_units += len(metadata.flors_layers)
+    total_units = 1 + total_layer_units
+    done_units = 0
+
+    shape = (int(max_size), int(max_size))
+    xy = bead_df[["x", "y"]].to_numpy(dtype=np.float64)
+    vor_lbl = voronoi_from_centers_tiled(
+        xy,
+        shape,
+        tile=2048,
+        show_progress=False,
+    )
+    done_units += 1
+    if progress_units_callback:
+        progress_units_callback("voronoi_cache", done_units, total_units)
+    h0 = min(int(max_size), vor_lbl.shape[0])
+    w0 = min(int(max_size), vor_lbl.shape[1])
+    vor = vor_lbl[:h0, :w0]
+    if border_erosion > 0:
+        boundary = np.zeros(vor.shape, dtype=bool)
+        boundary[:-1, :] |= vor[:-1, :] != vor[1:, :]
+        boundary[1:, :] |= vor[:-1, :] != vor[1:, :]
+        boundary[:, :-1] |= vor[:, :-1] != vor[:, 1:]
+        boundary[:, 1:] |= vor[:, :-1] != vor[:, 1:]
+        dist = ndi.distance_transform_edt(~boundary)
+        vor = vor.copy()
+        vor[dist < int(border_erosion)] = -1
+
+    raw_cols: Dict[str, np.ndarray] = {}
+    col_names: list[str] = []
+    for ci, (cycle, md) in enumerate(zip(cycles, metadata_list)):
+        h = min(int(max_size), cycle.shape[-2])
+        w = min(int(max_size), cycle.shape[-1])
+        v = vor[:h, :w]
+        rf = v.ravel()
+        flors_layers = md.flors_layers
+        if flors_layers is None or len(flors_layers) == 0:
+            raise ValueError(
+                f"Cycle {ci} has no fluorescence layers for Voronoi ensemble."
+            )
+        for li, ch_idx in enumerate(flors_layers):
+            col = f"cy{ci}_{li}"
+            col_names.append(col)
+            img = cycle[ch_idx, :h, :w].astype(np.float32)
+            raw_cols[col] = _median_per_region(img.ravel(), rf, n_beads)
+            done_units += 1
+            if progress_units_callback:
+                progress_units_callback("voronoi_cache", done_units, total_units)
+
+    norm_cols: Dict[str, np.ndarray] = {}
+    for col, vals in raw_cols.items():
+        lo = float(vals.min()) if len(vals) > 0 else 0.0
+        hi = float(vals.max()) if len(vals) > 0 else 0.0
+        if hi > lo:
+            norm_cols[col] = (vals - lo) / (hi - lo + 1e-8)
+        else:
+            norm_cols[col] = np.zeros_like(vals, dtype=np.float32)
+
+    assigned_layers: Dict[str, np.ndarray] = {}
+    assigned_values: Dict[str, np.ndarray] = {}
+    assigned_margins: Dict[str, np.ndarray] = {}
+    for ci in range(num_cycles):
+        cy_cols = [c for c in col_names if c.startswith(f"cy{ci}_")]
+        if len(cy_cols) == 0:
+            assigned_layers[f"cy{ci}"] = np.zeros(n_beads, dtype=np.uint8)
+            assigned_values[f"cy{ci}"] = np.zeros(n_beads, dtype=np.float32)
+            assigned_margins[f"cy{ci}"] = np.full(n_beads, np.inf, dtype=np.float32)
+            continue
+        mat = np.stack([norm_cols[c] for c in cy_cols], axis=1)
+        best_layer = np.argmax(mat, axis=1).astype(np.uint8)
+        best_val = mat[np.arange(n_beads), best_layer].astype(np.float32)
+        assigned_layers[f"cy{ci}"] = best_layer
+        assigned_values[f"cy{ci}"] = best_val
+        if mat.shape[1] >= 2:
+            sorted_mat = np.sort(mat, axis=1)
+            second_best = sorted_mat[:, -2]
+            margin_ratio = best_val / (second_best + 1e-8)
+            assigned_margins[f"cy{ci}"] = margin_ratio.astype(np.float32)
+        else:
+            assigned_margins[f"cy{ci}"] = np.full(n_beads, np.inf, dtype=np.float32)
+
+    return {
+        "assigned_layers": assigned_layers,
+        "assigned_values": assigned_values,
+        "assigned_margins": assigned_margins,
+        "min_assigned_value": float(min_assigned_value),
+        "num_cycles": num_cycles,
+    }
+
+
 def _process_beads_notebook_stardist(
     brightfield,
     tifs,
@@ -1946,6 +2281,10 @@ def _process_beads_notebook_stardist(
     model_name,
     update_progress,
     is_running,
+    progress_units_callback=None,
+    ensemble_ratio_start=DEFAULT_ENSEMBLE_RATIO_START,
+    ensemble_ratio_end=DEFAULT_ENSEMBLE_RATIO_END,
+    ensemble_ratio_step=DEFAULT_ENSEMBLE_RATIO_STEP,
 ):
     bead_detection_scale = 2
     stardist_prob_thresh = 0.1
@@ -1972,20 +2311,27 @@ def _process_beads_notebook_stardist(
     tif_images = [np.ascontiguousarray(img)[:, :max_size, :max_size] for img, _ in tifs]
     for i, md in enumerate(tif_metadata):
         assert isinstance(md, MetaData)
-        md.flors_layers = [j for j in range(len(tif_images[i])) if j > int(md.reference_channel)]
+        md.flors_layers = [
+            j for j in range(len(tif_images[i])) if j > int(md.reference_channel)
+        ]
     num_cycles = len(tif_metadata)
     num_layers = _validate_fluorescence_layers(tif_metadata)
     model_dir = _resolve_model_dir(model_name)
     custom_model = load_custom_model(model_dir)
+    cycle_labels_kwargs = {
+        "block_size": stardist_block_size,
+        "prob_thresh": stardist_prob_thresh,
+        "nms_thresh": stardist_nms_thresh,
+        "n_tiles": stardist_n_tiles,
+    }
+    if progress_units_callback:
+        cycle_labels_kwargs["progress_units_callback"] = progress_units_callback
     cycle_labels = get_labels_from_cycles_with_prob(
         tif_images,
         tif_metadata,
         max_size,
         custom_model,
-        block_size=stardist_block_size,
-        prob_thresh=stardist_prob_thresh,
-        nms_thresh=stardist_nms_thresh,
-        n_tiles=stardist_n_tiles,
+        **cycle_labels_kwargs,
     )
     if not is_running():
         return None
@@ -2008,11 +2354,56 @@ def _process_beads_notebook_stardist(
         min_prob=0,
         invalid_value=0,
     )
-    results_df = resolve_layers_to_cycles(
+    pre_ensemble_beads = resolve_layers_to_cycles(
         bead_df,
         num_cycles=num_cycles,
         num_layers=num_layers,
     )
+
+    update_progress(72, "Running Voronoi ensemble analysis")
+    if not is_running():
+        return None
+
+    update_progress(76, "Voronoi median: building ensemble cache")
+    ensemble_cache_kwargs = {
+        "bead_df": pre_ensemble_beads,
+        "cycles": tif_images,
+        "metadata_list": tif_metadata,
+        "max_size": max_size,
+        "min_assigned_value": DEFAULT_VORONOI_MIN_ASSIGNED_VALUE,
+    }
+    if progress_units_callback:
+        ensemble_cache_kwargs["progress_units_callback"] = progress_units_callback
+    ensemble_cache = _compute_voronoi_ensemble_cache(
+        **ensemble_cache_kwargs,
+    )
+    if not is_running():
+        return None
+
+    update_progress(84, "Voronoi median: sweeping ensemble ratios")
+    ensemble_sweep_kwargs = {
+        "pre_ensemble_beads": pre_ensemble_beads,
+        "ensemble_cache": ensemble_cache,
+        "start": float(ensemble_ratio_start),
+        "end": float(ensemble_ratio_end),
+        "step": float(ensemble_ratio_step),
+    }
+    if progress_units_callback:
+        ensemble_sweep_kwargs["progress_units_callback"] = progress_units_callback
+    ensemble_sweep_stats = compute_ensemble_sweep_stats(**ensemble_sweep_kwargs)
+    if not is_running():
+        return None
+
+    ratio_applied = float(ensemble_ratio_start)
+    if not ensemble_sweep_stats.empty:
+        ratio_applied = float(ensemble_sweep_stats.iloc[0]["ratio"])
+    update_progress(90, "Voronoi median: applying selected ratio")
+    results_df = build_ensembled_beads_from_cache(
+        pre_ensemble_beads=pre_ensemble_beads,
+        ensemble_cache=ensemble_cache,
+        ratio=ratio_applied,
+    )
+
     cycles = {}
     for i in range(len(tifs)):
         cycles[f"cy{i}"] = tifs[i][0]
@@ -2020,6 +2411,10 @@ def _process_beads_notebook_stardist(
     return {
         "beads": results_df,
         "post_resolution_beads": results_df,
+        "pre_ensemble_beads": pre_ensemble_beads,
+        "ensemble_cache": ensemble_cache,
+        "ensemble_sweep_stats": ensemble_sweep_stats,
+        "ensemble_ratio_applied": ratio_applied,
         "cycles": cycles,
         "labeled_image": labeled_image,
     }
@@ -2043,8 +2438,9 @@ def prepare_data_for_resolution(
     border_erode=1,
     fill=True,
     use_stardist=False,  # Toggle between watershed and StarDist
-    model_name="model_4_400epoch_no_aug",  # Model path for StarDist
+    model_name="model_5_400epoch",  # Model path for StarDist
     normalize_method="none",  # Exposure normalization method
+    progress_units_callback=None,
 ):
     """
 
@@ -2120,19 +2516,24 @@ def prepare_data_for_resolution(
     else:
         model = None  # Not needed for watershed
 
+    label_kwargs = {
+        "fill": fill,
+        "low_percentile": low_percentile,
+        "high_percentile": high_percentile,
+        "adaptive_thresholding": adaptive_thresholding,
+        "tile_size": tile_size,
+        "border_erode": border_erode,
+        "use_stardist": use_stardist,
+        "model": model,
+        "normalize_method": normalize_method,
+    }
+    if progress_units_callback:
+        label_kwargs["progress_units_callback"] = progress_units_callback
     labels = get_labels_from_cycles(
         tif_images,
         tif_metadata,
         max_size,
-        fill=fill,
-        low_percentile=low_percentile,
-        high_percentile=high_percentile,
-        adaptive_thresholding=adaptive_thresholding,
-        tile_size=tile_size,
-        border_erode=border_erode,
-        use_stardist=use_stardist,
-        model=model,
-        normalize_method=normalize_method,
+        **label_kwargs,
     )
 
     update_progress(50, "Assigning beads labels")
@@ -2381,7 +2782,14 @@ def _medianroi_method_optimized(
 import itertools
 
 
-def optimize_parameters(beads, signal_to_noise_cutoff, tifs, max_size, param_grid):
+def optimize_parameters(
+    beads,
+    signal_to_noise_cutoff,
+    tifs,
+    max_size,
+    param_grid,
+    progress_units_callback=None,
+):
     """
     Iteratively runs bead processing with different parameters to find the optimal set.
     """
@@ -2410,7 +2818,10 @@ def optimize_parameters(beads, signal_to_noise_cutoff, tifs, max_size, param_gri
         f"\nStarting optimization for {len(valid_combinations)} parameter combinations..."
     )
 
-    for params in tqdm(valid_combinations, desc="Optimizing Parameters"):
+    total_combinations = len(valid_combinations)
+    for index, params in enumerate(
+        tqdm(valid_combinations, desc="Optimizing Parameters"), start=1
+    ):
         try:
             # Run the main processing function with the current set of parameters
             data_dict = prepare_data_for_resolution(
@@ -2440,6 +2851,8 @@ def optimize_parameters(beads, signal_to_noise_cutoff, tifs, max_size, param_gri
             results.append(
                 {**params, "error_percent": np.nan, "filtered_count": np.nan}
             )
+        if progress_units_callback:
+            progress_units_callback("optimize_params", index, total_combinations)
 
     # Analyze and display best results
     if not results:
@@ -2502,7 +2915,8 @@ def get_excel(
     n_workers=10,
     radius=2,
     use_stardist=False,  # Toggle between watershed and StarDist
-    model_name="model_4_400epoch_no_aug",  # Model path for StarDist
+    model_name="model_5_400epoch",  # Model path for StarDist
+    progress_units_callback=None,
 ):
     def update_progress(value, message):
         if progress_callback:
@@ -2543,12 +2957,16 @@ def get_excel(
             for img, meta in tifs
         ]
         bead_positions = beads.query(f"x < {sample_size} and y < {sample_size}")
+        optimization_kwargs = {}
+        if progress_units_callback:
+            optimization_kwargs["progress_units_callback"] = progress_units_callback
         optimization_results = optimize_parameters(
             bead_positions,
             signal_to_noise_cutoff,
             cropped_tifs,
             sample_size,
             param_grid,
+            **optimization_kwargs,
         )
         if optimization_results is None:
             log("Optimization failed, using default parameters.")
@@ -2565,17 +2983,22 @@ def get_excel(
         high_percentile = 70  # Unused but keep for consistency
         update_progress(30, "Getting activation regions from cycles")
 
+    prepare_kwargs = {
+        "border_erode": border_erode,
+        "low_percentile": low_percentile,
+        "high_percentile": high_percentile,
+        "use_stardist": use_stardist,
+        "model_name": model_name,
+        "progress_callback": update_progress,
+    }
+    if progress_units_callback:
+        prepare_kwargs["progress_units_callback"] = progress_units_callback
     data_dict = prepare_data_for_resolution(
         beads,
         signal_to_noise_cutoff,
         tifs,
         max_size,
-        border_erode=border_erode,
-        low_percentile=low_percentile,
-        high_percentile=high_percentile,
-        use_stardist=use_stardist,
-        model_name=model_name,
-        progress_callback=update_progress,
+        **prepare_kwargs,
     )
     final_df = data_dict["final_df"]
     tif_metadata = data_dict["tif_metadata"]
@@ -2640,9 +3063,82 @@ def process_beads(
     progress_callback=None,
     is_running_callback=None,
     use_stardist=False,  # Toggle between watershed and StarDist
-    model_name="model_4_400epoch_no_aug",  # Model path for StarDist
+    model_name="model_5_400epoch",  # Model path for StarDist
+    progress_units_callback=None,
+    ensemble_ratio_start=DEFAULT_ENSEMBLE_RATIO_START,
+    ensemble_ratio_end=DEFAULT_ENSEMBLE_RATIO_END,
+    ensemble_ratio_step=DEFAULT_ENSEMBLE_RATIO_STEP,
 ):
+    trace_started_at = datetime.now().isoformat()
+    trace_start = time.perf_counter()
+    trace_status = "running"
+    trace_error = None
+    trace_events = []
+    trace_counts = {}
+    trace_path = os.path.abspath("t.json")
+
+    def record_event(value, message):
+        now = time.perf_counter()
+        event = {
+            "progress": int(value) if isinstance(value, (int, np.integer)) else value,
+            "message": str(message),
+            "offset_s": round(now - trace_start, 6),
+        }
+        if trace_events:
+            prev = trace_events[-1]
+            prev["duration_s"] = round(event["offset_s"] - prev["offset_s"], 6)
+        trace_events.append(event)
+
+    def finalize_trace():
+        total_elapsed = round(time.perf_counter() - trace_start, 6)
+        if trace_events:
+            trace_events[-1]["duration_s"] = round(
+                total_elapsed - trace_events[-1]["offset_s"], 6
+            )
+
+        ordered_messages = []
+        durations_by_message = {}
+        for event in trace_events:
+            message = event["message"]
+            if message not in durations_by_message:
+                durations_by_message[message] = 0.0
+                ordered_messages.append(message)
+            durations_by_message[message] += float(event.get("duration_s", 0.0))
+
+        step_durations = [
+            {
+                "message": message,
+                "duration_s": round(durations_by_message[message], 6),
+            }
+            for message in ordered_messages
+        ]
+
+        trace_payload = {
+            "started_at": trace_started_at,
+            "ended_at": datetime.now().isoformat(),
+            "total_duration_s": total_elapsed,
+            "status": trace_status,
+            "error": trace_error,
+            "use_stardist": bool(use_stardist),
+            "model_name": model_name,
+            "max_size": int(max_size),
+            "signal_to_noise_cutoff": float(signal_to_noise_cutoff),
+            "ensemble_ratio_start": float(ensemble_ratio_start),
+            "ensemble_ratio_end": float(ensemble_ratio_end),
+            "ensemble_ratio_step": float(ensemble_ratio_step),
+            "counts": trace_counts,
+            "events": trace_events,
+            "step_durations": step_durations,
+        }
+
+        try:
+            with open(trace_path, "w", encoding="utf-8") as trace_file:
+                json.dump(trace_payload, trace_file, indent=2)
+        except Exception:
+            pass
+
     def update_progress(value, message):
+        record_event(value, message)
         if progress_callback:
             progress_callback(value, message)
 
@@ -2651,93 +3147,141 @@ def process_beads(
             return is_running_callback()
         return True
 
-    update_progress(0, "Preprocessing brightfield image...")
-    if not is_running():
-        return None
-    log(f"Preprocessed to shape: {brightfield.shape}")
+    try:
+        update_progress(0, "Preprocessing brightfield image...")
+        if not is_running():
+            trace_status = "cancelled"
+            return None
+        log(f"Preprocessed to shape: {brightfield.shape}")
 
-    if use_stardist:
+        if use_stardist:
+            try:
+                notebook_kwargs = {
+                    "brightfield": brightfield,
+                    "tifs": tifs,
+                    "max_size": max_size,
+                    "model_name": model_name,
+                    "update_progress": update_progress,
+                    "is_running": is_running,
+                    "ensemble_ratio_start": ensemble_ratio_start,
+                    "ensemble_ratio_end": ensemble_ratio_end,
+                    "ensemble_ratio_step": ensemble_ratio_step,
+                }
+                if progress_units_callback:
+                    notebook_kwargs["progress_units_callback"] = progress_units_callback
+                notebook_results = _process_beads_notebook_stardist(**notebook_kwargs)
+            except Exception as e:
+                log(f"Error during notebook StarDist bead processing: {e}")
+                trace_status = "error"
+                trace_error = str(e)
+                update_progress(-1, f"Error during bead processing., {e}")
+                return None
+            if notebook_results is None:
+                trace_status = "cancelled"
+                return None
+            beads_df = notebook_results.get("beads")
+            if isinstance(beads_df, pd.DataFrame):
+                trace_counts["beads"] = int(len(beads_df))
+            pre_ensemble_df = notebook_results.get("pre_ensemble_beads")
+            if isinstance(pre_ensemble_df, pd.DataFrame):
+                trace_counts["pre_ensemble_beads"] = int(len(pre_ensemble_df))
+            sweep_df = notebook_results.get("ensemble_sweep_stats")
+            if isinstance(sweep_df, pd.DataFrame):
+                trace_counts["ensemble_sweep_rows"] = int(len(sweep_df))
+            ratio_applied = notebook_results.get("ensemble_ratio_applied")
+            if ratio_applied is not None:
+                trace_counts["ensemble_ratio_applied"] = float(ratio_applied)
+            update_progress(95, "Bead generation complete.")
+            trace_status = "success"
+            return notebook_results
+
+        update_progress(10, "Initial bead detection...")
+        if not is_running():
+            trace_status = "cancelled"
+            return None
+        brightfield = brightfield[:max_size, :max_size]
+        log("Initial bead detection...")
         try:
-            notebook_results = _process_beads_notebook_stardist(
-                brightfield=brightfield,
-                tifs=tifs,
-                max_size=max_size,
-                model_name=model_name,
-                update_progress=update_progress,
-                is_running=is_running,
+            beads = beadfinding(brightfield, is_running_callback=is_running)
+        except Exception as e:
+            log(f"Error during beadfinding: {e}")
+            trace_status = "error"
+            trace_error = str(e)
+            return None
+        if beads is None:
+            trace_status = "cancelled"
+            return None
+        initial_bead_count = len(beads)
+        trace_counts["initial_beads"] = int(initial_bead_count)
+        log(f"Initial bead detection found {initial_bead_count} beads")
+        update_progress(20, "Removing duplicate beads...")
+        if not is_running():
+            trace_status = "cancelled"
+            return None
+        beads = np.unique(beads, axis=0)
+        unique_bead_count = len(beads)
+        trace_counts["unique_beads"] = int(unique_bead_count)
+        log(
+            f"After deduplication: {unique_bead_count} unique beads (removed {initial_bead_count - unique_bead_count} duplicates)"
+        )
+        update_progress(30, "Performing second pass bead detection...")
+        if not is_running():
+            trace_status = "cancelled"
+            return None
+        final_bead_count = len(beads)
+        trace_counts["final_detected_beads"] = int(final_bead_count)
+        log(f"Total beads detected from brightfield layer: {final_bead_count}")
+        update_progress(40, "Calculating signal-to-noise ratios...")
+        if not is_running():
+            trace_status = "cancelled"
+            return None
+        log(f"Signal-to-noise cutoff: {signal_to_noise_cutoff}")
+        gc.collect()
+        try:
+            excel_kwargs = {
+                "progress_callback": update_progress,
+                "is_running_callback": is_running,
+                "use_stardist": False,
+                "model_name": model_name,
+            }
+            if progress_units_callback:
+                excel_kwargs["progress_units_callback"] = progress_units_callback
+            df, post_resoluton_df = get_excel(
+                beads,
+                signal_to_noise_cutoff,
+                tifs,
+                max_size,
+                **excel_kwargs,
             )
         except Exception as e:
-            log(f"Error during notebook StarDist bead processing: {e}")
+            log(f"Error during get_excel: {e}")
+            trace_status = "error"
+            trace_error = str(e)
             update_progress(-1, f"Error during bead processing., {e}")
             return None
-        if notebook_results is None:
-            return None
+        if isinstance(df, pd.DataFrame):
+            trace_counts["pre_resolution_rows"] = int(len(df))
+        if isinstance(post_resoluton_df, pd.DataFrame):
+            trace_counts["post_resolution_rows"] = int(len(post_resoluton_df))
+        update_progress(90, "Filtering out rows with all zeros...")
+        labeled_image = np.zeros(brightfield.shape, dtype=np.uint16)
         update_progress(95, "Bead generation complete.")
-        return notebook_results
-
-    update_progress(10, "Initial bead detection...")
-    if not is_running():
-        return None
-    brightfield = brightfield[:max_size, :max_size]
-    log("Initial bead detection...")
-    try:
-        beads = beadfinding(brightfield, is_running_callback=is_running)
-    except Exception as e:
-        log(f"Error during beadfinding: {e}")
-        return None
-    if beads is None:
-        return None
-    initial_bead_count = len(beads)
-    log(f"Initial bead detection found {initial_bead_count} beads")
-    update_progress(20, "Removing duplicate beads...")
-    if not is_running():
-        return None
-    beads = np.unique(beads, axis=0)
-    unique_bead_count = len(beads)
-    log(
-        f"After deduplication: {unique_bead_count} unique beads (removed {initial_bead_count - unique_bead_count} duplicates)"
-    )
-    update_progress(30, "Performing second pass bead detection...")
-    if not is_running():
-        return None
-    final_bead_count = len(beads)
-    log(f"Total beads detected from brightfield layer: {final_bead_count}")
-    update_progress(40, "Calculating signal-to-noise ratios...")
-    if not is_running():
-        return None
-    log(f"Signal-to-noise cutoff: {signal_to_noise_cutoff}")
-    gc.collect()
-    try:
-        df, post_resoluton_df = get_excel(
-            beads,
-            signal_to_noise_cutoff,
-            tifs,
-            max_size,
-            progress_callback=progress_callback,
-            is_running_callback=is_running,
-            use_stardist=False,
-            model_name=model_name,
-        )
-    except Exception as e:
-        log(f"Error during get_excel: {e}")
-        update_progress(-1, f"Error during bead processing., {e}")
-        return None
-    update_progress(90, "Filtering out rows with all zeros...")
-    labeled_image = np.zeros(brightfield.shape, dtype=np.uint16)
-    update_progress(95, "Bead generation complete.")
-    results = {}
-    try:
-        bboxs = df.pop("bbox")
-    except:
-        bboxs = None
-    cycles = {}
-    for i in range(len(tifs)):
-        cycles[f"cy{i}"] = tifs[i][0]
-    results["beads"] = df
-    results["post_resolution_beads"] = post_resoluton_df
-    results["cycles"] = cycles
-    results["labeled_image"] = labeled_image
-    return results
+        results = {}
+        try:
+            bboxs = df.pop("bbox")
+        except:
+            bboxs = None
+        cycles = {}
+        for i in range(len(tifs)):
+            cycles[f"cy{i}"] = tifs[i][0]
+        results["beads"] = df
+        results["post_resolution_beads"] = post_resoluton_df
+        results["cycles"] = cycles
+        results["labeled_image"] = labeled_image
+        trace_status = "success"
+        return results
+    finally:
+        finalize_trace()
 
 
 def get_error(bead_df: pd.DataFrame, protein_profile_df: pd.DataFrame = None) -> dict:
@@ -2830,27 +3374,21 @@ def get_error(bead_df: pd.DataFrame, protein_profile_df: pd.DataFrame = None) ->
             ),
         }
 
-    # Mode 1: Original logic for when a protein_profile_df is provided
-    # Merge bead data with the protein profile to identify each bead
-    analyzed_df = bead_df.merge(protein_profile_df, on=["cy0", "cy1"], how="left")
-    # FIX: Use explicit assignment to avoid FutureWarning on chained assignment
-    analyzed_df["Protein name"] = analyzed_df["Protein name"].fillna("Invalid")
+    metrics = compute_bead_profile_metrics(bead_df, protein_profile_df)
+    invalid_count = int(metrics["invalid"])
+    filtered_count = int(metrics["filtered"])
+    cycle_cols = metrics["cycle_cols"]
 
-    # Identify and label beads that should be filtered (e.g., saturation values)
-    filter_mask = (analyzed_df["cy0"] >= 254) | (analyzed_df["cy1"] >= 254)
-    analyzed_df.loc[filter_mask, "Protein name"] = "Filtered"
-
-    # Count beads per protein category
-    counts_table = analyzed_df["Protein name"].value_counts()
-
-    # Extract counts for specific categories, defaulting to 0 if not present
-    invalid_count = counts_table.get("Invalid", 0)
-    filtered_count = counts_table.get("Filtered", 0)
-
-    # Calculate the mean number of beads for validly identified proteins
-    valid_protein_counts = counts_table.drop(
-        labels=["Invalid", "Filtered"], errors="ignore"
-    )
+    if len(cycle_cols) == 0 or metrics["valid"] == 0:
+        valid_protein_counts = pd.Series(dtype=float)
+    else:
+        valid_combo_df = bead_df.loc[metrics["valid_mask"], cycle_cols]
+        valid_combo_df = valid_combo_df.apply(pd.to_numeric, errors="coerce")
+        valid_combo_df = valid_combo_df.dropna()
+        if valid_combo_df.empty:
+            valid_protein_counts = pd.Series(dtype=float)
+        else:
+            valid_protein_counts = valid_combo_df.groupby(cycle_cols).size()
 
     mean_beads_per_protein = (
         valid_protein_counts.mean() if not valid_protein_counts.empty else 0.0

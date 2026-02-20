@@ -35,6 +35,11 @@ class FileItem:
     original_shape: tuple = ()
     dtype: str = ""
     beads: Optional[DataFrame] = None
+    pre_ensemble_beads: Optional[DataFrame] = None
+    ensemble_cache: Optional[dict] = None
+    ensemble_sweep_stats: Optional[DataFrame] = None
+    ensemble_ratio_selected: Optional[float] = None
+    ensemble_ratio_applied: Optional[float] = None
     cycles: Optional[dict[str, NDArray]] = None
     bboxs: Optional[Series] = None
     labeled_image: Optional[NDArray] = None

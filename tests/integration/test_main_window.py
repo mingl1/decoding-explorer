@@ -157,19 +157,181 @@ class TestMainWindow:
             # Should error about missing reference
             mock_error.assert_called_once_with("Please set a reference image first.")
 
-    def test_on_beads_generated_calls_save_beads(
+    def test_start_bead_generation_passes_ensemble_sweep_inputs(
         self, mock_main_window, mock_file_item, mocker
     ):
-        """on_beads_generated should trigger save_beads."""
+        window = mock_main_window
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+        mocker.patch.object(window, "get_selected_files", return_value=[mock_file_item])
+
+        window.metadata_view.ensemble_ratio_start_input.setText("1.2")
+        window.metadata_view.ensemble_ratio_end_input.setText("1.6")
+        window.metadata_view.ensemble_ratio_step_input.setText("0.1")
+
+        with patch.object(window.vm, "generate_beads") as mock_generate:
+            window.start_bead_generation()
+
+        mock_generate.assert_called_once_with(
+            {0: mock_file_item},
+            use_stardist=False,
+            model_name="model_5_400epoch",
+            ensemble_ratio_start=1.2,
+            ensemble_ratio_end=1.6,
+            ensemble_ratio_step=0.1,
+        )
+
+    def test_on_beads_generated_does_not_auto_save(
+        self, mock_main_window, mock_file_item, mocker
+    ):
+        """on_beads_generated should not trigger save_beads automatically."""
         window = mock_main_window
 
         window.vm.reference_item = mock_file_item
         window.vm.files[mock_file_item.path] = mock_file_item
 
-        with patch.object(window, 'save_beads'):
+        with patch.object(window, 'save_beads') as mock_save:
             import pandas as pd
             beads = pd.DataFrame({'x': [1, 2, 3]})
             window.on_beads_generated(beads)
+            mock_save.assert_not_called()
+
+    def test_save_generated_beads_applies_pending_ratio_before_export(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        import pandas as pd
+
+        mock_file_item.beads = pd.DataFrame(
+            {"x": [1.0], "y": [2.0], "cy0": [255], "cy1": [255]}
+        )
+        mock_file_item.pre_ensemble_beads = mock_file_item.beads.copy()
+        mock_file_item.ensemble_cache = {"dummy": True}
+        mock_file_item.ensemble_ratio_applied = 1.0
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+
+        stats_df = pd.DataFrame(
+            [
+                {"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0},
+                {"ratio": 1.05, "valid_pct": 15.0, "invalid_pct": 15.0, "filtered_pct": 70.0},
+            ]
+        )
+        window.metadata_view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=1.0)
+
+        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "save_beads") as mock_save:
+            window.save_generated_beads()
+            mock_apply.assert_called_once_with(mock_file_item, 1.05)
+            mock_save.assert_called_once()
+
+    def test_remove_ensemble_applied_changes_calls_vm(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        import pandas as pd
+
+        mock_file_item.beads = pd.DataFrame({"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]})
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+
+        with patch.object(window.vm, "remove_ensemble_applied_changes") as mock_remove, patch.object(window, "calculate_statistics_for_file"):
+            window.remove_ensemble_applied_changes()
+            mock_remove.assert_called_once_with(mock_file_item)
+
+    def test_lower_invalid_ratio_uses_applied_ratio_base(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        import pandas as pd
+
+        mock_file_item.beads = pd.DataFrame({"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]})
+        mock_file_item.pre_ensemble_beads = mock_file_item.beads.copy()
+        mock_file_item.ensemble_cache = {"dummy": True}
+        mock_file_item.ensemble_ratio_applied = 1.2
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+
+        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "calculate_statistics_for_file"):
+            window.lower_invalid_ratio()
+
+        mock_apply.assert_called_once_with(mock_file_item, 1.25)
+
+    def test_lower_filter_ratio_uses_selected_ratio_when_no_applied(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        import pandas as pd
+
+        mock_file_item.beads = pd.DataFrame({"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]})
+        mock_file_item.pre_ensemble_beads = mock_file_item.beads.copy()
+        mock_file_item.ensemble_cache = {"dummy": True}
+        mock_file_item.ensemble_ratio_applied = None
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+
+        stats_df = pd.DataFrame(
+            [
+                {"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0},
+                {"ratio": 1.05, "valid_pct": 15.0, "invalid_pct": 15.0, "filtered_pct": 70.0},
+            ]
+        )
+        window.metadata_view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=None)
+
+        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "calculate_statistics_for_file"):
+            window.lower_filter_ratio()
+
+        mock_apply.assert_called_once_with(mock_file_item, 1.0)
+
+    def test_lower_invalid_ratio_allows_out_of_range(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        import pandas as pd
+
+        mock_file_item.beads = pd.DataFrame({"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]})
+        mock_file_item.pre_ensemble_beads = mock_file_item.beads.copy()
+        mock_file_item.ensemble_cache = {"dummy": True}
+        mock_file_item.ensemble_ratio_applied = 1.5
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+        window.metadata_view.ensemble_ratio_start_input.setText("1.0")
+        window.metadata_view.ensemble_ratio_end_input.setText("1.5")
+        window.metadata_view.ensemble_ratio_step_input.setText("0.05")
+
+        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "calculate_statistics_for_file"):
+            window.lower_invalid_ratio()
+
+        mock_apply.assert_called_once_with(mock_file_item, 1.55)
+
+    def test_save_generated_beads_does_not_snap_out_of_range_selected_ratio(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        import pandas as pd
+
+        mock_file_item.beads = pd.DataFrame(
+            {"x": [1.0], "y": [2.0], "cy0": [255], "cy1": [255]}
+        )
+        mock_file_item.pre_ensemble_beads = mock_file_item.beads.copy()
+        mock_file_item.ensemble_cache = {"dummy": True}
+        mock_file_item.ensemble_ratio_applied = 1.55
+        mock_file_item.ensemble_ratio_selected = 1.55
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+
+        stats_df = pd.DataFrame(
+            [
+                {"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0},
+                {"ratio": 1.5, "valid_pct": 15.0, "invalid_pct": 15.0, "filtered_pct": 70.0},
+            ]
+        )
+        window.metadata_view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.55, applied_ratio=1.55)
+
+        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "save_beads") as mock_save:
+            window.save_generated_beads()
+
+        mock_apply.assert_not_called()
+        mock_save.assert_called_once()
 
     def test_handle_metadata_applied_updates_items(
         self, mock_main_window, mock_file_item, mocker

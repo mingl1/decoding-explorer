@@ -201,10 +201,11 @@ class TestMetadataView:
         view = MetadataView(None, vm=vm)
         view.show()
 
+        assert view.statistics_tabs.isVisible()
         assert view.total_beads_label.isVisible()
 
         view._toggle_section("statistics")
-        assert not view.total_beads_label.isVisible()
+        assert not view.statistics_tabs.isVisible()
 
     def test_all_sections_can_be_toggled_independently(self, qapp):
         """Each section should be toggleable independently of others."""
@@ -221,7 +222,7 @@ class TestMetadataView:
         assert not view.prefix_input.isVisible()
         assert not view.generate_beads_btn.isVisible()
         assert view.num_tiles_input.isVisible()
-        assert view.total_beads_label.isVisible()
+        assert view.statistics_tabs.isVisible()
 
     def test_metadata_section_toggle_hides_labels_and_inputs(self, qapp):
         """Clicking Metadata section should hide both labels and input widgets."""
@@ -276,3 +277,122 @@ class TestMetadataView:
         assert not view.num_tiles_input.isVisible()
         assert not view.generate_beads_btn.isVisible()
         assert view.total_beads_label.isVisible()
+
+    def test_set_ensemble_sweep_stats_updates_preview_labels(self, qapp):
+        from view.MetadataView import MetadataView
+        from viewmodel.metadata_vm import MetadataVM
+        import pandas as pd
+
+        vm = MetadataVM()
+        view = MetadataView(None, vm=vm)
+        view.show()
+
+        stats_df = pd.DataFrame(
+            [
+                {"ratio": 1.0, "valid_pct": 25.0, "invalid_pct": 10.0, "filtered_pct": 65.0},
+                {"ratio": 1.05, "valid_pct": 30.0, "invalid_pct": 8.0, "filtered_pct": 62.0},
+            ]
+        )
+        view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=1.0)
+
+        assert view.ensemble_selected_ratio_label.text() == "Selected Ratio: 1.05"
+        assert view.ensemble_valid_pct_label.text() == "Preview Valid: 30.00%"
+        assert view.ensemble_invalid_pct_label.text() == "Preview Invalid: 8.00%"
+        assert view.ensemble_filtered_pct_label.text() == "Preview Filtered: 62.00%"
+        assert view.ensemble_applied_ratio_label.text() == "Applied Ratio: 1.00"
+
+    def test_statistics_tabs_include_summary_and_advanced(self, qapp):
+        from view.MetadataView import MetadataView
+        from viewmodel.metadata_vm import MetadataVM
+
+        vm = MetadataVM()
+        view = MetadataView(None, vm=vm)
+
+        assert view.statistics_tabs.count() == 2
+        assert view.statistics_tabs.tabText(0) == "Summary"
+        assert view.statistics_tabs.tabText(1) == "Advanced"
+
+    def test_lower_invalid_button_emits_signal(self, qapp):
+        from view.MetadataView import MetadataView
+        from viewmodel.metadata_vm import MetadataVM
+
+        vm = MetadataVM()
+        view = MetadataView(None, vm=vm)
+
+        emitted = []
+        view.lower_invalid_sig.connect(lambda: emitted.append(True))
+        view.lower_invalid_btn.click()
+
+        assert emitted == [True]
+
+    def test_lower_filter_button_emits_signal(self, qapp):
+        from view.MetadataView import MetadataView
+        from viewmodel.metadata_vm import MetadataVM
+
+        vm = MetadataVM()
+        view = MetadataView(None, vm=vm)
+
+        emitted = []
+        view.lower_filter_sig.connect(lambda: emitted.append(True))
+        view.lower_filter_btn.click()
+
+        assert emitted == [True]
+
+    def test_advanced_tab_shows_sweep_controls(self, qapp):
+        from view.MetadataView import MetadataView
+        from viewmodel.metadata_vm import MetadataVM
+
+        vm = MetadataVM()
+        view = MetadataView(None, vm=vm)
+        view.show()
+        view.statistics_tabs.setCurrentWidget(view.statistics_advanced_tab)
+        qapp.processEvents()
+
+        assert view.ensemble_ratio_start_input.isVisible()
+        assert view.recompute_sweep_btn.isVisible()
+
+    def test_apply_ensemble_button_emits_selected_ratio(self, qapp):
+        from view.MetadataView import MetadataView
+        from viewmodel.metadata_vm import MetadataVM
+        import pandas as pd
+
+        vm = MetadataVM()
+        view = MetadataView(None, vm=vm)
+        view.show()
+
+        stats_df = pd.DataFrame(
+            [
+                {"ratio": 1.0, "valid_pct": 25.0, "invalid_pct": 10.0, "filtered_pct": 65.0},
+                {"ratio": 1.05, "valid_pct": 30.0, "invalid_pct": 8.0, "filtered_pct": 62.0},
+            ]
+        )
+        view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=1.0)
+
+        emitted = []
+        view.apply_ensemble_sig.connect(lambda ratio: emitted.append(ratio))
+        view.apply_ensemble_btn.click()
+
+        assert emitted == [1.05]
+
+    def test_remove_ensemble_button_emits_signal(self, qapp):
+        from view.MetadataView import MetadataView
+        from viewmodel.metadata_vm import MetadataVM
+        import pandas as pd
+
+        vm = MetadataVM()
+        view = MetadataView(None, vm=vm)
+        view.show()
+
+        stats_df = pd.DataFrame(
+            [
+                {"ratio": 1.0, "valid_pct": 25.0, "invalid_pct": 10.0, "filtered_pct": 65.0},
+                {"ratio": 1.05, "valid_pct": 30.0, "invalid_pct": 8.0, "filtered_pct": 62.0},
+            ]
+        )
+        view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=1.0)
+
+        emitted = []
+        view.remove_ensemble_sig.connect(lambda: emitted.append(True))
+        view.remove_ensemble_btn.click()
+
+        assert emitted == [True]

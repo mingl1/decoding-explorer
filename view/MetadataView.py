@@ -1,5 +1,7 @@
 import os
 
+import numpy as np
+import pandas as pd
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -15,6 +17,7 @@ from PyQt6.QtWidgets import (
     QSlider,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -26,6 +29,12 @@ from viewmodel.metadata_vm import MetadataVM
 class MetadataView(QWidget):
     export_all_sig = pyqtSignal(str, list)
     generate_beads_sig = pyqtSignal()
+    recompute_ensemble_sig = pyqtSignal(float, float, float)
+    apply_ensemble_sig = pyqtSignal(float)
+    remove_ensemble_sig = pyqtSignal()
+    lower_invalid_sig = pyqtSignal()
+    lower_filter_sig = pyqtSignal()
+    save_beads_sig = pyqtSignal()
     protein_files_uploaded = pyqtSignal(list)
     upload_beads_sig = pyqtSignal()
     manually_align_sig = pyqtSignal()
@@ -89,6 +98,8 @@ class MetadataView(QWidget):
 
         self._section_widgets = {}
         self._section_collapsed = {}
+        self._ensemble_sweep_stats = pd.DataFrame()
+        self._selected_ensemble_ratio = None
 
         self._create_section_widgets()
         self._create_ui_elements()
@@ -171,16 +182,41 @@ class MetadataView(QWidget):
         self.use_stardist_checkbox.stateChanged.connect(
             self.on_stardist_checkbox_changed
         )
-        self.stardist_model_path_input = QLineEdit("model_4_400epoch_no_aug")
+        self.stardist_model_path_input = QLineEdit("model_5_400epoch")
         self.stardist_model_path_input.setDisabled(True)  # Disabled by default
 
         self.upload_protein_key_btn = QPushButton("Upload Protein/Gene Key Files")
         self.upload_protein_key_btn.clicked.connect(self.upload_protein_key_files)
         self.protein_key_files_label = QLabel("No files uploaded.")
-        self.generate_beads_btn = QPushButton("Generate and Export Beads")
+        self.generate_beads_btn = QPushButton("Generate Beads")
         self.generate_beads_btn.clicked.connect(self.generate_beads_sig.emit)
+        self.recompute_sweep_btn = QPushButton("Recompute Sweep")
+        self.recompute_sweep_btn.clicked.connect(self._emit_recompute_ensemble)
+        self.apply_ensemble_btn = QPushButton("Apply Ensemble")
+        self.apply_ensemble_btn.clicked.connect(self._emit_apply_ensemble)
+        self.reset_ensemble_btn = QPushButton("Min Invalid")
+        self.reset_ensemble_btn.clicked.connect(self.remove_ensemble_sig.emit)
+        self.remove_ensemble_btn = self.reset_ensemble_btn
+        self.lower_invalid_btn = QPushButton("Lower Invalid")
+        self.lower_invalid_btn.clicked.connect(self.lower_invalid_sig.emit)
+        self.lower_filter_btn = QPushButton("Lower Filter")
+        self.lower_filter_btn.clicked.connect(self.lower_filter_sig.emit)
+        self.save_beads_btn = QPushButton("Save Beads")
+        self.save_beads_btn.clicked.connect(self.save_beads_sig.emit)
         self.upload_beads_btn = QPushButton("Upload Bead CSV")
         self.upload_beads_btn.clicked.connect(self.upload_beads_sig.emit)
+        self.ensemble_ratio_start_input = QLineEdit("1.0")
+        self.ensemble_ratio_end_input = QLineEdit("1.5")
+        self.ensemble_ratio_step_input = QLineEdit("0.05")
+        self.ensemble_slider = QSlider(Qt.Orientation.Horizontal)
+        self.ensemble_slider.setRange(0, 0)
+        self.ensemble_slider.setValue(0)
+        self.ensemble_slider.valueChanged.connect(self._on_ensemble_slider_changed)
+        self.ensemble_selected_ratio_label = QLabel("Selected Ratio: N/A")
+        self.ensemble_applied_ratio_label = QLabel("Applied Ratio: N/A")
+        self.ensemble_valid_pct_label = QLabel("Preview Valid: N/A")
+        self.ensemble_invalid_pct_label = QLabel("Preview Invalid: N/A")
+        self.ensemble_filtered_pct_label = QLabel("Preview Filtered: N/A")
         self.inspect_beads_btn = QPushButton("Inspect Beads")
         self.inspect_beads_btn.clicked.connect(self.vm.inspect_beads)
         self.crop_beads_btn = QPushButton("Crop Beads")
@@ -292,6 +328,7 @@ class MetadataView(QWidget):
         self.form_layout.addRow(self.upload_protein_key_btn)
         self.form_layout.addRow(self.protein_key_files_label)
         self.form_layout.addRow(self.generate_beads_btn)
+        self.form_layout.addRow(self.save_beads_btn)
         self.form_layout.addRow(self.upload_beads_btn)
         self._section_widgets["bead_generation"] = [
             self.use_stardist_checkbox,
@@ -300,6 +337,7 @@ class MetadataView(QWidget):
             self.upload_protein_key_btn,
             self.protein_key_files_label,
             self.generate_beads_btn,
+            self.save_beads_btn,
             self.upload_beads_btn,
             # self.inspect_beads_btn,
             bead_generation_sep,
@@ -317,24 +355,64 @@ class MetadataView(QWidget):
         #     crop_sep,
         # ]
 
+        self.ensemble_ratio_start_label = QLabel("Ratio Start:")
+        self.ensemble_ratio_end_label = QLabel("Ratio End:")
+        self.ensemble_ratio_step_label = QLabel("Ratio Step:")
+
+        self.statistics_tabs = QTabWidget()
+        self.statistics_summary_tab = QWidget()
+        self.statistics_advanced_tab = QWidget()
+
+        summary_layout = QVBoxLayout()
+        summary_layout.setContentsMargins(0, 0, 0, 0)
+        summary_layout.setSpacing(5)
+        quick_actions_layout = QHBoxLayout()
+        quick_actions_layout.setContentsMargins(0, 0, 0, 0)
+        quick_actions_layout.setSpacing(6)
+        quick_actions_layout.addWidget(self.lower_invalid_btn)
+        quick_actions_layout.addWidget(self.reset_ensemble_btn)
+        quick_actions_layout.addWidget(self.lower_filter_btn)
+        summary_layout.addLayout(quick_actions_layout)
+        summary_layout.addWidget(self.total_beads_label)
+        summary_layout.addWidget(self.mean_rows_label)
+        summary_layout.addWidget(self.filtered_beads_label)
+        summary_layout.addWidget(self.error_label)
+        summary_layout.addWidget(self.inspect_beads_btn)
+        summary_layout.addWidget(self.crop_beads_btn)
+        summary_layout.addWidget(self.counts_table_container)
+        self.statistics_summary_tab.setLayout(summary_layout)
+
+        advanced_layout = QFormLayout()
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setHorizontalSpacing(10)
+        advanced_layout.setVerticalSpacing(5)
+        advanced_layout.addRow(
+            self.ensemble_ratio_start_label, self.ensemble_ratio_start_input
+        )
+        advanced_layout.addRow(
+            self.ensemble_ratio_end_label, self.ensemble_ratio_end_input
+        )
+        advanced_layout.addRow(
+            self.ensemble_ratio_step_label, self.ensemble_ratio_step_input
+        )
+        advanced_layout.addRow(self.recompute_sweep_btn)
+        advanced_layout.addRow(self.ensemble_slider)
+        advanced_layout.addRow(self.ensemble_selected_ratio_label)
+        advanced_layout.addRow(self.ensemble_applied_ratio_label)
+        advanced_layout.addRow(self.ensemble_valid_pct_label)
+        advanced_layout.addRow(self.ensemble_invalid_pct_label)
+        advanced_layout.addRow(self.ensemble_filtered_pct_label)
+        advanced_layout.addRow(self.apply_ensemble_btn)
+        self.statistics_advanced_tab.setLayout(advanced_layout)
+
+        self.statistics_tabs.addTab(self.statistics_summary_tab, "Summary")
+        self.statistics_tabs.addTab(self.statistics_advanced_tab, "Advanced")
+
         self.form_layout.addRow(stats_title)
         self.form_layout.addRow(stats_sep)
-        self.form_layout.addRow(self.total_beads_label)
-        self.form_layout.addRow(self.mean_rows_label)
-
-        self.form_layout.addRow(self.filtered_beads_label)
-        self.form_layout.addRow(self.error_label)
-        self.form_layout.addRow(self.inspect_beads_btn)
-        self.form_layout.addRow(self.crop_beads_btn)
-        self.form_layout.addRow(self.counts_table_container)
+        self.form_layout.addRow(self.statistics_tabs)
         self._section_widgets["statistics"] = [
-            self.total_beads_label,
-            self.mean_rows_label,
-            self.filtered_beads_label,
-            self.error_label,
-            self.inspect_beads_btn,
-            self.crop_beads_btn,
-            self.counts_table_container,
+            self.statistics_tabs,
             stats_sep,
         ]
 
@@ -354,6 +432,7 @@ class MetadataView(QWidget):
         self.setLayout(layout)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.update_metadata([])
+        self.set_ensemble_sweep_stats(None)
 
     def on_prefix_checkbox_changed(self, state):
         is_checked = state == Qt.CheckState.Checked
@@ -634,6 +713,124 @@ class MetadataView(QWidget):
                 i += 1
         else:
             self.counts_table.setRowCount(0)
+
+    def _set_ensemble_controls_enabled(self, enabled: bool):
+        controls = [
+            self.recompute_sweep_btn,
+            self.apply_ensemble_btn,
+            self.save_beads_btn,
+            self.lower_invalid_btn,
+            self.lower_filter_btn,
+            self.ensemble_slider,
+        ]
+        for control in controls:
+            control.setEnabled(enabled)
+
+    def _emit_recompute_ensemble(self):
+        try:
+            start, end, step = self.get_ensemble_sweep_inputs()
+        except ValueError:
+            return
+        self.recompute_ensemble_sig.emit(start, end, step)
+
+    def _emit_apply_ensemble(self):
+        ratio = self.get_selected_ensemble_ratio()
+        if ratio is None:
+            return
+        self.apply_ensemble_sig.emit(float(ratio))
+
+    def _on_ensemble_slider_changed(self, value: int):
+        if self._ensemble_sweep_stats.empty:
+            return
+        idx = max(0, min(int(value), len(self._ensemble_sweep_stats) - 1))
+        row = self._ensemble_sweep_stats.iloc[idx]
+        ratio = float(row["ratio"])
+        self._selected_ensemble_ratio = float(ratio)
+        self.ensemble_selected_ratio_label.setText(
+            f"Selected Ratio: {self._selected_ensemble_ratio:.2f}"
+        )
+        self.ensemble_valid_pct_label.setText(
+            f"Preview Valid: {float(row['valid_pct']):.2f}%"
+        )
+        self.ensemble_invalid_pct_label.setText(
+            f"Preview Invalid: {float(row['invalid_pct']):.2f}%"
+        )
+        self.ensemble_filtered_pct_label.setText(
+            f"Preview Filtered: {float(row['filtered_pct']):.2f}%"
+        )
+
+    def get_ensemble_sweep_inputs(self) -> tuple[float, float, float]:
+        start = float(self.ensemble_ratio_start_input.text())
+        end = float(self.ensemble_ratio_end_input.text())
+        step = float(self.ensemble_ratio_step_input.text())
+        return start, end, step
+
+    def get_selected_ensemble_ratio(self):
+        return self._selected_ensemble_ratio
+
+    def set_ensemble_sweep_stats(
+        self,
+        stats_df,
+        selected_ratio=None,
+        applied_ratio=None,
+    ):
+        if stats_df is None or len(stats_df) == 0:
+            self._ensemble_sweep_stats = pd.DataFrame()
+            self._selected_ensemble_ratio = None
+            self.ensemble_slider.setRange(0, 0)
+            self.ensemble_slider.setValue(0)
+            self.ensemble_selected_ratio_label.setText("Selected Ratio: N/A")
+            self.ensemble_applied_ratio_label.setText("Applied Ratio: N/A")
+            self.ensemble_valid_pct_label.setText("Preview Valid: N/A")
+            self.ensemble_invalid_pct_label.setText("Preview Invalid: N/A")
+            self.ensemble_filtered_pct_label.setText("Preview Filtered: N/A")
+            self._set_ensemble_controls_enabled(False)
+            self.save_beads_btn.setEnabled(True)
+            self.reset_ensemble_btn.setEnabled(False)
+            return
+
+        if isinstance(stats_df, pd.DataFrame):
+            df = stats_df.copy()
+        else:
+            df = pd.DataFrame(stats_df)
+        if df.empty or "ratio" not in df.columns:
+            self.set_ensemble_sweep_stats(None)
+            return
+        df = df.sort_values("ratio").reset_index(drop=True)
+        self._ensemble_sweep_stats = df
+        self._set_ensemble_controls_enabled(True)
+
+        if applied_ratio is not None:
+            self.ensemble_applied_ratio_label.setText(
+                f"Applied Ratio: {float(applied_ratio):.2f}"
+            )
+        else:
+            self.ensemble_applied_ratio_label.setText("Applied Ratio: N/A")
+        self.reset_ensemble_btn.setEnabled(applied_ratio is not None)
+
+        target_ratio = selected_ratio
+        if target_ratio is None:
+            target_ratio = float(df.iloc[0]["ratio"])
+        self._selected_ensemble_ratio = float(target_ratio)
+        ratio_arr = df["ratio"].to_numpy(dtype=float)
+        idx = int((np.abs(ratio_arr - float(target_ratio))).argmin())
+        self.ensemble_slider.blockSignals(True)
+        self.ensemble_slider.setRange(0, len(df) - 1)
+        self.ensemble_slider.setValue(idx)
+        self.ensemble_slider.blockSignals(False)
+        row = self._ensemble_sweep_stats.iloc[idx]
+        self.ensemble_selected_ratio_label.setText(
+            f"Selected Ratio: {self._selected_ensemble_ratio:.2f}"
+        )
+        self.ensemble_valid_pct_label.setText(
+            f"Preview Valid: {float(row['valid_pct']):.2f}%"
+        )
+        self.ensemble_invalid_pct_label.setText(
+            f"Preview Invalid: {float(row['invalid_pct']):.2f}%"
+        )
+        self.ensemble_filtered_pct_label.setText(
+            f"Preview Filtered: {float(row['filtered_pct']):.2f}%"
+        )
 
     def export_all(self):
         folder = QFileDialog.getExistingDirectory()

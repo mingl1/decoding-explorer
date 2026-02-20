@@ -122,6 +122,12 @@ class MainWindow(QMainWindow):
         self.metadata_view.export_all_sig.connect(self.vm.export_files)
         self.metadata_view.generate_beads_sig.connect(self.start_bead_generation)
         self.metadata_view.upload_beads_sig.connect(self.upload_bead_csv)
+        self.metadata_view.recompute_ensemble_sig.connect(self.recompute_ensemble_sweep)
+        self.metadata_view.apply_ensemble_sig.connect(self.apply_ensemble_ratio)
+        self.metadata_view.remove_ensemble_sig.connect(self.remove_ensemble_applied_changes)
+        self.metadata_view.lower_invalid_sig.connect(self.lower_invalid_ratio)
+        self.metadata_view.lower_filter_sig.connect(self.lower_filter_ratio)
+        self.metadata_view.save_beads_sig.connect(self.save_generated_beads)
         self.metadata_view.manually_align_sig.connect(self.start_manual_alignment)
         self.metadata_view.crop_selected_sig.connect(self.start_crop)
         self.metadata_view.crop_beads_sig.connect(self.start_bead_crop)
@@ -147,12 +153,19 @@ class MainWindow(QMainWindow):
             self.menuBarUI.installEventFilter(self)
 
     def on_beads_generated(self, beads: DataFrame):
-        self.save_beads(beads)
         if self.vm.reference_item:
+            self._refresh_ensemble_controls(self.vm.reference_item)
             self.calculate_statistics_for_file(
                 self.vm.reference_item, self.metadata_vm.protein_df
             )
             self.metadata_view.collapse_processing_sections()
+
+    def _refresh_ensemble_controls(self, file_item: FileItem):
+        self.metadata_view.set_ensemble_sweep_stats(
+            file_item.ensemble_sweep_stats,
+            selected_ratio=file_item.ensemble_ratio_selected,
+            applied_ratio=file_item.ensemble_ratio_applied,
+        )
 
     def calculate_statistics_for_file(
         self, file_item: FileItem, protein_profile: DataFrame
@@ -262,6 +275,104 @@ class MainWindow(QMainWindow):
             elif file[0].endswith(".csv"):
                 beads.to_csv(file[0], index=False)
 
+    def recompute_ensemble_sweep(self, start: float, end: float, step: float):
+        reference_item = self.vm.reference_item
+        if reference_item is None:
+            self.show_error("Please set a reference image first.")
+            return
+        try:
+            self.vm.recompute_ensemble_sweep(reference_item, start, end, step)
+            self._refresh_ensemble_controls(reference_item)
+        except Exception as e:
+            self.show_error(str(e))
+
+    def apply_ensemble_ratio(self, ratio: float):
+        reference_item = self.vm.reference_item
+        if reference_item is None:
+            self.show_error("Please set a reference image first.")
+            return
+        try:
+            self.vm.apply_ensemble_ratio(reference_item, ratio)
+            self._refresh_ensemble_controls(reference_item)
+            if reference_item.beads is not None and not reference_item.beads.empty:
+                self.calculate_statistics_for_file(
+                    reference_item, self.metadata_vm.protein_df
+                )
+        except Exception as e:
+            self.show_error(str(e))
+
+    def _resolve_ensemble_ratio_base(self, reference_item: FileItem) -> float:
+        if reference_item.ensemble_ratio_applied is not None:
+            return float(reference_item.ensemble_ratio_applied)
+        selected_ratio = self.metadata_view.get_selected_ensemble_ratio()
+        if selected_ratio is not None:
+            return float(selected_ratio)
+        start, _, _ = self.metadata_view.get_ensemble_sweep_inputs()
+        return float(start)
+
+    def _apply_ensemble_ratio_delta(self, delta: float):
+        reference_item = self.vm.reference_item
+        if reference_item is None:
+            self.show_error("Please set a reference image first.")
+            return
+        try:
+            base_ratio = self._resolve_ensemble_ratio_base(reference_item)
+            ratio = round(base_ratio + float(delta), 2)
+            self.vm.apply_ensemble_ratio(reference_item, ratio)
+            self._refresh_ensemble_controls(reference_item)
+            if reference_item.beads is not None and not reference_item.beads.empty:
+                self.calculate_statistics_for_file(
+                    reference_item, self.metadata_vm.protein_df
+                )
+        except Exception as e:
+            self.show_error(str(e))
+
+    def lower_invalid_ratio(self):
+        self._apply_ensemble_ratio_delta(0.05)
+
+    def lower_filter_ratio(self):
+        self._apply_ensemble_ratio_delta(-0.05)
+
+    def save_generated_beads(self):
+        reference_item = self.vm.reference_item
+        if reference_item is None:
+            self.show_error("Please set a reference image first.")
+            return
+        if reference_item.beads is None or reference_item.beads.empty:
+            self.show_error("No beads available. Generate or upload beads first.")
+            return
+        selected_ratio = self.metadata_view.get_selected_ensemble_ratio()
+        applied_ratio = reference_item.ensemble_ratio_applied
+        if (
+            selected_ratio is not None
+            and applied_ratio is not None
+            and abs(float(selected_ratio) - float(applied_ratio)) > 1e-9
+            and reference_item.pre_ensemble_beads is not None
+            and reference_item.ensemble_cache is not None
+        ):
+            try:
+                self.vm.apply_ensemble_ratio(reference_item, float(selected_ratio))
+                self._refresh_ensemble_controls(reference_item)
+            except Exception as e:
+                self.show_error(str(e))
+                return
+        self.save_beads(reference_item.beads)
+
+    def remove_ensemble_applied_changes(self):
+        reference_item = self.vm.reference_item
+        if reference_item is None:
+            self.show_error("Please set a reference image first.")
+            return
+        try:
+            self.vm.remove_ensemble_applied_changes(reference_item)
+            self._refresh_ensemble_controls(reference_item)
+            if reference_item.beads is not None and not reference_item.beads.empty:
+                self.calculate_statistics_for_file(
+                    reference_item, self.metadata_vm.protein_df
+                )
+        except Exception as e:
+            self.show_error(str(e))
+
     def handle_metadata_applied(self, new_metadata: dict):
         selected_files = self.get_selected_files()
         self.vm.apply_metadata(new_metadata, selected_files)
@@ -352,10 +463,24 @@ class MainWindow(QMainWindow):
         stardist_settings = self.metadata_view.get_stardist_settings()
         use_stardist = stardist_settings["use_stardist"]
         model_name = stardist_settings["model_name"]
+        try:
+            ensemble_ratio_start, ensemble_ratio_end, ensemble_ratio_step = (
+                self.metadata_view.get_ensemble_sweep_inputs()
+            )
+        except ValueError:
+            self.show_error("Invalid ensemble ratio sweep values.")
+            return
 
         if not files_for_assignment:
             # If only the reference file is selected, we can proceed with one cycle.
-            self.vm.generate_beads({0: reference_item}, use_stardist=use_stardist, model_name=model_name)
+            self.vm.generate_beads(
+                {0: reference_item},
+                use_stardist=use_stardist,
+                model_name=model_name,
+                ensemble_ratio_start=ensemble_ratio_start,
+                ensemble_ratio_end=ensemble_ratio_end,
+                ensemble_ratio_step=ensemble_ratio_step,
+            )
             return
 
         dialog = CycleAssignmentWidget(files_for_assignment, self)
@@ -373,7 +498,14 @@ class MainWindow(QMainWindow):
             self.cancel_button.setVisible(True)
             self.cancel_button.clicked.disconnect()
             self.cancel_button.clicked.connect(self.cancel_bead_generation)
-            self.vm.generate_beads(assignments_from_dialog, use_stardist=use_stardist, model_name=model_name)
+            self.vm.generate_beads(
+                assignments_from_dialog,
+                use_stardist=use_stardist,
+                model_name=model_name,
+                ensemble_ratio_start=ensemble_ratio_start,
+                ensemble_ratio_end=ensemble_ratio_end,
+                ensemble_ratio_step=ensemble_ratio_step,
+            )
 
     def upload_bead_csv(self):
         selected_files = self.get_selected_files()
@@ -423,6 +555,7 @@ class MainWindow(QMainWindow):
 
     def on_bead_upload_complete(self, reference_item):
         print(f"on_bead_upload_complete called, beads: {reference_item.beads is not None}, empty: {reference_item.beads.empty if reference_item.beads is not None else 'N/A'}")
+        self._refresh_ensemble_controls(reference_item)
         if reference_item.beads is not None and not reference_item.beads.empty:
             self.calculate_statistics_for_file(
                 reference_item, self.metadata_vm.protein_df
@@ -708,19 +841,20 @@ class MainWindow(QMainWindow):
             self.progress_bar.setVisible(True)
             self.status_label.setVisible(True)
             self.cancel_button.setVisible(True)
-        self.progress_bar.setValue(value)
-        self.status_label.setText(message)
-        if value >= 100:
-            self.progress_bar.setVisible(False)
-            self.cancel_button.setVisible(False)
-            self.status_label.setVisible(False)
-        # error case, show modal dialog with error message
-        elif value < 0:
+        if value < 0:
             self.progress_bar.setVisible(False)
             self.cancel_button.setVisible(False)
             self.status_label.setVisible(False)
             self.show_error(message)
-            
+            return
+
+        clamped_value = max(0, min(100, int(value)))
+        self.progress_bar.setValue(clamped_value)
+        self.status_label.setText(message)
+        if clamped_value >= 100:
+            self.progress_bar.setVisible(False)
+            self.cancel_button.setVisible(False)
+            self.status_label.setVisible(False)
 
     def show_error(self, message):
         # popup error message

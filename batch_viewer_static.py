@@ -11,13 +11,21 @@ data = json.loads(Path("data.json").read_text())
 
 
 def calc_invalid_pct(s):
-    # Previous data has precomputed invalid_pct (raw counts not available)
-    if s.get("invalid") is None:
+    if s.get("invalid_pct") is not None:
         return s.get("invalid_pct", 0.0)
+    invalid = s.get("invalid")
+    valid = s.get("valid")
+    unique_cycle_combos = s.get("unique_cycle_combos")
+    if (
+        invalid is not None
+        and valid not in (None, 0)
+        and unique_cycle_combos not in (None, 0)
+    ):
+        return round((invalid * unique_cycle_combos / valid) * 100, 2)
     num_combos = len(s.get("protein_counts", {})) / 2
-    if not num_combos or not s["valid"]:
+    if invalid is None or not num_combos or not valid:
         return 0.0
-    return round(s["invalid"] / (s["valid"] / num_combos) * 100, 2)
+    return round(invalid / (valid / num_combos) * 100, 2)
 
 
 # Sidebar
