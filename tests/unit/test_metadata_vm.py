@@ -1,5 +1,5 @@
-import pytest
-from unittest.mock import MagicMock, patch
+import pandas as pd
+from unittest.mock import MagicMock
 
 
 class TestMetadataVM:
@@ -54,3 +54,49 @@ class TestMetadataVM:
         result = args[0]
         assert "use_status_as_prefix" in result
         assert result["use_status_as_prefix"] == True
+
+    def test_set_protein_files_reads_utf16_csv(
+        self, mock_metadata_vm, signal_recorder, tmp_path
+    ):
+        vm = mock_metadata_vm
+        signal_recorder.connect(vm.update_overview_sig)
+        source_df = pd.DataFrame({"Protein name": ["A"], "Cycle 1": [1]})
+        protein_path = tmp_path / "protein_utf16.csv"
+        source_df.to_csv(protein_path, index=False, encoding="utf-16")
+
+        vm.set_protein_files([str(protein_path)])
+
+        assert signal_recorder.get_call_count() == 1
+        assert list(vm.protein_df.columns) == ["Protein name", "cy0"]
+        assert vm.protein_df.iloc[0]["Protein name"] == "A"
+        assert vm.protein_df.iloc[0]["cy0"] == 1
+
+    def test_set_protein_files_reads_utf16le_csv_without_bom(
+        self, mock_metadata_vm, signal_recorder, tmp_path
+    ):
+        vm = mock_metadata_vm
+        signal_recorder.connect(vm.update_overview_sig)
+        source_df = pd.DataFrame({"Protein name": ["B"], "Cycle 1": [2]})
+        protein_path = tmp_path / "protein_utf16le.csv"
+        source_df.to_csv(protein_path, index=False, encoding="utf-16le")
+
+        vm.set_protein_files([str(protein_path)])
+
+        assert signal_recorder.get_call_count() == 1
+        assert list(vm.protein_df.columns) == ["Protein name", "cy0"]
+        assert vm.protein_df.iloc[0]["Protein name"] == "B"
+        assert vm.protein_df.iloc[0]["cy0"] == 2
+
+    def test_set_protein_files_emits_error_on_unreadable_input(
+        self, mock_metadata_vm, signal_recorder, tmp_path
+    ):
+        vm = mock_metadata_vm
+        signal_recorder.connect(vm.error_sig)
+        unreadable_path = tmp_path / "not_a_file.csv"
+        unreadable_path.mkdir()
+
+        vm.set_protein_files([str(unreadable_path)])
+
+        assert signal_recorder.get_call_count() == 1
+        args, kwargs = signal_recorder.get_last_args()
+        assert "Failed to load protein key files" in args[0]

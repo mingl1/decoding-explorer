@@ -20,6 +20,7 @@ from model.file_item import FileItem
 from model.status_enum import FileStatus
 from view.alignment_preview_dialog import AlignmentPreviewDialog
 from viewmodel.bead_progress_estimator import BeadProgressEstimator
+from viewmodel.stardist_runtime_eta import StarDistRuntimeEtaTracker
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -42,6 +43,8 @@ class BeadGenerationThread(QThread):
         signal_to_noise_cutoff,
         use_stardist=False,
         model_name="model_5_400epoch",
+        stardist_use_guess_tiles=True,
+        stardist_n_tiles=1,
         ensemble_ratio_start=image_processing.DEFAULT_ENSEMBLE_RATIO_START,
         ensemble_ratio_end=image_processing.DEFAULT_ENSEMBLE_RATIO_END,
         ensemble_ratio_step=image_processing.DEFAULT_ENSEMBLE_RATIO_STEP,
@@ -53,13 +56,15 @@ class BeadGenerationThread(QThread):
         self.signal_to_noise_cutoff = signal_to_noise_cutoff
         self.use_stardist = use_stardist
         self.model_name = model_name
+        self.stardist_use_guess_tiles = bool(stardist_use_guess_tiles)
+        self.stardist_n_tiles = max(int(stardist_n_tiles), 1)
         self.ensemble_ratio_start = float(ensemble_ratio_start)
         self.ensemble_ratio_end = float(ensemble_ratio_end)
         self.ensemble_ratio_step = float(ensemble_ratio_step)
         self._is_running = True
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
-        self._estimator: Optional[BeadProgressEstimator] = None
+        self._estimator = None
         self._run_started_at: Optional[float] = None
         self._last_progress_emit_second: int = -1
         self._last_progress_emit_message = ""
@@ -70,9 +75,10 @@ class BeadGenerationThread(QThread):
         self._run_started_at = time.monotonic()
         self._last_progress_emit_second = -1
         self._last_progress_emit_message = ""
-        self._estimator = BeadProgressEstimator(
-            mode="stardist" if self.use_stardist else "legacy"
-        )
+        if self.use_stardist:
+            self._estimator = StarDistRuntimeEtaTracker()
+        else:
+            self._estimator = BeadProgressEstimator(mode="legacy")
         success = False
         try:
             ref_bf_channel = int(self.ref_file.metadata.reference_channel)
@@ -132,11 +138,8 @@ class BeadGenerationThread(QThread):
             if not self._is_running:
                 return
 
-            if self.use_stardist and self._estimator:
-                total_cycle_layers = self._estimate_stardist_cycle_layers(tifs)
-                self._estimator.configure_stardist_layer_workload(total_cycle_layers)
-
             self._start_heartbeat()
+            stardist_bootstrap_stages: set[str] = set()
 
             def estimated_progress(p, m):
                 if not self._is_running:
@@ -156,6 +159,22 @@ class BeadGenerationThread(QThread):
                     total_eta_seconds,
                     step_eta_seconds,
                 )
+                if self.use_stardist and self._estimator:
+                    stage = self._estimator.map_message_to_stage(m)
+                    if stage == "initial_detection" and stage not in stardist_bootstrap_stages:
+                        stardist_bootstrap_stages.add(stage)
+                        (
+                            hb_progress_value,
+                            hb_progress_message,
+                            hb_total_eta_seconds,
+                            hb_step_eta_seconds,
+                        ) = self._estimator.heartbeat_with_eta_details()
+                        self._emit_estimated_progress(
+                            hb_progress_value,
+                            hb_progress_message,
+                            hb_total_eta_seconds,
+                            hb_step_eta_seconds,
+                        )
 
             def estimated_progress_units(stage, done, total):
                 if not self._is_running:
@@ -187,6 +206,8 @@ class BeadGenerationThread(QThread):
                 is_running_callback=self.is_running,
                 use_stardist=self.use_stardist,
                 model_name=self.model_name,
+                stardist_use_guess_tiles=self.stardist_use_guess_tiles,
+                stardist_n_tiles=self.stardist_n_tiles,
                 ensemble_ratio_start=self.ensemble_ratio_start,
                 ensemble_ratio_end=self.ensemble_ratio_end,
                 ensemble_ratio_step=self.ensemble_ratio_step,
@@ -245,7 +266,7 @@ class BeadGenerationThread(QThread):
         elapsed_second_bucket = int(elapsed_seconds)
         progress_int = int(progress_value)
         message = str(progress_message or "Processing beads...")
-        if 0 <= progress_int < 100:
+        if 0 <= progress_int < 100 and not self.use_stardist:
             if (
                 elapsed_second_bucket == self._last_progress_emit_second
                 and message == self._last_progress_emit_message
@@ -274,15 +295,6 @@ class BeadGenerationThread(QThread):
 
     def is_running(self):
         return self._is_running
-
-    def _estimate_stardist_cycle_layers(self, tifs: list) -> int:
-        total_layers = 0
-        for img, file_item in tifs:
-            if not isinstance(img, np.ndarray) or img.ndim != 3:
-                continue
-            reference_channel = int(file_item.metadata.reference_channel)
-            total_layers += max(0, int(img.shape[0]) - reference_channel - 1)
-        return total_layers
 
 
 class ShadingCorrectionThread(QThread):
@@ -1086,6 +1098,8 @@ class FileManagerVM(QObject):
         cycle_assignments: dict[int, FileItem],
         use_stardist=False,
         model_name="model_5_400epoch",
+        stardist_use_guess_tiles=True,
+        stardist_n_tiles=1,
         ensemble_ratio_start=image_processing.DEFAULT_ENSEMBLE_RATIO_START,
         ensemble_ratio_end=image_processing.DEFAULT_ENSEMBLE_RATIO_END,
         ensemble_ratio_step=image_processing.DEFAULT_ENSEMBLE_RATIO_STEP,
@@ -1106,6 +1120,8 @@ class FileManagerVM(QObject):
             signal_to_noise_cutoff=0.1,
             use_stardist=use_stardist,
             model_name=model_name,
+            stardist_use_guess_tiles=stardist_use_guess_tiles,
+            stardist_n_tiles=stardist_n_tiles,
             ensemble_ratio_start=ensemble_ratio_start,
             ensemble_ratio_end=ensemble_ratio_end,
             ensemble_ratio_step=ensemble_ratio_step,

@@ -24,8 +24,18 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
     def fail_get_excel(*args, **kwargs):
         raise AssertionError("get_excel should not be used in use_stardist=True mode")
 
-    def fake_beadfinding_notebook_stardist(brightfield, scale=1.0, block_size=700):
-        calls["beadfinding"] = {"scale": scale, "block_size": block_size}
+    def fake_beadfinding_notebook_stardist(
+        brightfield,
+        scale=1.0,
+        block_size=700,
+        n_tiles=1,
+        progress_units_callback=None,
+    ):
+        calls["beadfinding"] = {
+            "scale": scale,
+            "block_size": block_size,
+            "n_tiles": n_tiles,
+        }
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
     def fake_load_custom_model(model_dir):
@@ -191,9 +201,10 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
     assert set(results["cycles"].keys()) == {"cy0", "cy1"}
     assert calls["beadfinding"]["scale"] == 2
     assert calls["beadfinding"]["block_size"] == 700
+    assert calls["beadfinding"]["n_tiles"] == 0
     assert calls["labels"]["prob_thresh"] == 0.1
     assert calls["labels"]["nms_thresh"] == 0.1
-    assert calls["labels"]["n_tiles"] == 1
+    assert calls["labels"]["n_tiles"] == 0
     assert calls["labels"]["block_size"] == 700
     assert "assets/model_5_400epoch" in calls["model_dir"].replace("\\", "/")
 
@@ -266,6 +277,8 @@ def test_process_beads_stardist_forwards_custom_ensemble_sweep(monkeypatch):
         update_progress,
         is_running,
         progress_units_callback=None,
+        stardist_use_guess_tiles=True,
+        stardist_n_tiles=1,
         ensemble_ratio_start=1.0,
         ensemble_ratio_end=1.5,
         ensemble_ratio_step=0.05,
@@ -316,7 +329,13 @@ def test_process_beads_stardist_forwards_progress_units_callback(monkeypatch):
     tifs = _build_tifs(max_size=50, channels=3, cycles=2)
     brightfield = np.zeros((50, 50), dtype=np.uint16)
 
-    def fake_beadfinding_notebook_stardist(brightfield, scale=1.0, block_size=700):
+    def fake_beadfinding_notebook_stardist(
+        brightfield,
+        scale=1.0,
+        block_size=700,
+        n_tiles=1,
+        progress_units_callback=None,
+    ):
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
     def fake_load_custom_model(model_dir):

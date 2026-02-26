@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 import pandas as pd
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -21,6 +22,44 @@ class MetadataVM(QObject):
         super().__init__()
         self.selected_files = []
         self.protein_df = pd.DataFrame()
+
+    def _read_csv_with_fallback(self, file_path: str) -> pd.DataFrame:
+        encodings = [
+            "utf-8",
+            "utf-8-sig",
+            "utf-16",
+            "utf-16le",
+            "utf-16be",
+            "latin1",
+        ]
+        last_error: Optional[Exception] = None
+
+        for encoding in encodings:
+            try:
+                return pd.read_csv(file_path, encoding=encoding)
+            except (UnicodeError, pd.errors.ParserError) as exc:
+                last_error = exc
+
+        try:
+            return pd.read_csv(
+                file_path, encoding="latin1", sep=None, engine="python"
+            )
+        except Exception as exc:
+            if last_error is None:
+                last_error = exc
+
+        try:
+            return pd.read_excel(file_path)
+        except Exception as exc:
+            message = f"Unable to read protein key file '{file_path}': {exc}"
+            if last_error is not None:
+                message = f"{message} (last CSV error: {last_error})"
+            raise ValueError(message) from exc
+
+    def _read_protein_file(self, file_path: str) -> pd.DataFrame:
+        if file_path.lower().endswith(".csv"):
+            return self._read_csv_with_fallback(file_path)
+        return pd.read_excel(file_path)
 
     def update_selected_items(self, metadata_list: list[FileItem]):
         """Display metadata from selected items."""
@@ -53,16 +92,21 @@ class MetadataVM(QObject):
         self.error_sig.emit("No bead data found in the selected files.")
 
     def set_protein_files(self, files: list[str]):
-        new_protein_df = (
-            pd.concat(
-                [
-                    pd.read_csv(f) if f.endswith(".csv") else pd.read_excel(f)
-                    for f in files
-                ]
+        if len(files) == 0:
+            self.protein_df = pd.DataFrame()
+            self.update_overview_sig.emit(self.protein_df)
+            return
+
+        try:
+            new_protein_df = (
+                pd.concat([self._read_protein_file(f) for f in files])
+                .drop_duplicates()
+                .reset_index(drop=True)
             )
-            .drop_duplicates()
-            .reset_index(drop=True)
-        )
+        except Exception as exc:
+            logging.exception("Failed to load protein key files")
+            self.error_sig.emit(f"Failed to load protein key files: {exc}")
+            return
 
         cols = new_protein_df.columns.tolist()
         renamed = {}

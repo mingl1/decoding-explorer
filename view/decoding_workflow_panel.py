@@ -182,6 +182,14 @@ class DecodingWorkflowPanel(QWidget):
         self.use_stardist_checkbox.stateChanged.connect(
             self.on_stardist_checkbox_changed
         )
+        self.stardist_guess_tiles_checkbox = QCheckBox("Guess Num Tiles (Recommended)")
+        self.stardist_guess_tiles_checkbox.setChecked(True)
+        self.stardist_guess_tiles_checkbox.stateChanged.connect(
+            self.on_stardist_guess_tiles_changed
+        )
+        self.stardist_num_tiles_input = QLineEdit("1")
+        self.stardist_num_tiles_input.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.stardist_num_tiles_input.setDisabled(True)
         self.stardist_model_path_input = QLineEdit("model_5_400epoch")
         self.stardist_model_path_input.setDisabled(True)  # Disabled by default
 
@@ -324,6 +332,11 @@ class DecodingWorkflowPanel(QWidget):
         self.form_layout.addRow(
             self.stardist_model_label, self.stardist_model_path_input
         )
+        self.stardist_num_tiles_label = QLabel("StarDist Num Tiles:")
+        self.form_layout.addRow(self.stardist_guess_tiles_checkbox)
+        self.form_layout.addRow(
+            self.stardist_num_tiles_label, self.stardist_num_tiles_input
+        )
 
         self.form_layout.addRow(self.upload_protein_key_btn)
         self.form_layout.addRow(self.protein_key_files_label)
@@ -334,6 +347,9 @@ class DecodingWorkflowPanel(QWidget):
             self.use_stardist_checkbox,
             self.stardist_model_label,
             self.stardist_model_path_input,
+            self.stardist_guess_tiles_checkbox,
+            self.stardist_num_tiles_label,
+            self.stardist_num_tiles_input,
             self.upload_protein_key_btn,
             self.protein_key_files_label,
             self.generate_beads_btn,
@@ -442,9 +458,18 @@ class DecodingWorkflowPanel(QWidget):
                 file_item.metadata.use_status_as_prefix = is_checked
 
     def on_stardist_checkbox_changed(self, state):
-        """Enable/disable StarDist model path input based on checkbox state."""
         is_checked = state == Qt.CheckState.Checked
         self.stardist_model_path_input.setDisabled(not is_checked)
+        self.stardist_guess_tiles_checkbox.setDisabled(not is_checked)
+        self._sync_stardist_tiles_input_state()
+
+    def on_stardist_guess_tiles_changed(self, state):
+        self._sync_stardist_tiles_input_state()
+
+    def _sync_stardist_tiles_input_state(self):
+        use_stardist = self.use_stardist_checkbox.isChecked()
+        use_guess = self.stardist_guess_tiles_checkbox.isChecked()
+        self.stardist_num_tiles_input.setDisabled((not use_stardist) or use_guess)
 
     def _on_input_changed(self):
         """Save all input values to selected FileItems immediately."""
@@ -838,10 +863,20 @@ class DecodingWorkflowPanel(QWidget):
             self.export_all_sig.emit(folder, self.vm.selected_files)
 
     def get_stardist_settings(self):
-        """Get StarDist configuration from UI."""
+        stardist_num_tiles = 1
+        try:
+            raw_tiles = self.stardist_num_tiles_input.text()
+            if raw_tiles and raw_tiles != "...":
+                parsed_tiles = int(raw_tiles)
+                if parsed_tiles > 0:
+                    stardist_num_tiles = parsed_tiles
+        except ValueError:
+            pass
         return {
             "use_stardist": self.use_stardist_checkbox.isChecked(),
             "model_name": self.stardist_model_path_input.text(),
+            "use_guess_tiles": self.stardist_guess_tiles_checkbox.isChecked(),
+            "n_tiles": stardist_num_tiles,
         }
 
     def on_metadata_corrected(self, corrections: dict):

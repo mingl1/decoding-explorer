@@ -117,6 +117,7 @@ class MainWindow(QMainWindow):
         )
         self.file_table_widget.table_emptied.connect(self.handle_table_emptied)
         self.metadata_vm.metadata_applied_sig.connect(self.handle_metadata_applied)
+        self.metadata_vm.error_sig.connect(self.show_error)
         self.vm.metadata_corrected_sig.connect(self.handle_metadata_corrected)
         self.metadata_vm.align_channels_sig.connect(self.start_alignment)
         self.metadata_view.export_all_sig.connect(self.vm.export_files)
@@ -463,6 +464,8 @@ class MainWindow(QMainWindow):
         stardist_settings = self.metadata_view.get_stardist_settings()
         use_stardist = stardist_settings["use_stardist"]
         model_name = stardist_settings["model_name"]
+        use_guess_tiles = stardist_settings["use_guess_tiles"]
+        stardist_n_tiles = stardist_settings["n_tiles"]
         try:
             ensemble_ratio_start, ensemble_ratio_end, ensemble_ratio_step = (
                 self.metadata_view.get_ensemble_sweep_inputs()
@@ -477,6 +480,8 @@ class MainWindow(QMainWindow):
                 {0: reference_item},
                 use_stardist=use_stardist,
                 model_name=model_name,
+                stardist_use_guess_tiles=use_guess_tiles,
+                stardist_n_tiles=stardist_n_tiles,
                 ensemble_ratio_start=ensemble_ratio_start,
                 ensemble_ratio_end=ensemble_ratio_end,
                 ensemble_ratio_step=ensemble_ratio_step,
@@ -502,6 +507,8 @@ class MainWindow(QMainWindow):
                 assignments_from_dialog,
                 use_stardist=use_stardist,
                 model_name=model_name,
+                stardist_use_guess_tiles=use_guess_tiles,
+                stardist_n_tiles=stardist_n_tiles,
                 ensemble_ratio_start=ensemble_ratio_start,
                 ensemble_ratio_end=ensemble_ratio_end,
                 ensemble_ratio_step=ensemble_ratio_step,

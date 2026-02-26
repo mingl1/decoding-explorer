@@ -1,4 +1,5 @@
 import json
+import numbers
 import os
 import time
 from collections import defaultdict
@@ -1196,6 +1197,108 @@ from csbdeep.utils import normalize
 from stardist.models import StarDist2D
 
 
+def _resolve_stardist_n_tiles(model, img, n_tiles):
+    if isinstance(n_tiles, numbers.Number):
+        tiles = int(n_tiles)
+        if tiles == 0:
+            guessed = model._guess_n_tiles(img)
+            if guessed is None:
+                raise RuntimeError(
+                    "StarDist tile auto-guess returned None; cannot estimate tiles."
+                )
+            resolved = tuple(int(v) for v in guessed)
+        elif tiles > 0:
+            resolved = (tiles, tiles)
+        else:
+            raise ValueError(f"n_tiles must be >= 0, got {n_tiles}")
+    else:
+        resolved = tuple(int(v) for v in n_tiles)
+    if len(resolved) == 0:
+        raise ValueError("n_tiles must contain at least one axis value.")
+    if len(resolved) == 1:
+        resolved = (resolved[0], resolved[0])
+    if any(v <= 0 for v in resolved):
+        raise ValueError(f"n_tiles values must be > 0, got {resolved}")
+    return resolved
+
+
+def _count_total_tiles(n_tiles):
+    total = 1
+    for value in n_tiles:
+        total *= max(int(value), 1)
+    return max(int(total), 1)
+
+
+def _predict_instances_with_generator(
+    model,
+    img,
+    prob_thresh=None,
+    nms_thresh=None,
+    n_tiles=1,
+    scale=None,
+    progress_units_callback=None,
+    progress_stage=None,
+    progress_done_offset=0,
+    progress_total_units=None,
+):
+    resolved_tiles = _resolve_stardist_n_tiles(model, img, n_tiles)
+    expected_tiles = _count_total_tiles(resolved_tiles)
+    done_tiles = 0
+    final_result = None
+
+    generator = model._predict_instances_generator(
+        img,
+        axes="YX",
+        prob_thresh=prob_thresh,
+        nms_thresh=nms_thresh,
+        n_tiles=resolved_tiles,
+        scale=scale,
+        show_tile_progress=True,
+    )
+    for output in generator:
+        if isinstance(output, str):
+            if output == "tile":
+                done_tiles += 1
+                if progress_units_callback and progress_stage:
+                    done_total = progress_done_offset + done_tiles
+                    total_units = progress_total_units
+                    if total_units is None:
+                        total_units = progress_done_offset + expected_tiles
+                    total_units = max(int(total_units), done_total)
+                    progress_units_callback(progress_stage, done_total, total_units)
+                continue
+            if output in {"predict", "nms"}:
+                continue
+            raise RuntimeError(
+                "Unexpected StarDist generator event "
+                f"'{output}'. Verify stardist==0.9.1 compatibility."
+            )
+        if not isinstance(output, tuple) or len(output) != 2:
+            raise RuntimeError(
+                "Unexpected StarDist generator output shape. "
+                "Verify stardist==0.9.1 compatibility."
+            )
+        final_result = output
+
+    if final_result is None:
+        raise RuntimeError(
+            "StarDist generator finished without final output. "
+            "Verify stardist==0.9.1 compatibility."
+        )
+
+    completed_tiles = max(done_tiles, expected_tiles)
+    if progress_units_callback and progress_stage:
+        done_total = progress_done_offset + completed_tiles
+        total_units = progress_total_units
+        if total_units is None:
+            total_units = done_total
+        total_units = max(int(total_units), done_total)
+        progress_units_callback(progress_stage, done_total, total_units)
+
+    labels, details = final_result
+    return labels, details, completed_tiles, expected_tiles
+
+
 def stardist_segmentation(
     img, model, min=1, max=75, block_size=700, new_min_overlap=24, scale=1
 ):
@@ -1227,10 +1330,22 @@ def stardist_segmentation(
     return stardist_labels
 
 
-def beadfinding_notebook_stardist(brightfield, scale=1.0, block_size=700):
+def beadfinding_notebook_stardist(
+    brightfield,
+    scale=1.0,
+    block_size=700,
+    n_tiles=1,
+    progress_units_callback=None,
+):
     model = StarDist2D.from_pretrained("2D_versatile_fluo")
-    label_image = stardist_segmentation(
-        brightfield, model, block_size=block_size, scale=scale
+    normalized = normalize(brightfield.astype(np.float32), 1, 75)
+    label_image, _, _, _ = _predict_instances_with_generator(
+        model=model,
+        img=normalized,
+        n_tiles=n_tiles,
+        scale=scale,
+        progress_units_callback=progress_units_callback,
+        progress_stage="initial_detection",
     )
     num_labels = int(label_image.max())
     if num_labels == 0:
@@ -1688,32 +1803,47 @@ def get_labels_from_cycles_with_prob(
     nms_thresh=0.1,
     progress_units_callback=None,
 ):
-    n_tiles_tuple = (n_tiles, n_tiles)
     cycle_labels = []
+    tile_plan: list[list[Tuple[int, ...]]] = []
     total_units = 0
-    for metadata in metadata_list:
-        if metadata.flors_layers is not None:
-            total_units += len(metadata.flors_layers)
+    for i, cycle in enumerate(cycles):
+        flors_layers = metadata_list[i].flors_layers
+        if flors_layers is None:
+            raise ValueError("Fluorescence layers are not initialized.")
+        cycle_tiles: list[Tuple[int, ...]] = []
+        for layer_idx in flors_layers:
+            tile_img = cycle[layer_idx].astype(np.float32)[:max_size, :max_size]
+            tiles = _resolve_stardist_n_tiles(model, tile_img, n_tiles)
+            cycle_tiles.append(tiles)
+            total_units += _count_total_tiles(tiles)
+        tile_plan.append(cycle_tiles)
+
     done_units = 0
     for i, cycle in enumerate(tqdm(cycles, desc="Processing cycles")):
         layers_out = []
         flors_layers = metadata_list[i].flors_layers
         if flors_layers is None:
             raise ValueError("Fluorescence layers are not initialized.")
-        for layer_idx in flors_layers:
+        for layer_pos, layer_idx in enumerate(flors_layers):
             img = cycle[layer_idx].astype(np.float32)[:max_size, :max_size]
             img = (img - img.min()) / (img.max() - img.min() + 1e-8)
             img = normalize(img, 1, 99.8)
-            lbl, det = model.predict_instances_big(
-                img,
-                axes="YX",
+            lbl, det, completed_tiles, _ = _predict_instances_with_generator(
+                model=model,
+                img=img,
                 prob_thresh=prob_thresh,
                 nms_thresh=nms_thresh,
-                min_overlap=24,
-                n_tiles=n_tiles_tuple,
-                block_size=block_size,
-                show_progress=True,
+                n_tiles=tile_plan[i][layer_pos],
+                progress_units_callback=progress_units_callback,
+                progress_stage="activation_regions",
+                progress_done_offset=done_units,
+                progress_total_units=total_units,
             )
+            if not isinstance(det, dict):
+                raise RuntimeError(
+                    "Unexpected StarDist details payload. "
+                    "Verify stardist==0.9.1 compatibility."
+                )
             n_obj = int(lbl.max())
             prob_lut = np.zeros(n_obj + 1, dtype=np.float32)
             if n_obj > 0 and "prob" in det and det["prob"] is not None:
@@ -1721,9 +1851,7 @@ def get_labels_from_cycles_with_prob(
                 m = min(n_obj, probs.shape[0])
                 prob_lut[1 : m + 1] = probs[:m]
             layers_out.append({"lbl": lbl.astype(np.int32), "prob_lut": prob_lut})
-            done_units += 1
-            if progress_units_callback:
-                progress_units_callback("activation_regions", done_units, total_units)
+            done_units += completed_tiles
         cycle_labels.append(layers_out)
     return cycle_labels
 
@@ -2282,6 +2410,8 @@ def _process_beads_notebook_stardist(
     update_progress,
     is_running,
     progress_units_callback=None,
+    stardist_use_guess_tiles=True,
+    stardist_n_tiles=1,
     ensemble_ratio_start=DEFAULT_ENSEMBLE_RATIO_START,
     ensemble_ratio_end=DEFAULT_ENSEMBLE_RATIO_END,
     ensemble_ratio_step=DEFAULT_ENSEMBLE_RATIO_STEP,
@@ -2289,7 +2419,10 @@ def _process_beads_notebook_stardist(
     bead_detection_scale = 2
     stardist_prob_thresh = 0.1
     stardist_nms_thresh = 0.1
-    stardist_n_tiles = 1 if max_size <= 2000 else 2
+    if stardist_use_guess_tiles:
+        stardist_n_tiles_value = 0
+    else:
+        stardist_n_tiles_value = max(int(stardist_n_tiles), 1)
     stardist_block_size = 700 if max_size <= 2000 else 2000
     bead_detection_block_size = 700 if max_size <= 2000 else 2000
 
@@ -2299,6 +2432,8 @@ def _process_beads_notebook_stardist(
         bf,
         scale=bead_detection_scale,
         block_size=bead_detection_block_size,
+        n_tiles=stardist_n_tiles_value,
+        progress_units_callback=progress_units_callback,
     )
     beads = np.unique(beads, axis=0)
     bead_df = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
@@ -2322,7 +2457,7 @@ def _process_beads_notebook_stardist(
         "block_size": stardist_block_size,
         "prob_thresh": stardist_prob_thresh,
         "nms_thresh": stardist_nms_thresh,
-        "n_tiles": stardist_n_tiles,
+        "n_tiles": stardist_n_tiles_value,
     }
     if progress_units_callback:
         cycle_labels_kwargs["progress_units_callback"] = progress_units_callback
@@ -3064,6 +3199,8 @@ def process_beads(
     is_running_callback=None,
     use_stardist=False,  # Toggle between watershed and StarDist
     model_name="model_5_400epoch",  # Model path for StarDist
+    stardist_use_guess_tiles=True,
+    stardist_n_tiles=1,
     progress_units_callback=None,
     ensemble_ratio_start=DEFAULT_ENSEMBLE_RATIO_START,
     ensemble_ratio_end=DEFAULT_ENSEMBLE_RATIO_END,
@@ -3121,6 +3258,8 @@ def process_beads(
             "error": trace_error,
             "use_stardist": bool(use_stardist),
             "model_name": model_name,
+            "stardist_use_guess_tiles": bool(stardist_use_guess_tiles),
+            "stardist_n_tiles": int(stardist_n_tiles),
             "max_size": int(max_size),
             "signal_to_noise_cutoff": float(signal_to_noise_cutoff),
             "ensemble_ratio_start": float(ensemble_ratio_start),
@@ -3163,6 +3302,8 @@ def process_beads(
                     "model_name": model_name,
                     "update_progress": update_progress,
                     "is_running": is_running,
+                    "stardist_use_guess_tiles": stardist_use_guess_tiles,
+                    "stardist_n_tiles": stardist_n_tiles,
                     "ensemble_ratio_start": ensemble_ratio_start,
                     "ensemble_ratio_end": ensemble_ratio_end,
                     "ensemble_ratio_step": ensemble_ratio_step,
