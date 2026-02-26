@@ -167,7 +167,7 @@ if __name__ == "__main__":
 
     # print(len(invalid_beads), len(valid_beads), best_gap)
     # recalculate cycle for invalid beads
-    inspector = roi_inspector.ROI_Inspector(
+    inspector = roi_inspector.ROIInspector(
         {
             "bf_image": bf_image,
             "beads": df,

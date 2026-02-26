@@ -88,7 +88,7 @@ def mock_file_manager_vm(qapp):
 @pytest.fixture
 def mock_main_window(qapp):
     """Create a MainWindow instance for testing."""
-    from view.MainWindow import MainWindow
+    from view.main_window import MainWindow
     window = MainWindow()
     yield window
     window.close()
@@ -97,7 +97,7 @@ def mock_main_window(qapp):
 @pytest.fixture
 def mock_file_table_widget(qapp, mock_file_manager_vm):
     """Create a FileTableWidget instance for testing."""
-    from view.FileListWidget import FileTableWidget
+    from view.file_table_widget import FileTableWidget
 
     def noop_callback(paths):
         pass

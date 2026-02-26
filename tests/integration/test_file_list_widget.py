@@ -7,7 +7,7 @@ from model.file_item import FileItem
 from model.status_enum import FileStatus
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
-from view.FileListWidget import FileTableWidget
+from view.file_table_widget import FileTableWidget
 
 
 class TestFileTableWidget:

@@ -16,7 +16,7 @@ from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter
 from PyQt6.QtWidgets import QPushButton
 
-from view.FileListWidget import FileTableWidget
+from view.file_table_widget import FileTableWidget
 
 
 class TestFileTableWidgetEmptyState:
@@ -395,7 +395,7 @@ class TestFileTableWidgetBrowseFilesButton:
         """
         widget = mock_file_table_widget
 
-        with patch('view.FileListWidget.QFileDialog.getOpenFileNames') as mock_dialog:
+        with patch('view.file_table_widget.QFileDialog.getOpenFileNames') as mock_dialog:
             mock_dialog.return_value = ([], "")  # No files selected
 
             # Call the browse_files method (or on_browse_files)
@@ -434,7 +434,7 @@ class TestFileTableWidgetBrowseFilesButton:
 
         test_files = ['/path/to/file1.tiff', '/path/to/file2.tif']
 
-        with patch('view.FileListWidget.QFileDialog.getOpenFileNames') as mock_dialog:
+        with patch('view.file_table_widget.QFileDialog.getOpenFileNames') as mock_dialog:
             mock_dialog.return_value = (test_files, "TIFF Files (*.tif *.tiff)")
 
             # Call the browse_files method
@@ -460,7 +460,7 @@ class TestFileTableWidgetBrowseFilesButton:
         callback_mock = MagicMock()
         widget.file_dropped_callback = callback_mock
 
-        with patch('view.FileListWidget.QFileDialog.getOpenFileNames') as mock_dialog:
+        with patch('view.file_table_widget.QFileDialog.getOpenFileNames') as mock_dialog:
             mock_dialog.return_value = ([], "")  # User canceled - no files
 
             # Call the browse_files method
@@ -484,7 +484,7 @@ class TestFileTableWidgetBrowseFilesButton:
         """
         widget = mock_file_table_widget
 
-        with patch('view.FileListWidget.QFileDialog.getOpenFileNames') as mock_dialog:
+        with patch('view.file_table_widget.QFileDialog.getOpenFileNames') as mock_dialog:
             mock_dialog.return_value = ([], "")
 
             # Simulate button click
@@ -545,7 +545,7 @@ class TestFileTableWidgetBrowseFolderButton:
         """
         widget = mock_file_table_widget
 
-        with patch('view.FileListWidget.QFileDialog.getExistingDirectory') as mock_dialog:
+        with patch('view.file_table_widget.QFileDialog.getExistingDirectory') as mock_dialog:
             mock_dialog.return_value = ""  # No folder selected
 
             # Call the browse_folder method (or on_browse_folder)
@@ -573,7 +573,7 @@ class TestFileTableWidgetBrowseFolderButton:
 
         test_folder = '/path/to/selected/folder'
 
-        with patch('view.FileListWidget.QFileDialog.getExistingDirectory') as mock_dialog:
+        with patch('view.file_table_widget.QFileDialog.getExistingDirectory') as mock_dialog:
             mock_dialog.return_value = test_folder
 
             # Call the browse_folder method
@@ -599,7 +599,7 @@ class TestFileTableWidgetBrowseFolderButton:
         callback_mock = MagicMock()
         widget.file_dropped_callback = callback_mock
 
-        with patch('view.FileListWidget.QFileDialog.getExistingDirectory') as mock_dialog:
+        with patch('view.file_table_widget.QFileDialog.getExistingDirectory') as mock_dialog:
             mock_dialog.return_value = ""  # User canceled - empty string
 
             # Call the browse_folder method
@@ -623,7 +623,7 @@ class TestFileTableWidgetBrowseFolderButton:
         """
         widget = mock_file_table_widget
 
-        with patch('view.FileListWidget.QFileDialog.getExistingDirectory') as mock_dialog:
+        with patch('view.file_table_widget.QFileDialog.getExistingDirectory') as mock_dialog:
             mock_dialog.return_value = ""
 
             # Simulate button click

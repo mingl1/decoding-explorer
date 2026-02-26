@@ -7,7 +7,7 @@ import tifffile
 from PyQt6.QtWidgets import QFileDialog, QAbstractItemView
 from PyQt6.QtCore import Qt
 from unittest.mock import patch
-from view.MainWindow import MainWindow
+from view.main_window import MainWindow
 
 # --- TDD Phase 1: Red (The Test) ---
 

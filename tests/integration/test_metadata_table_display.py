@@ -6,7 +6,7 @@ import pytest
 from model.file_item import FileItem, MetaData
 from model.status_enum import FileStatus
 from PyQt6.QtWidgets import QTableWidgetItem
-from view.FileListWidget import FileTableWidget
+from view.file_table_widget import FileTableWidget
 
 
 class TestMetadataTableDisplay:

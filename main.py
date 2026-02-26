@@ -26,7 +26,7 @@ import numpy as np
 if not hasattr(np, "bool"):
     np.bool = np.bool_  # type: ignore
 
-from view.MainWindow import MainWindow
+from view.main_window import MainWindow
 
 
 def show_error_dialog(etype, value, tb):

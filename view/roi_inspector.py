@@ -178,7 +178,7 @@ class ZoomableImageView(QGraphicsView):
             dot.setZValue(1)  # Make sure it appears above the image
 
 from image_processing import gaussian_kernel
-class ROI_Inspector(QDialog):
+class ROIInspector(QDialog):
     show_bead_signal = pyqtSignal(np.ndarray)
 
     def __init__(self, snapshot_data: dict):
@@ -569,7 +569,7 @@ class ROI_Inspector(QDialog):
                 f"Cycle {key}: extracted ROI shape {roi.shape} at ({x0}:{x1}, {y0}:{y1})"
             )
 
-        popup = ROI_Grid_Display(
+        popup = ROIGridDisplay(
             rois, (x, y), radius, scale, bbox, output, bright_field_roi
         )
         popup.exec()  # modal dialog to display ROIs
@@ -638,7 +638,7 @@ class ROI_Inspector(QDialog):
         self.image_view.set_images(target_pixmap)
 
 
-class ROI_Grid_Display(QDialog):
+class ROIGridDisplay(QDialog):
     def __init__(
         self,
         rois: dict,
@@ -891,3 +891,7 @@ def expand_bbox(bbox, scale):
     new_y2 = int(cy + new_height // 2)
 
     return (new_x1, new_y1, new_x2, new_y2)
+
+
+ROI_Inspector = ROIInspector
+ROI_Grid_Display = ROIGridDisplay
