@@ -5,6 +5,7 @@ import warnings
 from typing import List
 
 import cv2
+import image_processing
 import numpy as np
 from pandas import DataFrame
 from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
@@ -123,8 +124,6 @@ class MainWindow(QMainWindow):
         self.metadata_view.export_all_sig.connect(self.vm.export_files)
         self.metadata_view.generate_beads_sig.connect(self.start_bead_generation)
         self.metadata_view.upload_beads_sig.connect(self.upload_bead_csv)
-        self.metadata_view.recompute_ensemble_sig.connect(self.recompute_ensemble_sweep)
-        self.metadata_view.apply_ensemble_sig.connect(self.apply_ensemble_ratio)
         self.metadata_view.remove_ensemble_sig.connect(self.remove_ensemble_applied_changes)
         self.metadata_view.lower_invalid_sig.connect(self.lower_invalid_ratio)
         self.metadata_view.lower_filter_sig.connect(self.lower_filter_ratio)
@@ -308,8 +307,7 @@ class MainWindow(QMainWindow):
         selected_ratio = self.metadata_view.get_selected_ensemble_ratio()
         if selected_ratio is not None:
             return float(selected_ratio)
-        start, _, _ = self.metadata_view.get_ensemble_sweep_inputs()
-        return float(start)
+        return float(image_processing.DEFAULT_ENSEMBLE_RATIO_START)
 
     def _apply_ensemble_ratio_delta(self, delta: float):
         reference_item = self.vm.reference_item
@@ -466,13 +464,11 @@ class MainWindow(QMainWindow):
         model_name = stardist_settings["model_name"]
         use_guess_tiles = stardist_settings["use_guess_tiles"]
         stardist_n_tiles = stardist_settings["n_tiles"]
-        try:
-            ensemble_ratio_start, ensemble_ratio_end, ensemble_ratio_step = (
-                self.metadata_view.get_ensemble_sweep_inputs()
-            )
-        except ValueError:
-            self.show_error("Invalid ensemble ratio sweep values.")
-            return
+        use_stardist_bead_centers = stardist_settings["use_stardist_bead_centers"]
+        area_multiplier = stardist_settings["area_multiplier"]
+        ensemble_ratio_start = image_processing.DEFAULT_ENSEMBLE_RATIO_START
+        ensemble_ratio_end = image_processing.DEFAULT_ENSEMBLE_RATIO_END
+        ensemble_ratio_step = image_processing.DEFAULT_ENSEMBLE_RATIO_STEP
 
         if not files_for_assignment:
             # If only the reference file is selected, we can proceed with one cycle.
@@ -482,6 +478,8 @@ class MainWindow(QMainWindow):
                 model_name=model_name,
                 stardist_use_guess_tiles=use_guess_tiles,
                 stardist_n_tiles=stardist_n_tiles,
+                use_stardist_bead_centers=use_stardist_bead_centers,
+                area_multiplier=area_multiplier,
                 ensemble_ratio_start=ensemble_ratio_start,
                 ensemble_ratio_end=ensemble_ratio_end,
                 ensemble_ratio_step=ensemble_ratio_step,
@@ -509,6 +507,8 @@ class MainWindow(QMainWindow):
                 model_name=model_name,
                 stardist_use_guess_tiles=use_guess_tiles,
                 stardist_n_tiles=stardist_n_tiles,
+                use_stardist_bead_centers=use_stardist_bead_centers,
+                area_multiplier=area_multiplier,
                 ensemble_ratio_start=ensemble_ratio_start,
                 ensemble_ratio_end=ensemble_ratio_end,
                 ensemble_ratio_step=ensemble_ratio_step,

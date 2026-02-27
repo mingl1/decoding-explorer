@@ -45,6 +45,8 @@ class BeadGenerationThread(QThread):
         model_name="model_5_400epoch",
         stardist_use_guess_tiles=True,
         stardist_n_tiles=1,
+        use_stardist_bead_centers=False,
+        area_multiplier=1.8,
         ensemble_ratio_start=image_processing.DEFAULT_ENSEMBLE_RATIO_START,
         ensemble_ratio_end=image_processing.DEFAULT_ENSEMBLE_RATIO_END,
         ensemble_ratio_step=image_processing.DEFAULT_ENSEMBLE_RATIO_STEP,
@@ -58,6 +60,14 @@ class BeadGenerationThread(QThread):
         self.model_name = model_name
         self.stardist_use_guess_tiles = bool(stardist_use_guess_tiles)
         self.stardist_n_tiles = max(int(stardist_n_tiles), 1)
+        self.use_stardist_bead_centers = bool(use_stardist_bead_centers)
+        try:
+            parsed_area_multiplier = float(area_multiplier)
+            if parsed_area_multiplier <= 0:
+                raise ValueError("area_multiplier must be > 0")
+            self.area_multiplier = parsed_area_multiplier
+        except (TypeError, ValueError):
+            self.area_multiplier = 1.8
         self.ensemble_ratio_start = float(ensemble_ratio_start)
         self.ensemble_ratio_end = float(ensemble_ratio_end)
         self.ensemble_ratio_step = float(ensemble_ratio_step)
@@ -208,6 +218,8 @@ class BeadGenerationThread(QThread):
                 model_name=self.model_name,
                 stardist_use_guess_tiles=self.stardist_use_guess_tiles,
                 stardist_n_tiles=self.stardist_n_tiles,
+                use_stardist_bead_centers=self.use_stardist_bead_centers,
+                area_multiplier=self.area_multiplier,
                 ensemble_ratio_start=self.ensemble_ratio_start,
                 ensemble_ratio_end=self.ensemble_ratio_end,
                 ensemble_ratio_step=self.ensemble_ratio_step,
@@ -1100,6 +1112,8 @@ class FileManagerVM(QObject):
         model_name="model_5_400epoch",
         stardist_use_guess_tiles=True,
         stardist_n_tiles=1,
+        use_stardist_bead_centers=False,
+        area_multiplier=1.8,
         ensemble_ratio_start=image_processing.DEFAULT_ENSEMBLE_RATIO_START,
         ensemble_ratio_end=image_processing.DEFAULT_ENSEMBLE_RATIO_END,
         ensemble_ratio_step=image_processing.DEFAULT_ENSEMBLE_RATIO_STEP,
@@ -1122,6 +1136,8 @@ class FileManagerVM(QObject):
             model_name=model_name,
             stardist_use_guess_tiles=stardist_use_guess_tiles,
             stardist_n_tiles=stardist_n_tiles,
+            use_stardist_bead_centers=use_stardist_bead_centers,
+            area_multiplier=area_multiplier,
             ensemble_ratio_start=ensemble_ratio_start,
             ensemble_ratio_end=ensemble_ratio_end,
             ensemble_ratio_step=ensemble_ratio_step,

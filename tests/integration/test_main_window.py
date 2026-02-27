@@ -1,6 +1,7 @@
 import os
 from unittest.mock import MagicMock, patch, call
 
+import image_processing
 import numpy as np
 import pytest
 from model.file_item import FileItem
@@ -74,7 +75,7 @@ class TestMainWindow:
              patch.object(window.vm, 'load_folder') as mock_load_folder:
             window.handle_dropped_paths(["/test/folder"])
 
-            mock_load_folder.assert_called_once_with("/test/folder")
+            mock_load_folder.assert_called_once_with(["/test/folder"])
 
     def test_handle_dropped_paths_loads_file(
         self, mock_main_window, mocker
@@ -86,7 +87,7 @@ class TestMainWindow:
              patch.object(window.vm, 'load_file') as mock_load_file:
             window.handle_dropped_paths(["/test/file.tif"])
 
-            mock_load_file.assert_called_once_with("/test/file.tif")
+            mock_load_file.assert_called_once_with(["/test/file.tif"])
 
     def test_start_alignment_shows_progress(
         self, mock_main_window, mocker
@@ -157,7 +158,7 @@ class TestMainWindow:
             # Should error about missing reference
             mock_error.assert_called_once_with("Please set a reference image first.")
 
-    def test_start_bead_generation_passes_ensemble_sweep_inputs(
+    def test_start_bead_generation_passes_stardist_and_default_sweep_settings(
         self, mock_main_window, mock_file_item, mocker
     ):
         window = mock_main_window
@@ -165,20 +166,25 @@ class TestMainWindow:
         window.vm.files[mock_file_item.path] = mock_file_item
         mocker.patch.object(window, "get_selected_files", return_value=[mock_file_item])
 
-        window.metadata_view.ensemble_ratio_start_input.setText("1.2")
-        window.metadata_view.ensemble_ratio_end_input.setText("1.6")
-        window.metadata_view.ensemble_ratio_step_input.setText("0.1")
+        window.metadata_view.stardist_guess_tiles_checkbox.setChecked(False)
+        window.metadata_view.stardist_num_tiles_input.setText("3")
+        window.metadata_view.use_stardist_bead_centers_checkbox.setChecked(True)
+        window.metadata_view.area_multiplier_input.setText("2.2")
 
         with patch.object(window.vm, "generate_beads") as mock_generate:
             window.start_bead_generation()
 
         mock_generate.assert_called_once_with(
             {0: mock_file_item},
-            use_stardist=False,
+            use_stardist=True,
             model_name="model_5_400epoch",
-            ensemble_ratio_start=1.2,
-            ensemble_ratio_end=1.6,
-            ensemble_ratio_step=0.1,
+            stardist_use_guess_tiles=False,
+            stardist_n_tiles=3,
+            use_stardist_bead_centers=True,
+            area_multiplier=2.2,
+            ensemble_ratio_start=image_processing.DEFAULT_ENSEMBLE_RATIO_START,
+            ensemble_ratio_end=image_processing.DEFAULT_ENSEMBLE_RATIO_END,
+            ensemble_ratio_step=image_processing.DEFAULT_ENSEMBLE_RATIO_STEP,
         )
 
     def test_on_beads_generated_does_not_auto_save(
@@ -294,9 +300,6 @@ class TestMainWindow:
         mock_file_item.ensemble_ratio_applied = 1.5
         window.vm.reference_item = mock_file_item
         window.vm.files[mock_file_item.path] = mock_file_item
-        window.metadata_view.ensemble_ratio_start_input.setText("1.0")
-        window.metadata_view.ensemble_ratio_end_input.setText("1.5")
-        window.metadata_view.ensemble_ratio_step_input.setText("0.05")
 
         with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "calculate_statistics_for_file"):
             window.lower_invalid_ratio()

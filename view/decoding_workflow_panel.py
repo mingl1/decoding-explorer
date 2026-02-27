@@ -29,8 +29,6 @@ from viewmodel.metadata_vm import MetadataVM
 class DecodingWorkflowPanel(QWidget):
     export_all_sig = pyqtSignal(str, list)
     generate_beads_sig = pyqtSignal()
-    recompute_ensemble_sig = pyqtSignal(float, float, float)
-    apply_ensemble_sig = pyqtSignal(float)
     remove_ensemble_sig = pyqtSignal()
     lower_invalid_sig = pyqtSignal()
     lower_filter_sig = pyqtSignal()
@@ -177,12 +175,16 @@ class DecodingWorkflowPanel(QWidget):
         self.manually_align_btn.clicked.connect(self.manually_align_sig.emit)
 
         # StarDist controls
-        self.use_stardist_checkbox = QCheckBox("Use StarDist(Recommended)")
+        self.use_stardist_checkbox = QCheckBox(
+            "Use StarDist for fluorescent layers (Recommended)"
+        )
         self.use_stardist_checkbox.setChecked(True)
         self.use_stardist_checkbox.stateChanged.connect(
             self.on_stardist_checkbox_changed
         )
-        self.stardist_guess_tiles_checkbox = QCheckBox("Guess Num Tiles (Recommended)")
+        self.stardist_guess_tiles_checkbox = QCheckBox(
+            "Guess Num Tiles for fluorescent layers (Recommended)"
+        )
         self.stardist_guess_tiles_checkbox.setChecked(True)
         self.stardist_guess_tiles_checkbox.stateChanged.connect(
             self.on_stardist_guess_tiles_changed
@@ -192,16 +194,21 @@ class DecodingWorkflowPanel(QWidget):
         self.stardist_num_tiles_input.setDisabled(True)
         self.stardist_model_path_input = QLineEdit("model_5_400epoch")
         self.stardist_model_path_input.setDisabled(True)  # Disabled by default
+        self.use_stardist_bead_centers_checkbox = QCheckBox(
+            "Use StarDist for bead center detection"
+        )
+        self.use_stardist_bead_centers_checkbox.setChecked(False)
+        self.use_stardist_bead_centers_checkbox.stateChanged.connect(
+            self.on_stardist_bead_centers_changed
+        )
+        self.area_multiplier_input = QLineEdit("1.8")
+        self.area_multiplier_input.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         self.upload_protein_key_btn = QPushButton("Upload Protein/Gene Key Files")
         self.upload_protein_key_btn.clicked.connect(self.upload_protein_key_files)
         self.protein_key_files_label = QLabel("No files uploaded.")
         self.generate_beads_btn = QPushButton("Generate Beads")
         self.generate_beads_btn.clicked.connect(self.generate_beads_sig.emit)
-        self.recompute_sweep_btn = QPushButton("Recompute Sweep")
-        self.recompute_sweep_btn.clicked.connect(self._emit_recompute_ensemble)
-        self.apply_ensemble_btn = QPushButton("Apply Ensemble")
-        self.apply_ensemble_btn.clicked.connect(self._emit_apply_ensemble)
         self.reset_ensemble_btn = QPushButton("Min Invalid")
         self.reset_ensemble_btn.clicked.connect(self.remove_ensemble_sig.emit)
         self.remove_ensemble_btn = self.reset_ensemble_btn
@@ -213,9 +220,6 @@ class DecodingWorkflowPanel(QWidget):
         self.save_beads_btn.clicked.connect(self.save_beads_sig.emit)
         self.upload_beads_btn = QPushButton("Upload Bead CSV")
         self.upload_beads_btn.clicked.connect(self.upload_beads_sig.emit)
-        self.ensemble_ratio_start_input = QLineEdit("1.0")
-        self.ensemble_ratio_end_input = QLineEdit("1.5")
-        self.ensemble_ratio_step_input = QLineEdit("0.05")
         self.ensemble_slider = QSlider(Qt.Orientation.Horizontal)
         self.ensemble_slider.setRange(0, 0)
         self.ensemble_slider.setValue(0)
@@ -337,6 +341,11 @@ class DecodingWorkflowPanel(QWidget):
         self.form_layout.addRow(
             self.stardist_num_tiles_label, self.stardist_num_tiles_input
         )
+        self.bead_generation_advanced_label = QLabel("Advanced:")
+        self.area_multiplier_label = QLabel("Area Multiplier:")
+        self.form_layout.addRow(self.bead_generation_advanced_label)
+        self.form_layout.addRow(self.use_stardist_bead_centers_checkbox)
+        self.form_layout.addRow(self.area_multiplier_label, self.area_multiplier_input)
 
         self.form_layout.addRow(self.upload_protein_key_btn)
         self.form_layout.addRow(self.protein_key_files_label)
@@ -350,6 +359,10 @@ class DecodingWorkflowPanel(QWidget):
             self.stardist_guess_tiles_checkbox,
             self.stardist_num_tiles_label,
             self.stardist_num_tiles_input,
+            self.bead_generation_advanced_label,
+            self.use_stardist_bead_centers_checkbox,
+            self.area_multiplier_label,
+            self.area_multiplier_input,
             self.upload_protein_key_btn,
             self.protein_key_files_label,
             self.generate_beads_btn,
@@ -371,13 +384,8 @@ class DecodingWorkflowPanel(QWidget):
         #     crop_sep,
         # ]
 
-        self.ensemble_ratio_start_label = QLabel("Ratio Start:")
-        self.ensemble_ratio_end_label = QLabel("Ratio End:")
-        self.ensemble_ratio_step_label = QLabel("Ratio Step:")
-
         self.statistics_tabs = QTabWidget()
         self.statistics_summary_tab = QWidget()
-        self.statistics_advanced_tab = QWidget()
 
         summary_layout = QVBoxLayout()
         summary_layout.setContentsMargins(0, 0, 0, 0)
@@ -398,31 +406,7 @@ class DecodingWorkflowPanel(QWidget):
         summary_layout.addWidget(self.counts_table_container)
         self.statistics_summary_tab.setLayout(summary_layout)
 
-        advanced_layout = QFormLayout()
-        advanced_layout.setContentsMargins(0, 0, 0, 0)
-        advanced_layout.setHorizontalSpacing(10)
-        advanced_layout.setVerticalSpacing(5)
-        advanced_layout.addRow(
-            self.ensemble_ratio_start_label, self.ensemble_ratio_start_input
-        )
-        advanced_layout.addRow(
-            self.ensemble_ratio_end_label, self.ensemble_ratio_end_input
-        )
-        advanced_layout.addRow(
-            self.ensemble_ratio_step_label, self.ensemble_ratio_step_input
-        )
-        advanced_layout.addRow(self.recompute_sweep_btn)
-        advanced_layout.addRow(self.ensemble_slider)
-        advanced_layout.addRow(self.ensemble_selected_ratio_label)
-        advanced_layout.addRow(self.ensemble_applied_ratio_label)
-        advanced_layout.addRow(self.ensemble_valid_pct_label)
-        advanced_layout.addRow(self.ensemble_invalid_pct_label)
-        advanced_layout.addRow(self.ensemble_filtered_pct_label)
-        advanced_layout.addRow(self.apply_ensemble_btn)
-        self.statistics_advanced_tab.setLayout(advanced_layout)
-
         self.statistics_tabs.addTab(self.statistics_summary_tab, "Summary")
-        self.statistics_tabs.addTab(self.statistics_advanced_tab, "Advanced")
 
         self.form_layout.addRow(stats_title)
         self.form_layout.addRow(stats_sep)
@@ -448,6 +432,7 @@ class DecodingWorkflowPanel(QWidget):
         self.setLayout(layout)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.update_metadata([])
+        self._sync_stardist_tiles_input_state()
         self.set_ensemble_sweep_stats(None)
 
     def on_prefix_checkbox_changed(self, state):
@@ -466,10 +451,18 @@ class DecodingWorkflowPanel(QWidget):
     def on_stardist_guess_tiles_changed(self, state):
         self._sync_stardist_tiles_input_state()
 
+    def on_stardist_bead_centers_changed(self, state):
+        self._sync_stardist_tiles_input_state()
+
     def _sync_stardist_tiles_input_state(self):
         use_stardist = self.use_stardist_checkbox.isChecked()
         use_guess = self.stardist_guess_tiles_checkbox.isChecked()
+        if not use_stardist:
+            self.use_stardist_bead_centers_checkbox.setChecked(False)
+        self.use_stardist_bead_centers_checkbox.setDisabled(not use_stardist)
+        use_stardist_bead_centers = self.use_stardist_bead_centers_checkbox.isChecked()
         self.stardist_num_tiles_input.setDisabled((not use_stardist) or use_guess)
+        self.area_multiplier_input.setDisabled(use_stardist_bead_centers)
 
     def _on_input_changed(self):
         """Save all input values to selected FileItems immediately."""
@@ -741,28 +734,12 @@ class DecodingWorkflowPanel(QWidget):
 
     def _set_ensemble_controls_enabled(self, enabled: bool):
         controls = [
-            self.recompute_sweep_btn,
-            self.apply_ensemble_btn,
             self.save_beads_btn,
             self.lower_invalid_btn,
             self.lower_filter_btn,
-            self.ensemble_slider,
         ]
         for control in controls:
             control.setEnabled(enabled)
-
-    def _emit_recompute_ensemble(self):
-        try:
-            start, end, step = self.get_ensemble_sweep_inputs()
-        except ValueError:
-            return
-        self.recompute_ensemble_sig.emit(start, end, step)
-
-    def _emit_apply_ensemble(self):
-        ratio = self.get_selected_ensemble_ratio()
-        if ratio is None:
-            return
-        self.apply_ensemble_sig.emit(float(ratio))
 
     def _on_ensemble_slider_changed(self, value: int):
         if self._ensemble_sweep_stats.empty:
@@ -783,12 +760,6 @@ class DecodingWorkflowPanel(QWidget):
         self.ensemble_filtered_pct_label.setText(
             f"Preview Filtered: {float(row['filtered_pct']):.2f}%"
         )
-
-    def get_ensemble_sweep_inputs(self) -> tuple[float, float, float]:
-        start = float(self.ensemble_ratio_start_input.text())
-        end = float(self.ensemble_ratio_end_input.text())
-        step = float(self.ensemble_ratio_step_input.text())
-        return start, end, step
 
     def get_selected_ensemble_ratio(self):
         return self._selected_ensemble_ratio
@@ -877,7 +848,21 @@ class DecodingWorkflowPanel(QWidget):
             "model_name": self.stardist_model_path_input.text(),
             "use_guess_tiles": self.stardist_guess_tiles_checkbox.isChecked(),
             "n_tiles": stardist_num_tiles,
+            "use_stardist_bead_centers": self.use_stardist_bead_centers_checkbox.isChecked(),
+            "area_multiplier": self._get_area_multiplier_value(),
         }
+
+    def _get_area_multiplier_value(self) -> float:
+        area_multiplier = 1.8
+        try:
+            raw_area_multiplier = self.area_multiplier_input.text()
+            if raw_area_multiplier and raw_area_multiplier != "...":
+                parsed = float(raw_area_multiplier)
+                if parsed > 0:
+                    area_multiplier = parsed
+        except ValueError:
+            pass
+        return area_multiplier
 
     def on_metadata_corrected(self, corrections: dict):
         for key, value in corrections.items():

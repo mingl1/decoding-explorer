@@ -218,6 +218,7 @@ def beadfinding(
     num_tiles: int = 10,
     px_overlap: int = 100,
     workers: int = 10,
+    area_multiplier: float = 1.8,
     is_running_callback=None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -296,6 +297,7 @@ def beadfinding(
     split_result = _split_large_components(
         label_image=label_image,
         areas=component_areas,
+        area_multiplier=area_multiplier,
         is_running_callback=is_running_callback,
         return_stats=True,
     )
@@ -2728,6 +2730,34 @@ def _compute_voronoi_ensemble_cache(
     }
 
 
+def _detect_bead_centers_with_stardist(
+    brightfield,
+    model,
+    max_size,
+    n_tiles,
+    update_progress,
+    progress_units_callback=None,
+):
+    bf = brightfield[:max_size, :max_size].astype(np.float32)
+    normalized = normalize(bf, 1, 99)
+    label_image, _, _, _ = _predict_instances_with_generator(
+        model=model,
+        img=normalized,
+        n_tiles=n_tiles,
+        progress_units_callback=progress_units_callback,
+        progress_stage="initial_detection",
+        progress_message_callback=lambda msg: update_progress(10, msg),
+        nms_message="Initial bead detection... Running NMS",
+    )
+    num_labels = int(label_image.max())
+    if num_labels == 0:
+        return np.empty((0, 2), dtype=np.float32)
+    indices = np.arange(1, num_labels + 1)
+    centers_yx = ndimage.center_of_mass(bf, label_image, indices)
+    centers = np.array([(x, y) for y, x in centers_yx if not np.isnan(y)])
+    return np.asarray(centers, dtype=np.float32)
+
+
 def _process_beads_notebook_stardist(
     brightfield,
     tifs,
@@ -2738,11 +2768,13 @@ def _process_beads_notebook_stardist(
     progress_units_callback=None,
     stardist_use_guess_tiles=True,
     stardist_n_tiles=1,
+    use_stardist_bead_centers=False,
+    area_multiplier=1.8,
     ensemble_ratio_start=DEFAULT_ENSEMBLE_RATIO_START,
     ensemble_ratio_end=DEFAULT_ENSEMBLE_RATIO_END,
     ensemble_ratio_step=DEFAULT_ENSEMBLE_RATIO_STEP,
 ):
-    stardist_prob_thresh = 0.1
+    stardist_prob_thresh = 0.25 if max_size > 2000 else 0.1
     stardist_nms_thresh = 0.1
     if stardist_use_guess_tiles:
         stardist_n_tiles_value = 0
@@ -2751,9 +2783,26 @@ def _process_beads_notebook_stardist(
     stardist_block_size = 700 if max_size <= 2000 else 2000
     activation_regions_progress_message = lambda msg: update_progress(30, msg)
 
+    model_dir = _resolve_model_dir(model_name)
+    custom_model = load_custom_model(model_dir)
+
     update_progress(10, "Initial bead detection...")
     bf = brightfield[:max_size, :max_size]
-    beads = beadfinding(bf, is_running_callback=is_running)
+    if use_stardist_bead_centers:
+        beads = _detect_bead_centers_with_stardist(
+            brightfield=brightfield,
+            model=custom_model,
+            max_size=max_size,
+            n_tiles=stardist_n_tiles_value,
+            update_progress=update_progress,
+            progress_units_callback=progress_units_callback,
+        )
+    else:
+        beads = beadfinding(
+            bf,
+            area_multiplier=area_multiplier,
+            is_running_callback=is_running,
+        )
     if beads is None:
         return None
     if isinstance(beads, tuple):
@@ -2781,8 +2830,6 @@ def _process_beads_notebook_stardist(
         ]
     num_cycles = len(tif_metadata)
     num_layers = _validate_fluorescence_layers(tif_metadata)
-    model_dir = _resolve_model_dir(model_name)
-    custom_model = load_custom_model(model_dir)
     cycle_labels_kwargs = {
         "block_size": stardist_block_size,
         "prob_thresh": stardist_prob_thresh,
@@ -3532,11 +3579,21 @@ def process_beads(
     model_name="model_5_400epoch",  # Model path for StarDist
     stardist_use_guess_tiles=True,
     stardist_n_tiles=1,
+    use_stardist_bead_centers=False,
+    area_multiplier=1.8,
     progress_units_callback=None,
     ensemble_ratio_start=DEFAULT_ENSEMBLE_RATIO_START,
     ensemble_ratio_end=DEFAULT_ENSEMBLE_RATIO_END,
     ensemble_ratio_step=DEFAULT_ENSEMBLE_RATIO_STEP,
 ):
+    try:
+        parsed_area_multiplier = float(area_multiplier)
+        if parsed_area_multiplier <= 0:
+            raise ValueError("area_multiplier must be > 0")
+        area_multiplier_value = parsed_area_multiplier
+    except (TypeError, ValueError):
+        area_multiplier_value = 1.8
+
     trace_started_at = datetime.now().isoformat()
     trace_start = time.perf_counter()
     trace_status = "running"
@@ -3591,6 +3648,8 @@ def process_beads(
             "model_name": model_name,
             "stardist_use_guess_tiles": bool(stardist_use_guess_tiles),
             "stardist_n_tiles": int(stardist_n_tiles),
+            "use_stardist_bead_centers": bool(use_stardist_bead_centers),
+            "area_multiplier": float(area_multiplier_value),
             "max_size": int(max_size),
             "signal_to_noise_cutoff": float(signal_to_noise_cutoff),
             "ensemble_ratio_start": float(ensemble_ratio_start),
@@ -3635,6 +3694,8 @@ def process_beads(
                     "is_running": is_running,
                     "stardist_use_guess_tiles": stardist_use_guess_tiles,
                     "stardist_n_tiles": stardist_n_tiles,
+                    "use_stardist_bead_centers": use_stardist_bead_centers,
+                    "area_multiplier": area_multiplier_value,
                     "ensemble_ratio_start": ensemble_ratio_start,
                     "ensemble_ratio_end": ensemble_ratio_end,
                     "ensemble_ratio_step": ensemble_ratio_step,
@@ -3674,7 +3735,11 @@ def process_beads(
         brightfield = brightfield[:max_size, :max_size]
         log("Initial bead detection...")
         try:
-            beads = beadfinding(brightfield, is_running_callback=is_running)
+            beads = beadfinding(
+                brightfield,
+                area_multiplier=area_multiplier_value,
+                is_running_callback=is_running,
+            )
         except Exception as e:
             log(f"Error during beadfinding: {e}")
             trace_status = "error"

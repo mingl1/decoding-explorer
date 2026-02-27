@@ -301,23 +301,28 @@ class TestMetadataView:
         assert view.ensemble_filtered_pct_label.text() == "Preview Filtered: 62.00%"
         assert view.ensemble_applied_ratio_label.text() == "Applied Ratio: 1.00"
 
-    def test_statistics_tabs_include_summary_and_advanced(self, qapp):
+    def test_statistics_tabs_include_summary_only(self, qapp):
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
 
         vm = MetadataVM()
         view = DecodingWorkflowPanel(None, vm=vm)
 
-        assert view.statistics_tabs.count() == 2
+        assert view.statistics_tabs.count() == 1
         assert view.statistics_tabs.tabText(0) == "Summary"
-        assert view.statistics_tabs.tabText(1) == "Advanced"
 
     def test_lower_invalid_button_emits_signal(self, qapp):
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
+        import pandas as pd
 
         vm = MetadataVM()
         view = DecodingWorkflowPanel(None, vm=vm)
+        view.set_ensemble_sweep_stats(
+            pd.DataFrame(
+                [{"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0}]
+            )
+        )
 
         emitted = []
         view.lower_invalid_sig.connect(lambda: emitted.append(True))
@@ -328,9 +333,15 @@ class TestMetadataView:
     def test_lower_filter_button_emits_signal(self, qapp):
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
+        import pandas as pd
 
         vm = MetadataVM()
         view = DecodingWorkflowPanel(None, vm=vm)
+        view.set_ensemble_sweep_stats(
+            pd.DataFrame(
+                [{"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0}]
+            )
+        )
 
         emitted = []
         view.lower_filter_sig.connect(lambda: emitted.append(True))
@@ -338,41 +349,77 @@ class TestMetadataView:
 
         assert emitted == [True]
 
-    def test_advanced_tab_shows_sweep_controls(self, qapp):
+    def test_bead_generation_advanced_defaults(self, qapp):
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
 
         vm = MetadataVM()
         view = DecodingWorkflowPanel(None, vm=vm)
         view.show()
-        view.statistics_tabs.setCurrentWidget(view.statistics_advanced_tab)
-        qapp.processEvents()
 
-        assert view.ensemble_ratio_start_input.isVisible()
-        assert view.recompute_sweep_btn.isVisible()
+        assert not view.use_stardist_bead_centers_checkbox.isChecked()
+        assert view.area_multiplier_input.text() == "1.8"
+        assert view.area_multiplier_input.isEnabled()
 
-    def test_apply_ensemble_button_emits_selected_ratio(self, qapp):
+    def test_bead_generation_advanced_toggle_enables_area_multiplier(self, qapp):
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
-        import pandas as pd
 
         vm = MetadataVM()
         view = DecodingWorkflowPanel(None, vm=vm)
         view.show()
 
-        stats_df = pd.DataFrame(
-            [
-                {"ratio": 1.0, "valid_pct": 25.0, "invalid_pct": 10.0, "filtered_pct": 65.0},
-                {"ratio": 1.05, "valid_pct": 30.0, "invalid_pct": 8.0, "filtered_pct": 62.0},
-            ]
-        )
-        view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=1.0)
+        view.use_stardist_bead_centers_checkbox.setChecked(True)
+        assert not view.area_multiplier_input.isEnabled()
 
-        emitted = []
-        view.apply_ensemble_sig.connect(lambda ratio: emitted.append(ratio))
-        view.apply_ensemble_btn.click()
+        view.use_stardist_bead_centers_checkbox.setChecked(False)
+        assert view.area_multiplier_input.isEnabled()
 
-        assert emitted == [1.05]
+    def test_tiles_input_state_follows_fluorescent_stardist_controls(self, qapp):
+        from view.decoding_workflow_panel import DecodingWorkflowPanel
+        from viewmodel.metadata_vm import MetadataVM
+
+        vm = MetadataVM()
+        view = DecodingWorkflowPanel(None, vm=vm)
+        view.show()
+
+        assert view.stardist_num_tiles_input.isEnabled() is False
+
+        view.stardist_guess_tiles_checkbox.setChecked(False)
+        assert view.stardist_num_tiles_input.isEnabled()
+
+        view.use_stardist_checkbox.setChecked(False)
+        assert not view.stardist_num_tiles_input.isEnabled()
+        assert not view.use_stardist_bead_centers_checkbox.isEnabled()
+        assert view.area_multiplier_input.isEnabled()
+
+    def test_get_stardist_settings_includes_bead_centers_and_area_multiplier(self, qapp):
+        from view.decoding_workflow_panel import DecodingWorkflowPanel
+        from viewmodel.metadata_vm import MetadataVM
+
+        vm = MetadataVM()
+        view = DecodingWorkflowPanel(None, vm=vm)
+
+        view.stardist_guess_tiles_checkbox.setChecked(False)
+        view.stardist_num_tiles_input.setText("4")
+        view.use_stardist_bead_centers_checkbox.setChecked(True)
+        view.area_multiplier_input.setText("2.2")
+        settings = view.get_stardist_settings()
+
+        assert settings["n_tiles"] == 4
+        assert settings["use_stardist_bead_centers"] is True
+        assert settings["area_multiplier"] == 2.2
+
+    def test_get_stardist_settings_area_multiplier_falls_back_on_invalid(self, qapp):
+        from view.decoding_workflow_panel import DecodingWorkflowPanel
+        from viewmodel.metadata_vm import MetadataVM
+
+        vm = MetadataVM()
+        view = DecodingWorkflowPanel(None, vm=vm)
+
+        view.area_multiplier_input.setText("-1")
+        settings = view.get_stardist_settings()
+        assert settings["area_multiplier"] == 1.8
 
     def test_remove_ensemble_button_emits_signal(self, qapp):
         from view.decoding_workflow_panel import DecodingWorkflowPanel

@@ -25,12 +25,18 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
         raise AssertionError("get_excel should not be used in use_stardist=True mode")
 
     def fake_beadfinding(
-        brightfield, num_tiles=10, px_overlap=100, workers=10, is_running_callback=None
+        brightfield,
+        num_tiles=10,
+        px_overlap=100,
+        workers=10,
+        area_multiplier=1.8,
+        is_running_callback=None,
     ):
         calls["beadfinding"] = {
             "num_tiles": num_tiles,
             "px_overlap": px_overlap,
             "workers": workers,
+            "area_multiplier": area_multiplier,
             "has_running_callback": is_running_callback is not None,
         }
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
@@ -172,6 +178,7 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
         signal_to_noise_cutoff=0.1,
         use_stardist=True,
         model_name="model_5_400epoch",
+        area_multiplier=2.4,
     )
 
     assert results is not None
@@ -196,6 +203,7 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
     assert calls["beadfinding"]["num_tiles"] == 10
     assert calls["beadfinding"]["px_overlap"] == 100
     assert calls["beadfinding"]["workers"] == 10
+    assert calls["beadfinding"]["area_multiplier"] == 2.4
     assert calls["beadfinding"]["has_running_callback"] is True
     assert calls["labels"]["prob_thresh"] == 0.1
     assert calls["labels"]["nms_thresh"] == 0.1
@@ -213,8 +221,14 @@ def test_process_beads_off_mode_delegates_to_legacy_get_excel(monkeypatch):
     post_df = pd.DataFrame({"x": [12.0], "y": [13.0], "cy0": [1], "cy1": [2]})
 
     def fake_beadfinding(
-        brightfield, num_tiles=10, px_overlap=100, workers=10, is_running_callback=None
+        brightfield,
+        num_tiles=10,
+        px_overlap=100,
+        workers=10,
+        area_multiplier=1.8,
+        is_running_callback=None,
     ):
+        calls["area_multiplier"] = area_multiplier
         return np.array([[12, 13]], dtype=np.uint16)
 
     def fake_get_excel(
@@ -250,10 +264,12 @@ def test_process_beads_off_mode_delegates_to_legacy_get_excel(monkeypatch):
         signal_to_noise_cutoff=0.1,
         use_stardist=False,
         model_name="model_5_400epoch",
+        area_multiplier=2.6,
     )
 
     assert results is not None
     assert calls["get_excel"]["use_stardist"] is False
+    assert calls["area_multiplier"] == 2.6
     assert results["beads"].equals(legacy_df)
     assert results["post_resolution_beads"].equals(post_df)
     assert set(results["cycles"].keys()) == {"cy0", "cy1"}
@@ -274,10 +290,16 @@ def test_process_beads_stardist_forwards_custom_ensemble_sweep(monkeypatch):
         progress_units_callback=None,
         stardist_use_guess_tiles=True,
         stardist_n_tiles=1,
+        use_stardist_bead_centers=False,
+        area_multiplier=1.8,
         ensemble_ratio_start=1.0,
         ensemble_ratio_end=1.5,
         ensemble_ratio_step=0.05,
     ):
+        calls["center_mode"] = {
+            "use_stardist_bead_centers": use_stardist_bead_centers,
+            "area_multiplier": area_multiplier,
+        }
         calls["sweep"] = {
             "start": ensemble_ratio_start,
             "end": ensemble_ratio_end,
@@ -310,13 +332,170 @@ def test_process_beads_stardist_forwards_custom_ensemble_sweep(monkeypatch):
         max_size=24,
         signal_to_noise_cutoff=0.1,
         use_stardist=True,
+        use_stardist_bead_centers=True,
+        area_multiplier=2.7,
         ensemble_ratio_start=1.2,
         ensemble_ratio_end=1.6,
         ensemble_ratio_step=0.1,
     )
 
     assert results is not None
+    assert calls["center_mode"] == {
+        "use_stardist_bead_centers": True,
+        "area_multiplier": 2.7,
+    }
     assert calls["sweep"] == {"start": 1.2, "end": 1.6, "step": 0.1}
+
+
+def test_process_beads_stardist_bead_centers_uses_stardist_detector(monkeypatch):
+    calls = {}
+    tifs = _build_tifs(max_size=40, channels=3, cycles=2)
+    brightfield = np.zeros((40, 40), dtype=np.uint16)
+
+    def fail_beadfinding(*args, **kwargs):
+        raise AssertionError("Legacy beadfinding should not run in center StarDist mode")
+
+    def fake_load_custom_model(model_dir):
+        return object()
+
+    def fake_detect_bead_centers_with_stardist(
+        brightfield,
+        model,
+        max_size,
+        n_tiles,
+        update_progress,
+        progress_units_callback=None,
+    ):
+        calls["detect"] = {"max_size": max_size, "n_tiles": n_tiles}
+        return np.array([[20, 20], [25, 25]], dtype=np.float32)
+
+    def fake_get_labels_from_cycles_with_prob(
+        cycles,
+        metadata_list,
+        max_size,
+        model,
+        block_size=700,
+        prob_thresh=0.1,
+        n_tiles=1,
+        nms_thresh=0.1,
+        progress_callback=None,
+    ):
+        out = []
+        for _ in cycles:
+            out.append(
+                [
+                    {
+                        "lbl": np.ones((40, 40), dtype=np.int32),
+                        "prob_lut": np.array([0.0, 0.8], dtype=np.float32),
+                    },
+                    {
+                        "lbl": np.ones((40, 40), dtype=np.int32),
+                        "prob_lut": np.array([0.0, 0.7], dtype=np.float32),
+                    },
+                ]
+            )
+        return out
+
+    def fake_assign(bead_df, cycle_labels, **kwargs):
+        out = bead_df.copy()
+        out["cy0_0"] = np.array([1, 0], dtype=np.int32)
+        out["cy0_1"] = np.array([0, 1], dtype=np.int32)
+        out["cy1_0"] = np.array([0, 1], dtype=np.int32)
+        out["cy1_1"] = np.array([1, 0], dtype=np.int32)
+        out["cy0_0_prob"] = np.array([0.9, 0.0], dtype=np.float32)
+        out["cy0_1_prob"] = np.array([0.0, 0.8], dtype=np.float32)
+        out["cy1_0_prob"] = np.array([0.0, 0.7], dtype=np.float32)
+        out["cy1_1_prob"] = np.array([0.85, 0.0], dtype=np.float32)
+        return out
+
+    def fake_enforce(df, **kwargs):
+        return df
+
+    def fake_resolve(df, num_cycles, num_layers, invalid_value=255):
+        return pd.DataFrame({"x": df["x"], "y": df["y"], "cy0": [0, 1], "cy1": [1, 0]})
+
+    def fake_compute_cache(
+        bead_df,
+        cycles,
+        metadata_list,
+        max_size,
+        min_assigned_value=0.1,
+        border_erosion=0,
+        progress_units_callback=None,
+    ):
+        return {"cached": True}
+
+    def fake_sweep_stats(
+        pre_ensemble_beads,
+        ensemble_cache,
+        start,
+        end,
+        step,
+        progress_units_callback=None,
+    ):
+        return pd.DataFrame(
+            [
+                {
+                    "ratio": 1.0,
+                    "valid_pct": 20.0,
+                    "invalid_pct": 10.0,
+                    "filtered_pct": 70.0,
+                }
+            ]
+        )
+
+    def fake_build_ensembled(pre_ensemble_beads, ensemble_cache, ratio):
+        return pd.DataFrame(
+            {
+                "x": pre_ensemble_beads["x"],
+                "y": pre_ensemble_beads["y"],
+                "cy0": [3, 4],
+                "cy1": [5, 6],
+            }
+        )
+
+    monkeypatch.setattr(image_processing, "beadfinding", fail_beadfinding)
+    monkeypatch.setattr(image_processing, "load_custom_model", fake_load_custom_model)
+    monkeypatch.setattr(
+        image_processing,
+        "_detect_bead_centers_with_stardist",
+        fake_detect_bead_centers_with_stardist,
+    )
+    monkeypatch.setattr(
+        image_processing,
+        "get_labels_from_cycles_with_prob",
+        fake_get_labels_from_cycles_with_prob,
+    )
+    monkeypatch.setattr(
+        image_processing, "assign_beads_labels_with_prob_patch3x3_fallback", fake_assign
+    )
+    monkeypatch.setattr(
+        image_processing, "enforce_single_layer_per_cycle", fake_enforce
+    )
+    monkeypatch.setattr(image_processing, "resolve_layers_to_cycles", fake_resolve)
+    monkeypatch.setattr(
+        image_processing, "_compute_voronoi_ensemble_cache", fake_compute_cache
+    )
+    monkeypatch.setattr(
+        image_processing, "compute_ensemble_sweep_stats", fake_sweep_stats
+    )
+    monkeypatch.setattr(
+        image_processing, "build_ensembled_beads_from_cache", fake_build_ensembled
+    )
+
+    results = image_processing.process_beads(
+        brightfield=brightfield,
+        tifs=tifs,
+        max_size=40,
+        signal_to_noise_cutoff=0.1,
+        use_stardist=True,
+        stardist_use_guess_tiles=True,
+        stardist_n_tiles=5,
+        use_stardist_bead_centers=True,
+    )
+
+    assert results is not None
+    assert calls["detect"] == {"max_size": 40, "n_tiles": 0}
 
 
 def test_process_beads_stardist_forwards_progress_units_callback(monkeypatch):
@@ -325,7 +504,12 @@ def test_process_beads_stardist_forwards_progress_units_callback(monkeypatch):
     brightfield = np.zeros((50, 50), dtype=np.uint16)
 
     def fake_beadfinding(
-        brightfield, num_tiles=10, px_overlap=100, workers=10, is_running_callback=None
+        brightfield,
+        num_tiles=10,
+        px_overlap=100,
+        workers=10,
+        area_multiplier=1.8,
+        is_running_callback=None,
     ):
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
@@ -479,7 +663,12 @@ def test_process_beads_stardist_uses_stricter_prob_thresh_for_large_images(monke
     brightfield = np.zeros((64, 64), dtype=np.uint16)
 
     def fake_beadfinding(
-        brightfield, num_tiles=10, px_overlap=100, workers=10, is_running_callback=None
+        brightfield,
+        num_tiles=10,
+        px_overlap=100,
+        workers=10,
+        area_multiplier=1.8,
+        is_running_callback=None,
     ):
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
@@ -623,6 +812,7 @@ def test_process_beads_legacy_forwards_progress_units_callback(monkeypatch):
         num_tiles=10,
         px_overlap=100,
         workers=10,
+        area_multiplier=1.8,
         is_running_callback=None,
     ):
         return np.array([[12, 13]], dtype=np.uint16)
