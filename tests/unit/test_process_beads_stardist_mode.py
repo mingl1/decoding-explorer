@@ -30,6 +30,7 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
         block_size=700,
         n_tiles=1,
         progress_units_callback=None,
+        progress_callback=None,
     ):
         calls["beadfinding"] = {
             "scale": scale,
@@ -51,6 +52,7 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
         prob_thresh=0.1,
         n_tiles=1,
         nms_thresh=0.1,
+        progress_callback=None,
     ):
         calls["labels"] = {
             "max_size": max_size,
@@ -335,6 +337,7 @@ def test_process_beads_stardist_forwards_progress_units_callback(monkeypatch):
         block_size=700,
         n_tiles=1,
         progress_units_callback=None,
+        progress_callback=None,
     ):
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
@@ -351,6 +354,7 @@ def test_process_beads_stardist_forwards_progress_units_callback(monkeypatch):
         n_tiles=1,
         nms_thresh=0.1,
         progress_units_callback=None,
+        progress_callback=None,
     ):
         if progress_units_callback:
             progress_units_callback("activation_regions", 1, 4)
@@ -483,6 +487,153 @@ def test_process_beads_stardist_forwards_progress_units_callback(monkeypatch):
     assert ("activation_regions", 4, 4) in calls["progress_units"]
     assert ("voronoi_cache", 3, 3) in calls["progress_units"]
     assert ("voronoi_sweep", 2, 2) in calls["progress_units"]
+
+
+def test_process_beads_stardist_uses_stricter_prob_thresh_for_large_images(monkeypatch):
+    calls = {}
+    tifs = _build_tifs(max_size=64, channels=3, cycles=2)
+    brightfield = np.zeros((64, 64), dtype=np.uint16)
+
+    def fake_beadfinding_notebook_stardist(
+        brightfield,
+        scale=1.0,
+        block_size=700,
+        n_tiles=1,
+        progress_units_callback=None,
+        progress_callback=None,
+    ):
+        return np.array([[20, 20], [30, 30]], dtype=np.float32)
+
+    def fake_load_custom_model(model_dir):
+        return object()
+
+    def fake_get_labels_from_cycles_with_prob(
+        cycles,
+        metadata_list,
+        max_size,
+        model,
+        block_size=700,
+        prob_thresh=0.1,
+        n_tiles=1,
+        nms_thresh=0.1,
+        progress_units_callback=None,
+        progress_callback=None,
+    ):
+        calls["labels"] = {"prob_thresh": prob_thresh, "block_size": block_size}
+        out = []
+        for _ in cycles:
+            out.append(
+                [
+                    {
+                        "lbl": np.ones((64, 64), dtype=np.int32),
+                        "prob_lut": np.array([0.0, 0.8], dtype=np.float32),
+                    },
+                    {
+                        "lbl": np.ones((64, 64), dtype=np.int32),
+                        "prob_lut": np.array([0.0, 0.7], dtype=np.float32),
+                    },
+                ]
+            )
+        return out
+
+    def fake_assign(bead_df, cycle_labels, **kwargs):
+        out = bead_df.copy()
+        out["cy0_0"] = np.array([1, 0], dtype=np.int32)
+        out["cy0_1"] = np.array([0, 1], dtype=np.int32)
+        out["cy1_0"] = np.array([0, 1], dtype=np.int32)
+        out["cy1_1"] = np.array([1, 0], dtype=np.int32)
+        out["cy0_0_prob"] = np.array([0.9, 0.0], dtype=np.float32)
+        out["cy0_1_prob"] = np.array([0.0, 0.8], dtype=np.float32)
+        out["cy1_0_prob"] = np.array([0.0, 0.7], dtype=np.float32)
+        out["cy1_1_prob"] = np.array([0.85, 0.0], dtype=np.float32)
+        return out
+
+    def fake_enforce(df, **kwargs):
+        return df
+
+    def fake_resolve(df, num_cycles, num_layers, invalid_value=255):
+        return pd.DataFrame({"x": df["x"], "y": df["y"], "cy0": [0, 1], "cy1": [1, 0]})
+
+    def fake_compute_cache(
+        bead_df,
+        cycles,
+        metadata_list,
+        max_size,
+        min_assigned_value=0.1,
+        border_erosion=0,
+        progress_units_callback=None,
+    ):
+        return {"cached": True}
+
+    def fake_sweep_stats(
+        pre_ensemble_beads,
+        ensemble_cache,
+        start,
+        end,
+        step,
+        progress_units_callback=None,
+    ):
+        return pd.DataFrame(
+            [
+                {
+                    "ratio": 1.0,
+                    "valid_pct": 20.0,
+                    "invalid_pct": 10.0,
+                    "filtered_pct": 70.0,
+                }
+            ]
+        )
+
+    def fake_build_ensembled(pre_ensemble_beads, ensemble_cache, ratio):
+        return pd.DataFrame(
+            {
+                "x": pre_ensemble_beads["x"],
+                "y": pre_ensemble_beads["y"],
+                "cy0": [3, 4],
+                "cy1": [5, 6],
+            }
+        )
+
+    monkeypatch.setattr(
+        image_processing,
+        "beadfinding_notebook_stardist",
+        fake_beadfinding_notebook_stardist,
+    )
+    monkeypatch.setattr(image_processing, "load_custom_model", fake_load_custom_model)
+    monkeypatch.setattr(
+        image_processing,
+        "get_labels_from_cycles_with_prob",
+        fake_get_labels_from_cycles_with_prob,
+    )
+    monkeypatch.setattr(
+        image_processing, "assign_beads_labels_with_prob_patch3x3_fallback", fake_assign
+    )
+    monkeypatch.setattr(
+        image_processing, "enforce_single_layer_per_cycle", fake_enforce
+    )
+    monkeypatch.setattr(image_processing, "resolve_layers_to_cycles", fake_resolve)
+    monkeypatch.setattr(
+        image_processing, "_compute_voronoi_ensemble_cache", fake_compute_cache
+    )
+    monkeypatch.setattr(
+        image_processing, "compute_ensemble_sweep_stats", fake_sweep_stats
+    )
+    monkeypatch.setattr(
+        image_processing, "build_ensembled_beads_from_cache", fake_build_ensembled
+    )
+
+    results = image_processing.process_beads(
+        brightfield=brightfield,
+        tifs=tifs,
+        max_size=5000,
+        signal_to_noise_cutoff=0.1,
+        use_stardist=True,
+        model_name="model_5_400epoch",
+    )
+
+    assert results is not None
+    assert calls["labels"]["prob_thresh"] == 0.25
+    assert calls["labels"]["block_size"] == 2000
 
 
 def test_process_beads_legacy_forwards_progress_units_callback(monkeypatch):

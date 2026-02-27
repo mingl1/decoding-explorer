@@ -265,8 +265,6 @@ def beadfinding(
 
     #     return mask[src_slice], dest_slice
 
-    # # Note: If quadtree_threshold is CPU-bound Python code, ProcessPoolExecutor
-    # # might be faster. ThreadPoolExecutor is ideal if it releases the GIL.
     # with ThreadPoolExecutor(max_workers=workers) as executor:
     #     futures = [executor.submit(process_tile, tb) for tb in tileset]
     #     progress_bar = tqdm(
@@ -1240,6 +1238,8 @@ def _predict_instances_with_generator(
     progress_stage=None,
     progress_done_offset=0,
     progress_total_units=None,
+    progress_message_callback=None,
+    nms_message=None,
 ):
     resolved_tiles = _resolve_stardist_n_tiles(model, img, n_tiles)
     expected_tiles = _count_total_tiles(resolved_tiles)
@@ -1266,6 +1266,10 @@ def _predict_instances_with_generator(
                         total_units = progress_done_offset + expected_tiles
                     total_units = max(int(total_units), done_total)
                     progress_units_callback(progress_stage, done_total, total_units)
+                continue
+            if output == "nms":
+                if progress_message_callback and nms_message:
+                    progress_message_callback(nms_message)
                 continue
             if output in {"predict", "nms"}:
                 continue
@@ -1336,9 +1340,10 @@ def beadfinding_notebook_stardist(
     block_size=700,
     n_tiles=1,
     progress_units_callback=None,
+    progress_callback=None,
 ):
     model = StarDist2D.from_pretrained("2D_versatile_fluo")
-    normalized = normalize(brightfield.astype(np.float32), 1, 75)
+    normalized = normalize(brightfield.astype(np.float32), 1, 99)
     label_image, _, _, _ = _predict_instances_with_generator(
         model=model,
         img=normalized,
@@ -1346,6 +1351,8 @@ def beadfinding_notebook_stardist(
         scale=scale,
         progress_units_callback=progress_units_callback,
         progress_stage="initial_detection",
+        progress_message_callback=progress_callback,
+        nms_message="Initial bead detection... Running NMS",
     )
     num_labels = int(label_image.max())
     if num_labels == 0:
@@ -1802,7 +1809,9 @@ def get_labels_from_cycles_with_prob(
     n_tiles=1,
     nms_thresh=0.1,
     progress_units_callback=None,
+    progress_callback=None,
 ):
+    base_prob_thresh = float(prob_thresh)
     cycle_labels = []
     tile_plan: list[list[Tuple[int, ...]]] = []
     total_units = 0
@@ -1828,17 +1837,42 @@ def get_labels_from_cycles_with_prob(
             img = cycle[layer_idx].astype(np.float32)[:max_size, :max_size]
             img = (img - img.min()) / (img.max() - img.min() + 1e-8)
             img = normalize(img, 1, 99.8)
-            lbl, det, completed_tiles, _ = _predict_instances_with_generator(
-                model=model,
-                img=img,
-                prob_thresh=prob_thresh,
-                nms_thresh=nms_thresh,
-                n_tiles=tile_plan[i][layer_pos],
-                progress_units_callback=progress_units_callback,
-                progress_stage="activation_regions",
-                progress_done_offset=done_units,
-                progress_total_units=total_units,
-            )
+            effective_prob_thresh = base_prob_thresh
+            try:
+                lbl, det, completed_tiles, _ = _predict_instances_with_generator(
+                    model=model,
+                    img=img,
+                    prob_thresh=effective_prob_thresh,
+                    nms_thresh=nms_thresh,
+                    n_tiles=tile_plan[i][layer_pos],
+                    progress_units_callback=progress_units_callback,
+                    progress_stage="activation_regions",
+                    progress_done_offset=done_units,
+                    progress_total_units=total_units,
+                    progress_message_callback=progress_callback,
+                    nms_message="Getting activation regions from cycles - Running NMS",
+                )
+            except MemoryError:
+                retry_prob_thresh = max(effective_prob_thresh, 0.4)
+                if retry_prob_thresh <= effective_prob_thresh:
+                    raise
+                if progress_callback:
+                    progress_callback(
+                        "Activation NMS memory pressure; retrying with stricter threshold"
+                    )
+                lbl, det, completed_tiles, _ = _predict_instances_with_generator(
+                    model=model,
+                    img=img,
+                    prob_thresh=retry_prob_thresh,
+                    nms_thresh=nms_thresh,
+                    n_tiles=tile_plan[i][layer_pos],
+                    progress_units_callback=progress_units_callback,
+                    progress_stage="activation_regions",
+                    progress_done_offset=done_units,
+                    progress_total_units=total_units,
+                    progress_message_callback=progress_callback,
+                    nms_message="Getting activation regions from cycles - Running NMS",
+                )
             if not isinstance(det, dict):
                 raise RuntimeError(
                     "Unexpected StarDist details payload. "
@@ -2417,7 +2451,7 @@ def _process_beads_notebook_stardist(
     ensemble_ratio_step=DEFAULT_ENSEMBLE_RATIO_STEP,
 ):
     bead_detection_scale = 2
-    stardist_prob_thresh = 0.1
+    stardist_prob_thresh = 0.15
     stardist_nms_thresh = 0.1
     if stardist_use_guess_tiles:
         stardist_n_tiles_value = 0
@@ -2425,6 +2459,8 @@ def _process_beads_notebook_stardist(
         stardist_n_tiles_value = max(int(stardist_n_tiles), 1)
     stardist_block_size = 700 if max_size <= 2000 else 2000
     bead_detection_block_size = 700 if max_size <= 2000 else 2000
+    initial_detection_progress_message = lambda msg: update_progress(10, msg)
+    activation_regions_progress_message = lambda msg: update_progress(30, msg)
 
     update_progress(10, "Initial bead detection...")
     bf = brightfield[:max_size, :max_size]
@@ -2434,6 +2470,7 @@ def _process_beads_notebook_stardist(
         block_size=bead_detection_block_size,
         n_tiles=stardist_n_tiles_value,
         progress_units_callback=progress_units_callback,
+        progress_callback=initial_detection_progress_message,
     )
     beads = np.unique(beads, axis=0)
     bead_df = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
@@ -2461,6 +2498,7 @@ def _process_beads_notebook_stardist(
     }
     if progress_units_callback:
         cycle_labels_kwargs["progress_units_callback"] = progress_units_callback
+    cycle_labels_kwargs["progress_callback"] = activation_regions_progress_message
     cycle_labels = get_labels_from_cycles_with_prob(
         tif_images,
         tif_metadata,

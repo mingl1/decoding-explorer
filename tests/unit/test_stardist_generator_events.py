@@ -43,6 +43,25 @@ def test_predict_instances_generator_parser_emits_tile_progress():
     assert events[-1] == ("activation_regions", 4, 4)
 
 
+def test_predict_instances_generator_parser_emits_nms_message():
+    labels = np.array([[0, 1], [1, 2]], dtype=np.int32)
+    details = {"prob": np.array([0.9, 0.7], dtype=np.float32)}
+    model = FakeStarDistModel(
+        [["predict", "tile", "tile", "nms", (labels, details)]]
+    )
+    messages = []
+
+    image_processing._predict_instances_with_generator(
+        model=model,
+        img=np.zeros((8, 8), dtype=np.float32),
+        n_tiles=2,
+        progress_message_callback=messages.append,
+        nms_message="Running NMS",
+    )
+
+    assert messages == ["Running NMS"]
+
+
 def test_get_labels_from_cycles_with_prob_extracts_probabilities():
     lbl1 = np.array([[0, 1], [2, 0]], dtype=np.int32)
     lbl2 = np.array([[0, 1], [1, 0]], dtype=np.int32)

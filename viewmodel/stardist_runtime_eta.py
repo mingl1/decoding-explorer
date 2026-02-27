@@ -30,6 +30,10 @@ STAGE_PROGRESS_BOUNDS = {
     "finalize": (95, 99),
 }
 
+STAGES_WAIT_FOR_FIRST_UNIT = {
+    "initial_detection",
+}
+
 DEFAULT_STAGE_SECONDS = {
     "load_images": 3.0,
     "preprocess": 0.4,
@@ -298,6 +302,8 @@ class StarDistRuntimeEtaTracker:
     def _compute_stage_fraction_unlocked(self, stage: str, now: float) -> float:
         done = self._current_stage_units_done
         total = self._current_stage_units_total
+        if stage in STAGES_WAIT_FOR_FIRST_UNIT and (done is None or done <= 0):
+            return 0.0
         if done is not None and total is not None and total > 0:
             return min(max(done / total, 0.0), 1.0)
         started_at = self._current_stage_started_at
