@@ -32,6 +32,33 @@ def test_compute_bead_profile_metrics_uses_bead_level_counts():
     assert metrics["filtered_pct"] == 25.0
 
 
+def test_compute_bead_profile_metrics_prints_invalid_cycle_combinations(capsys):
+    bead_df = pd.DataFrame(
+        {
+            "x": [1.0, 2.0, 3.0],
+            "y": [1.0, 2.0, 3.0],
+            "cy0": [1, 9, 8],
+            "cy1": [2, 9, 8],
+        }
+    )
+    protein_df = pd.DataFrame(
+        {
+            "Protein name": ["A"],
+            "cy0": [1],
+            "cy1": [2],
+        }
+    )
+
+    compute_bead_profile_metrics(bead_df, protein_df)
+    captured = capsys.readouterr().out
+
+    assert "Invalid cycle combinations:" in captured
+    assert "cy0" in captured
+    assert "cy1" in captured
+    assert "9" in captured
+    assert "8" in captured
+
+
 def test_compute_bead_profile_metrics_filtered_not_inflated_by_profile_duplicates():
     bead_df = pd.DataFrame(
         {

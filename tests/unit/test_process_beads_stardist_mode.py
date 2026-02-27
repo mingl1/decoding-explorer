@@ -24,18 +24,14 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
     def fail_get_excel(*args, **kwargs):
         raise AssertionError("get_excel should not be used in use_stardist=True mode")
 
-    def fake_beadfinding_notebook_stardist(
-        brightfield,
-        scale=1.0,
-        block_size=700,
-        n_tiles=1,
-        progress_units_callback=None,
-        progress_callback=None,
+    def fake_beadfinding(
+        brightfield, num_tiles=10, px_overlap=100, workers=10, is_running_callback=None
     ):
         calls["beadfinding"] = {
-            "scale": scale,
-            "block_size": block_size,
-            "n_tiles": n_tiles,
+            "num_tiles": num_tiles,
+            "px_overlap": px_overlap,
+            "workers": workers,
+            "has_running_callback": is_running_callback is not None,
         }
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
@@ -145,11 +141,7 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
         )
 
     monkeypatch.setattr(image_processing, "get_excel", fail_get_excel)
-    monkeypatch.setattr(
-        image_processing,
-        "beadfinding_notebook_stardist",
-        fake_beadfinding_notebook_stardist,
-    )
+    monkeypatch.setattr(image_processing, "beadfinding", fake_beadfinding)
     monkeypatch.setattr(image_processing, "load_custom_model", fake_load_custom_model)
     monkeypatch.setattr(
         image_processing,
@@ -201,9 +193,10 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
     assert calls["sweep"] == {"start": 1.0, "end": 1.5, "step": 0.05}
     assert calls["applied_ratio"] == 1.0
     assert set(results["cycles"].keys()) == {"cy0", "cy1"}
-    assert calls["beadfinding"]["scale"] == 2
-    assert calls["beadfinding"]["block_size"] == 700
-    assert calls["beadfinding"]["n_tiles"] == 0
+    assert calls["beadfinding"]["num_tiles"] == 10
+    assert calls["beadfinding"]["px_overlap"] == 100
+    assert calls["beadfinding"]["workers"] == 10
+    assert calls["beadfinding"]["has_running_callback"] is True
     assert calls["labels"]["prob_thresh"] == 0.1
     assert calls["labels"]["nms_thresh"] == 0.1
     assert calls["labels"]["n_tiles"] == 0
@@ -331,13 +324,8 @@ def test_process_beads_stardist_forwards_progress_units_callback(monkeypatch):
     tifs = _build_tifs(max_size=50, channels=3, cycles=2)
     brightfield = np.zeros((50, 50), dtype=np.uint16)
 
-    def fake_beadfinding_notebook_stardist(
-        brightfield,
-        scale=1.0,
-        block_size=700,
-        n_tiles=1,
-        progress_units_callback=None,
-        progress_callback=None,
+    def fake_beadfinding(
+        brightfield, num_tiles=10, px_overlap=100, workers=10, is_running_callback=None
     ):
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
@@ -442,11 +430,7 @@ def test_process_beads_stardist_forwards_progress_units_callback(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(
-        image_processing,
-        "beadfinding_notebook_stardist",
-        fake_beadfinding_notebook_stardist,
-    )
+    monkeypatch.setattr(image_processing, "beadfinding", fake_beadfinding)
     monkeypatch.setattr(image_processing, "load_custom_model", fake_load_custom_model)
     monkeypatch.setattr(
         image_processing,
@@ -494,13 +478,8 @@ def test_process_beads_stardist_uses_stricter_prob_thresh_for_large_images(monke
     tifs = _build_tifs(max_size=64, channels=3, cycles=2)
     brightfield = np.zeros((64, 64), dtype=np.uint16)
 
-    def fake_beadfinding_notebook_stardist(
-        brightfield,
-        scale=1.0,
-        block_size=700,
-        n_tiles=1,
-        progress_units_callback=None,
-        progress_callback=None,
+    def fake_beadfinding(
+        brightfield, num_tiles=10, px_overlap=100, workers=10, is_running_callback=None
     ):
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
@@ -594,11 +573,7 @@ def test_process_beads_stardist_uses_stricter_prob_thresh_for_large_images(monke
             }
         )
 
-    monkeypatch.setattr(
-        image_processing,
-        "beadfinding_notebook_stardist",
-        fake_beadfinding_notebook_stardist,
-    )
+    monkeypatch.setattr(image_processing, "beadfinding", fake_beadfinding)
     monkeypatch.setattr(image_processing, "load_custom_model", fake_load_custom_model)
     monkeypatch.setattr(
         image_processing,

@@ -56,7 +56,7 @@ class TestMetadataVM:
         assert result["use_status_as_prefix"] == True
 
     def test_set_protein_files_reads_utf16_csv(
-        self, mock_metadata_vm, signal_recorder, tmp_path
+        self, mock_metadata_vm, signal_recorder, tmp_path, capsys
     ):
         vm = mock_metadata_vm
         signal_recorder.connect(vm.update_overview_sig)
@@ -65,11 +65,14 @@ class TestMetadataVM:
         source_df.to_csv(protein_path, index=False, encoding="utf-16")
 
         vm.set_protein_files([str(protein_path)])
+        captured = capsys.readouterr().out
 
         assert signal_recorder.get_call_count() == 1
         assert list(vm.protein_df.columns) == ["Protein name", "cy0"]
         assert vm.protein_df.iloc[0]["Protein name"] == "A"
         assert vm.protein_df.iloc[0]["cy0"] == 1
+        assert "Uploaded protein dataframe:" in captured
+        assert "Protein name" in captured
 
     def test_set_protein_files_reads_utf16le_csv_without_bom(
         self, mock_metadata_vm, signal_recorder, tmp_path
@@ -100,3 +103,31 @@ class TestMetadataVM:
         assert signal_recorder.get_call_count() == 1
         args, kwargs = signal_recorder.get_last_args()
         assert "Failed to load protein key files" in args[0]
+
+    def test_set_protein_files_normalizes_misaligned_name_column(
+        self, mock_metadata_vm, signal_recorder, tmp_path
+    ):
+        vm = mock_metadata_vm
+        signal_recorder.connect(vm.update_overview_sig)
+
+        first_df = pd.DataFrame(
+            {"Protein name": ["Seq 16-55"], "Cycle 1": [3], "Cycle 2": [3]}
+        )
+        second_df = pd.DataFrame(
+            {"Cycle 1": [3], "Cycle 2": [1], "Protein name ": ["Yap-1"]}
+        )
+
+        first_path = tmp_path / "protein_a.csv"
+        second_path = tmp_path / "protein_b.csv"
+        first_df.to_csv(first_path, index=False)
+        second_df.to_csv(second_path, index=False)
+
+        vm.set_protein_files([str(first_path), str(second_path)])
+
+        assert signal_recorder.get_call_count() == 1
+        assert list(vm.protein_df.columns) == ["Protein name", "cy0", "cy1"]
+        assert "cy2" not in vm.protein_df.columns
+
+        row = vm.protein_df[vm.protein_df["Protein name"] == "Yap-1"].iloc[0]
+        assert row["cy0"] == 3
+        assert row["cy1"] == 1

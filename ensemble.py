@@ -45,6 +45,7 @@ def compute_bead_profile_metrics(bead_df: pd.DataFrame, protein_df: pd.DataFrame
         }
 
     if len(cycle_cols) == 0:
+        bead_cycles = pd.DataFrame(index=bead_df.index, columns=cycle_cols)
         filtered_mask = np.zeros(total, dtype=bool)
         known_combo_mask = np.zeros(total, dtype=bool)
         unique_cycle_combos = 0
@@ -66,6 +67,15 @@ def compute_bead_profile_metrics(bead_df: pd.DataFrame, protein_df: pd.DataFrame
     valid = int(valid_mask.sum())
     invalid = int(invalid_mask.sum())
     filtered = int(filtered_mask.sum())
+
+    if invalid > 0 and len(cycle_cols) > 0:
+        invalid_cycle_combos = (
+            bead_cycles.loc[invalid_mask, cycle_cols]
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
+        print("Invalid cycle combinations:")
+        print(invalid_cycle_combos.to_string(index=False))
 
     invalid_pct_formula = 0.0
     if valid > 0 and unique_cycle_combos > 0:

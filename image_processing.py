@@ -3,6 +3,7 @@ import numbers
 import os
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Tuple
 
@@ -15,10 +16,11 @@ from scipy import ndimage
 from scipy import ndimage as ndi
 from skimage import filters, img_as_float, img_as_uint, measure
 from skimage.exposure import match_histograms
+from skimage.feature import peak_local_max
 from skimage.filters import threshold_otsu
 from skimage.measure import label, regionprops
 from skimage.morphology import closing, square
-from skimage.segmentation import clear_border
+from skimage.segmentation import clear_border, watershed
 from sklearn.cluster import KMeans
 from tqdm import tqdm
 
@@ -231,77 +233,103 @@ def beadfinding(
     # The brightfield image is already in memory, so saving and reloading it
     # from a temporary file is unnecessary overhead.
 
-    # tileset = TileMap("tm", brightfield, px_overlap, num_tiles)
-    # stitched_mask = np.zeros_like(brightfield, dtype=bool)
-    # img_h, img_w = brightfield.shape
+    tileset = TileMap("tm", brightfield, px_overlap, num_tiles)
+    stitched_mask = np.zeros_like(brightfield, dtype=bool)
+    img_h, img_w = brightfield.shape
 
-    # def process_tile(tile_and_bounds):
-    #     if is_running_callback and not is_running_callback():
-    #         return None
+    def process_tile(tile_and_bounds):
+        if is_running_callback and not is_running_callback():
+            return None
 
-    #     tile, bounds = tile_and_bounds
-    #     mask = quadtree_threshold(tile)
+        tile, bounds = tile_and_bounds
+        mask = quadtree_threshold(tile)
 
-    #     # Simplified logic to calculate the destination slice in the full image
-    #     center_x, center_y = bounds["center"]
-    #     tile_radius = tileset.tile_size + px_overlap
+        # Simplified logic to calculate the destination slice in the full image
+        center_x, center_y = bounds["center"]
+        tile_radius = tileset.tile_size + px_overlap
 
-    #     ymin_global = int(round(center_y - tile_radius))
-    #     ymax_global = int(round(center_y + tile_radius))
-    #     xmin_global = int(round(center_x - tile_radius))
-    #     xmax_global = int(round(center_x + tile_radius))
+        ymin_global = int(round(center_y - tile_radius))
+        ymax_global = int(round(center_y + tile_radius))
+        xmin_global = int(round(center_x - tile_radius))
+        xmax_global = int(round(center_x + tile_radius))
 
-    #     # Define the destination slice in the main stitched_mask
-    #     dest_slice = (
-    #         slice(max(0, ymin_global), min(img_h, ymax_global)),
-    #         slice(max(0, xmin_global), min(img_w, xmax_global)),
-    #     )
+        # Define the destination slice in the main stitched_mask
+        dest_slice = (
+            slice(max(0, ymin_global), min(img_h, ymax_global)),
+            slice(max(0, xmin_global), min(img_w, xmax_global)),
+        )
 
-    #     # Define the source slice from the generated mask to account for edges
-    #     src_slice = (
-    #         slice(max(0, -ymin_global), mask.shape[0] - max(0, ymax_global - img_h)),
-    #         slice(max(0, -xmin_global), mask.shape[1] - max(0, xmax_global - img_w)),
-    #     )
+        # Define the source slice from the generated mask to account for edges
+        src_slice = (
+            slice(max(0, -ymin_global), mask.shape[0] - max(0, ymax_global - img_h)),
+            slice(max(0, -xmin_global), mask.shape[1] - max(0, xmax_global - img_w)),
+        )
 
-    #     return mask[src_slice], dest_slice
+        return mask[src_slice], dest_slice
 
-    # with ThreadPoolExecutor(max_workers=workers) as executor:
-    #     futures = [executor.submit(process_tile, tb) for tb in tileset]
-    #     progress_bar = tqdm(
-    #         as_completed(futures), total=len(futures), desc="Processing tiles"
-    #     )
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(process_tile, tb) for tb in tileset]
+        progress_bar = tqdm(
+            as_completed(futures), total=len(futures), desc="Processing tiles"
+        )
 
-    #     for future in progress_bar:
-    #         if is_running_callback and not is_running_callback():
-    #             executor.shutdown(wait=False, cancel_futures=True)
-    #             return None, None  # Indicate cancellation
+        for future in progress_bar:
+            if is_running_callback and not is_running_callback():
+                executor.shutdown(wait=False, cancel_futures=True)
+                return None, None  # Indicate cancellation
 
-    #         result = future.result()
-    #         if result:
-    #             mask_chunk, dest_slice = result
-    #             stitched_mask[dest_slice] |= mask_chunk
+            result = future.result()
+            if result:
+                mask_chunk, dest_slice = result
+                stitched_mask[dest_slice] |= mask_chunk
 
     # # --- 2. Correct Morphological Operations ---
     # # Morphological operations should run on boolean masks, not intensity images.
-    # closed_mask = closing(stitched_mask, square(1))
-    # cleared_mask = clear_border(closed_mask)
-    # label_image, num_labels = label(cleared_mask, return_num=True)
-    model = StarDist2D.from_pretrained("2D_versatile_fluo")
-
-    label_image = stardist_segmentation(
-        brightfield,
-        model,
-        1,
-        99,
-        1500,
-        scale=2,
-    )
-    num_labels = label_image.max()
+    closed_mask = closing(stitched_mask, square(1))
+    cleared_mask = clear_border(closed_mask)
+    label_image, num_labels = label(cleared_mask, return_num=True)
     if num_labels == 0:
-        print("No beads found after filtering.")
-        return np.array([]), np.zeros_like(brightfield, dtype=int)
+        return np.empty((0, 2), dtype=np.uint16)
+    component_areas = np.bincount(
+        label_image.ravel(), minlength=int(num_labels) + 1
+    )[1:]
+    split_result = _split_large_components(
+        label_image=label_image,
+        areas=component_areas,
+        is_running_callback=is_running_callback,
+        return_stats=True,
+    )
+    if split_result is None:
+        return None, None
+    split_labels, split_stats = split_result
+    print(
+        "Large-component split diagnostics: "
+        f"median_area={split_stats['median_area']:.2f}, "
+        f"threshold={split_stats['large_area_threshold']:.2f}, "
+        f"before={split_stats['labels_before']}, "
+        f"too_big={split_stats['large_components']}, "
+        f"split={split_stats['split_components']}, "
+        f"after={split_stats['labels_after']}, "
+        f"delta={split_stats['added_labels']}"
+    )
+    label_image = split_labels
+    num_labels = int(label_image.max())
+    # model = StarDist2D.from_pretrained("2D_versatile_fluo")
 
-    print(f"Found {num_labels} potential beads after labeling.")
+    # label_image = stardist_segmentation(
+    #     brightfield,
+    #     model,
+    #     1,
+    #     99,
+    #     1500,
+    #     scale=2,
+    # )
+    # num_labels = label_image.max()
+    # if num_labels == 0:
+    #     print("No beads found after filtering.")
+    #     return np.array([]), np.zeros_like(brightfield, dtype=int)
+
+    # print(f"Found {num_labels} potential beads after labeling.")
 
     # --- 3. Vectorized Centroid Calculation ---
     # Create an intensity image where non-bead areas are zero
@@ -309,7 +337,7 @@ def beadfinding(
 
     # Calculate all weighted centroids in a single, highly optimized operation.
     # This is orders of magnitude faster than looping through regionprops.
-    indices = np.arange(1, num_labels + 1)
+    indices = np.arange(1, int(num_labels) + 1)
     centers_yx = ndimage.center_of_mass(brightfield, label_image, indices)
 
     # Convert list of (y, x) tuples to a NumPy array of [x, y] coordinates
@@ -330,6 +358,104 @@ def beadfinding(
 
     # in addition, new method centroids are more centered than before
     # think before they were skewed top left due to always rounding down
+
+
+def _sampled_median(values: np.ndarray, sample_size: int = 200000) -> float:
+    if values.size == 0:
+        return 0.0
+    positive = values[values > 0]
+    if positive.size == 0:
+        return 0.0
+    if positive.size > sample_size:
+        idx = np.linspace(0, positive.size - 1, num=sample_size, dtype=np.int64)
+        sampled = positive[idx]
+    else:
+        sampled = positive
+    return float(np.median(sampled))
+
+
+def _split_large_components(
+    label_image: np.ndarray,
+    areas: np.ndarray,
+    area_multiplier: float = 1.8,
+    min_distance: int = 3,
+    peak_rel_height: float = 0.35,
+    is_running_callback=None,
+    return_stats: bool = False,
+) -> np.ndarray | tuple[np.ndarray, dict] | None:
+    median_area = _sampled_median(areas)
+    labels_before = int(label_image.max())
+    stats = {
+        "labels_before": labels_before,
+        "labels_after": labels_before,
+        "median_area": float(median_area),
+        "large_area_threshold": 0.0,
+        "large_components": 0,
+        "split_components": 0,
+        "added_labels": 0,
+    }
+    if median_area <= 0:
+        return (label_image, stats) if return_stats else label_image
+    large_area_threshold = max(median_area * float(area_multiplier), 9.0)
+    stats["large_area_threshold"] = float(large_area_threshold)
+    large_labels = np.flatnonzero(areas >= large_area_threshold) + 1
+    stats["large_components"] = int(large_labels.size)
+    if large_labels.size == 0:
+        return (label_image, stats) if return_stats else label_image
+    split_labels = label_image.copy()
+    object_slices = ndimage.find_objects(label_image)
+    current_max = int(split_labels.max())
+    split_components = 0
+    for label_id in large_labels:
+        if is_running_callback and not is_running_callback():
+            return None
+        slc = object_slices[int(label_id) - 1]
+        if slc is None:
+            continue
+        local = split_labels[slc]
+        component_mask = local == label_id
+        if not np.any(component_mask):
+            continue
+        distance = ndi.distance_transform_edt(component_mask)
+        distance_max = float(distance.max())
+        if distance_max < 1.0:
+            continue
+        threshold_abs = max(1.0, distance_max * float(peak_rel_height))
+        peaks = peak_local_max(
+            distance,
+            labels=component_mask,
+            min_distance=int(min_distance),
+            threshold_abs=threshold_abs,
+            exclude_border=False,
+        )
+        if peaks.shape[0] <= 1:
+            continue
+        markers = np.zeros(component_mask.shape, dtype=np.int32)
+        markers[peaks[:, 0], peaks[:, 1]] = np.arange(
+            1, peaks.shape[0] + 1, dtype=np.int32
+        )
+        local_split = watershed(-distance, markers=markers, mask=component_mask)
+        split_ids, split_counts = np.unique(
+            local_split[local_split > 0], return_counts=True
+        )
+        if split_ids.size <= 1:
+            continue
+        split_components += 1
+        order = np.argsort(split_counts)[::-1]
+        split_ids = split_ids[order]
+        local[component_mask] = 0
+        for i, split_id in enumerate(split_ids):
+            split_mask = local_split == split_id
+            if i == 0:
+                local[split_mask] = int(label_id)
+            else:
+                current_max += 1
+                local[split_mask] = current_max
+        split_labels[slc] = local
+    stats["split_components"] = int(split_components)
+    stats["labels_after"] = int(current_max)
+    stats["added_labels"] = int(current_max - labels_before)
+    return (split_labels, stats) if return_stats else split_labels
 
 
 def merge_global_duplicates(beads, rois, bead_radius=5):
@@ -1227,12 +1353,128 @@ def _count_total_tiles(n_tiles):
     return max(int(total), 1)
 
 
-def _predict_instances_with_generator(
+def _emit_stardist_progress_units(
+    progress_units_callback,
+    progress_stage,
+    progress_done_offset,
+    progress_total_units,
+    done_tiles,
+    expected_tiles,
+):
+    if not (progress_units_callback and progress_stage):
+        return
+    done_total = progress_done_offset + int(done_tiles)
+    total_units = progress_total_units
+    if total_units is None:
+        total_units = progress_done_offset + int(expected_tiles)
+    total_units = max(int(total_units), done_total)
+    progress_units_callback(progress_stage, done_total, total_units)
+
+
+def _normalize_stardist_scale(scale, axes):
+    if scale is None:
+        return None, None
+    if isinstance(scale, numbers.Number):
+        values = tuple(float(scale) if axis in "XYZ" else 1.0 for axis in axes)
+    else:
+        values = tuple(scale)
+        if len(values) != len(axes):
+            raise ValueError(
+                f"scale {values} must be of length {len(axes)}, i.e. one value for each axis {axes}"
+            )
+        values = tuple(
+            float(value) if axis in "XYZ" else 1.0 for value, axis in zip(values, axes)
+        )
+    if any(value <= 0 for value in values):
+        raise ValueError("scale values must be greater than 0")
+    return values, dict(zip(axes, values))
+
+
+def _predict_instances_dense_then_nms(
+    model,
+    img,
+    prob_thresh,
+    nms_thresh,
+    resolved_tiles,
+    expected_tiles,
+    scale,
+    progress_units_callback,
+    progress_stage,
+    progress_done_offset,
+    progress_total_units,
+    progress_message_callback,
+    nms_message,
+):
+    done_tiles = 0
+    axes = "YX"
+
+    def tile_progress(iterator, **kwargs):
+        nonlocal done_tiles
+        for item in iterator:
+            done_tiles += 1
+            _emit_stardist_progress_units(
+                progress_units_callback,
+                progress_stage,
+                progress_done_offset,
+                progress_total_units,
+                done_tiles,
+                expected_tiles,
+            )
+            yield item
+
+    scale_values, scale_dict = _normalize_stardist_scale(scale, axes)
+    predict_img = (
+        ndi.zoom(img, scale_values, order=1) if scale_values is not None else img
+    )
+    predict_output = model.predict(
+        predict_img,
+        axes=axes,
+        n_tiles=resolved_tiles,
+        show_tile_progress=tile_progress,
+    )
+    if (
+        not isinstance(predict_output, tuple)
+        or len(predict_output) < 2
+        or len(predict_output) > 3
+    ):
+        raise RuntimeError(
+            "Unexpected StarDist predict output shape. "
+            "Verify stardist==0.9.1 compatibility."
+        )
+
+    prob, dist = predict_output[:2]
+    prob_class = predict_output[2] if len(predict_output) == 3 else None
+    if progress_message_callback and nms_message:
+        progress_message_callback(nms_message)
+    labels, details = model._instances_from_prediction(
+        img.shape,
+        prob,
+        dist,
+        prob_class=prob_class,
+        prob_thresh=prob_thresh,
+        nms_thresh=nms_thresh,
+        scale=scale_dict,
+    )
+
+    completed_tiles = max(done_tiles, expected_tiles)
+    _emit_stardist_progress_units(
+        progress_units_callback,
+        progress_stage,
+        progress_done_offset,
+        progress_total_units,
+        completed_tiles,
+        expected_tiles,
+    )
+    return labels, details, completed_tiles, expected_tiles
+
+
+def _predict_instances_sparse_generator(
     model,
     img,
     prob_thresh=None,
     nms_thresh=None,
-    n_tiles=1,
+    resolved_tiles=(1, 1),
+    expected_tiles=1,
     scale=None,
     progress_units_callback=None,
     progress_stage=None,
@@ -1241,8 +1483,6 @@ def _predict_instances_with_generator(
     progress_message_callback=None,
     nms_message=None,
 ):
-    resolved_tiles = _resolve_stardist_n_tiles(model, img, n_tiles)
-    expected_tiles = _count_total_tiles(resolved_tiles)
     done_tiles = 0
     final_result = None
 
@@ -1259,13 +1499,14 @@ def _predict_instances_with_generator(
         if isinstance(output, str):
             if output == "tile":
                 done_tiles += 1
-                if progress_units_callback and progress_stage:
-                    done_total = progress_done_offset + done_tiles
-                    total_units = progress_total_units
-                    if total_units is None:
-                        total_units = progress_done_offset + expected_tiles
-                    total_units = max(int(total_units), done_total)
-                    progress_units_callback(progress_stage, done_total, total_units)
+                _emit_stardist_progress_units(
+                    progress_units_callback,
+                    progress_stage,
+                    progress_done_offset,
+                    progress_total_units,
+                    done_tiles,
+                    expected_tiles,
+                )
                 continue
             if output == "nms":
                 if progress_message_callback and nms_message:
@@ -1291,16 +1532,67 @@ def _predict_instances_with_generator(
         )
 
     completed_tiles = max(done_tiles, expected_tiles)
-    if progress_units_callback and progress_stage:
-        done_total = progress_done_offset + completed_tiles
-        total_units = progress_total_units
-        if total_units is None:
-            total_units = done_total
-        total_units = max(int(total_units), done_total)
-        progress_units_callback(progress_stage, done_total, total_units)
+    _emit_stardist_progress_units(
+        progress_units_callback,
+        progress_stage,
+        progress_done_offset,
+        progress_total_units,
+        completed_tiles,
+        expected_tiles,
+    )
 
     labels, details = final_result
     return labels, details, completed_tiles, expected_tiles
+
+
+def _predict_instances_with_generator(
+    model,
+    img,
+    prob_thresh=None,
+    nms_thresh=None,
+    n_tiles=1,
+    scale=None,
+    progress_units_callback=None,
+    progress_stage=None,
+    progress_done_offset=0,
+    progress_total_units=None,
+    progress_message_callback=None,
+    nms_message=None,
+):
+    resolved_tiles = _resolve_stardist_n_tiles(model, img, n_tiles)
+    expected_tiles = _count_total_tiles(resolved_tiles)
+    try:
+        return _predict_instances_dense_then_nms(
+            model=model,
+            img=img,
+            prob_thresh=prob_thresh,
+            nms_thresh=nms_thresh,
+            resolved_tiles=resolved_tiles,
+            expected_tiles=expected_tiles,
+            scale=scale,
+            progress_units_callback=progress_units_callback,
+            progress_stage=progress_stage,
+            progress_done_offset=progress_done_offset,
+            progress_total_units=progress_total_units,
+            progress_message_callback=progress_message_callback,
+            nms_message=nms_message,
+        )
+    except MemoryError:
+        return _predict_instances_sparse_generator(
+            model=model,
+            img=img,
+            prob_thresh=prob_thresh,
+            nms_thresh=nms_thresh,
+            resolved_tiles=resolved_tiles,
+            expected_tiles=expected_tiles,
+            scale=scale,
+            progress_units_callback=progress_units_callback,
+            progress_stage=progress_stage,
+            progress_done_offset=progress_done_offset,
+            progress_total_units=progress_total_units,
+            progress_message_callback=progress_message_callback,
+            nms_message=nms_message,
+        )
 
 
 def stardist_segmentation(
@@ -2450,28 +2742,29 @@ def _process_beads_notebook_stardist(
     ensemble_ratio_end=DEFAULT_ENSEMBLE_RATIO_END,
     ensemble_ratio_step=DEFAULT_ENSEMBLE_RATIO_STEP,
 ):
-    bead_detection_scale = 2
-    stardist_prob_thresh = 0.15
+    stardist_prob_thresh = 0.1
     stardist_nms_thresh = 0.1
     if stardist_use_guess_tiles:
         stardist_n_tiles_value = 0
     else:
         stardist_n_tiles_value = max(int(stardist_n_tiles), 1)
     stardist_block_size = 700 if max_size <= 2000 else 2000
-    bead_detection_block_size = 700 if max_size <= 2000 else 2000
-    initial_detection_progress_message = lambda msg: update_progress(10, msg)
     activation_regions_progress_message = lambda msg: update_progress(30, msg)
 
     update_progress(10, "Initial bead detection...")
     bf = brightfield[:max_size, :max_size]
-    beads = beadfinding_notebook_stardist(
-        bf,
-        scale=bead_detection_scale,
-        block_size=bead_detection_block_size,
-        n_tiles=stardist_n_tiles_value,
-        progress_units_callback=progress_units_callback,
-        progress_callback=initial_detection_progress_message,
-    )
+    beads = beadfinding(bf, is_running_callback=is_running)
+    if beads is None:
+        return None
+    if isinstance(beads, tuple):
+        if not beads or beads[0] is None:
+            return None
+        beads = beads[0]
+    beads = np.asarray(beads)
+    if beads.size == 0:
+        beads = np.empty((0, 2), dtype=np.float32)
+    else:
+        beads = beads.reshape(-1, 2)
     beads = np.unique(beads, axis=0)
     bead_df = pd.DataFrame(beads[:, :2], columns=["x", "y"], dtype=np.float32)
     bead_df = bead_df.query("10 <= x < @max_size-10 and 10 <= y < @max_size-10")
