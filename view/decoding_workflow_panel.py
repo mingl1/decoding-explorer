@@ -28,6 +28,7 @@ from viewmodel.metadata_vm import MetadataVM
 
 class DecodingWorkflowPanel(QWidget):
     export_all_sig = pyqtSignal(str, list)
+    assign_cycles_sig = pyqtSignal()
     generate_beads_sig = pyqtSignal()
     remove_ensemble_sig = pyqtSignal()
     lower_invalid_sig = pyqtSignal()
@@ -96,8 +97,12 @@ class DecodingWorkflowPanel(QWidget):
 
         self._section_widgets = {}
         self._section_collapsed = {}
+        self._section_headers = {}
+        self._section_separators = {}
+        self._section_title_text = {}
         self._ensemble_sweep_stats = pd.DataFrame()
         self._selected_ensemble_ratio = None
+        self._processing_visible = True
 
         self._create_section_widgets()
         self._create_ui_elements()
@@ -109,6 +114,15 @@ class DecodingWorkflowPanel(QWidget):
             "bead_generation": [],
             "crop": [],
             "statistics": [],
+        }
+        self._section_headers = {}
+        self._section_separators = {}
+        self._section_title_text = {
+            "metadata": "Metadata",
+            "align_arrays": "Align Arrays",
+            "bead_generation": "Bead Generation",
+            "crop": "Crop",
+            "statistics": "Statistics",
         }
         self._section_collapsed = {
             "metadata": False,
@@ -124,15 +138,31 @@ class DecodingWorkflowPanel(QWidget):
         self._section_collapsed[section_name] = not self._section_collapsed[
             section_name
         ]
-        collapsed = self._section_collapsed[section_name]
-        for widget in self._section_widgets[section_name]:
-            widget.setVisible(not collapsed)
+        self._update_section_visibility(section_name)
 
     def collapse_processing_sections(self):
         for section in ["metadata", "align_arrays", "bead_generation", "crop"]:
             self._section_collapsed[section] = True
-            for widget in self._section_widgets[section]:
-                widget.setVisible(False)
+            self._update_section_visibility(section)
+
+    def _format_section_title(self, section_name: str) -> str:
+        is_collapsed = self._section_collapsed.get(section_name, False)
+        icon = "▸" if is_collapsed else "▾"
+        base_text = self._section_title_text.get(section_name, section_name)
+        return f"{icon} {base_text}"
+
+    def _update_section_visibility(self, section_name: str):
+        show_section = self._processing_visible
+        header = self._section_headers.get(section_name)
+        if header is not None:
+            header.setText(self._format_section_title(section_name))
+            header.setVisible(show_section)
+        separator = self._section_separators.get(section_name)
+        if separator is not None:
+            separator.setVisible(show_section)
+        collapsed = self._section_collapsed.get(section_name, False)
+        for widget in self._section_widgets.get(section_name, []):
+            widget.setVisible(show_section and not collapsed)
 
     def _on_threshold_changed(self, value):
         threshold = value / 100.0
@@ -141,12 +171,17 @@ class DecodingWorkflowPanel(QWidget):
 
     def _create_ui_elements(self):
         def make_section_title(text, section_name):
-            label = QLabel(text)
-            label.setStyleSheet("font-weight: bold; font-size: 16px;")
+            self._section_title_text[section_name] = text
+            label = QLabel(self._format_section_title(section_name))
+            label.setStyleSheet(
+                "font-weight: bold; font-size: 16px; padding: 4px 6px; border: 1px solid #666; border-radius: 4px;"
+            )
             label.setCursor(Qt.CursorShape.PointingHandCursor)
+            label.setToolTip("Click to expand or collapse this section")
             label.mousePressEvent = lambda event, s=section_name: self._toggle_section(
                 s
             )
+            self._section_headers[section_name] = label
             return label
 
         def make_separator():
@@ -163,15 +198,17 @@ class DecodingWorkflowPanel(QWidget):
         align_arrays_sep = make_separator()
         bead_generation_title = make_section_title("Bead Generation", "bead_generation")
         bead_generation_sep = make_separator()
-        self.apply_btn = QPushButton("Update Metadata")
-        self.apply_btn.setVisible(False)
-        self.apply_btn.clicked.connect(
-            lambda: self.vm.apply_metadata(self.get_metadata_changes())
-        )
+        dataset_title = QLabel("Dataset")
+        dataset_title.setStyleSheet("font-weight: bold; font-size: 16px;")
+        dataset_sep = make_separator()
+        self.assign_cycles_btn = QPushButton("Assign Cycles")
+        self.assign_cycles_btn.clicked.connect(self.assign_cycles_sig.emit)
+        self.dataset_status_label = QLabel("Assign cycles to continue.")
+        self.dataset_status_label.setWordWrap(True)
         self.align_channels_btn = QPushButton("Align to Reference")
         self.align_channels_btn.clicked.connect(self.vm.align_channels)
 
-        self.manually_align_btn = QPushButton("Manually Align Selected")
+        self.manually_align_btn = QPushButton("Manually Align Dataset")
         self.manually_align_btn.clicked.connect(self.manually_align_sig.emit)
 
         # StarDist controls
@@ -255,6 +292,10 @@ class DecodingWorkflowPanel(QWidget):
         counts_table_layout.addWidget(self.counts_table)
         self.counts_table_container.setLayout(counts_table_layout)
 
+        self.form_layout.addRow(dataset_title)
+        self.form_layout.addRow(dataset_sep)
+        self.form_layout.addRow(self.assign_cycles_btn)
+        self.form_layout.addRow(self.dataset_status_label)
         self.form_layout.addRow(metadata_title)
         self.form_layout.addRow(metadata_sep)
 
@@ -274,7 +315,6 @@ class DecodingWorkflowPanel(QWidget):
         self.form_layout.addRow(self.phys_size_y_label, self.size_y_input)
         self.form_layout.addRow(self.align_ch_label, self.channel_input)
         self.form_layout.addRow(self.max_size_label, self.max_size_input)
-        self.form_layout.addRow(self.apply_btn)
         self._section_widgets["metadata"] = [
             self.prefix_label,
             self.prefix_input,
@@ -291,8 +331,6 @@ class DecodingWorkflowPanel(QWidget):
             self.channel_input,
             self.max_size_label,
             self.max_size_input,
-            self.apply_btn,
-            metadata_sep,
         ]
 
         self.form_layout.addRow(align_arrays_title)
@@ -305,7 +343,7 @@ class DecodingWorkflowPanel(QWidget):
         self.form_layout.addRow(self.num_tiles_label, self.num_tiles_input)
         self.form_layout.addRow(self.overlap_label, self.overlap_input)
         self.form_layout.addRow(self.ncc_thresh_label, self.threshold_container)
-        self.crop_btn = QPushButton("Crop Selected")
+        self.crop_btn = QPushButton("Crop Dataset")
         self.crop_btn.clicked.connect(self.crop_selected_sig.emit)
 
         self.apply_shading_checkbox = QCheckBox("Apply shading correction")
@@ -325,7 +363,6 @@ class DecodingWorkflowPanel(QWidget):
             self.manually_align_btn,
             self.crop_btn,
             self.apply_shading_checkbox,
-            align_arrays_sep,
         ]
 
         self.form_layout.addRow(bead_generation_title)
@@ -368,8 +405,6 @@ class DecodingWorkflowPanel(QWidget):
             self.generate_beads_btn,
             self.save_beads_btn,
             self.upload_beads_btn,
-            # self.inspect_beads_btn,
-            bead_generation_sep,
         ]
 
         # Crop section
@@ -413,8 +448,11 @@ class DecodingWorkflowPanel(QWidget):
         self.form_layout.addRow(self.statistics_tabs)
         self._section_widgets["statistics"] = [
             self.statistics_tabs,
-            stats_sep,
         ]
+        self._section_separators["metadata"] = metadata_sep
+        self._section_separators["align_arrays"] = align_arrays_sep
+        self._section_separators["bead_generation"] = bead_generation_sep
+        self._section_separators["statistics"] = stats_sep
 
         self.vm.update_metadata_view_sig.connect(self.update_metadata)
         self.vm.metadata_corrected_sig.connect(self.on_metadata_corrected)
@@ -740,6 +778,14 @@ class DecodingWorkflowPanel(QWidget):
         ]
         for control in controls:
             control.setEnabled(enabled)
+
+    def set_dataset_status(self, text: str):
+        self.dataset_status_label.setText(text)
+
+    def set_processing_visible(self, is_visible: bool):
+        self._processing_visible = bool(is_visible)
+        for section_name in self._section_widgets.keys():
+            self._update_section_visibility(section_name)
 
     def _on_ensemble_slider_changed(self, value: int):
         if self._ensemble_sweep_stats.empty:

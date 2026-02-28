@@ -5,23 +5,36 @@ import warnings
 from typing import List
 
 import cv2
-import image_processing
 import numpy as np
 from pandas import DataFrame
 from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
-from PyQt6.QtWidgets import (QDialog, QFileDialog, QHBoxLayout, QHeaderView,
-                             QLabel, QMainWindow, QMenuBar, QMessageBox,
-                             QProgressBar, QPushButton, QSizeGrip, QSizePolicy,
-                             QSplitter, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMainWindow,
+    QMenuBar,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSizeGrip,
+    QSizePolicy,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
+import image_processing
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from utils import find_min_std_partition, is_dark_mode
 from view.alignment_preview_dialog import AlignmentPreviewDialog
 from view.crop_dialog import CropDialog
 from view.cycle_assignment_dialog import CycleAssignmentDialog
-from view.file_table_widget import FileTableWidget
 from view.decoding_workflow_panel import DecodingWorkflowPanel
+from view.file_table_widget import FileTableWidget
 from view.roi_inspector import ROIInspector
 from viewmodel.file_manager_vm import FileManagerVM, load_image
 from viewmodel.metadata_vm import MetadataVM
@@ -55,7 +68,8 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.metadata_view)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 3)
-        splitter.setSizes([2000, 200])  # Give metadata view minimum initial width
+        splitter.setSizes([2000, 400])  # Give metadata view minimum initial width
+        self.metadata_view.setMinimumWidth(400)
         self.metadata_view.hide()
 
         self.progress_bar = QProgressBar()
@@ -112,6 +126,7 @@ class MainWindow(QMainWindow):
         self.vm.bead_upload_progress.connect(self.update_progress)
         self.vm.bead_upload_complete.connect(self.on_bead_upload_complete)
         self.vm.inspect_beads_signal.connect(self.show_roi_inspector_window)
+        self.vm.dataset_assignment_changed.connect(self.on_dataset_assignment_changed)
 
         self.file_table_widget.itemSelectionChanged.connect(
             self.handle_selection_change
@@ -124,7 +139,10 @@ class MainWindow(QMainWindow):
         self.metadata_view.export_all_sig.connect(self.vm.export_files)
         self.metadata_view.generate_beads_sig.connect(self.start_bead_generation)
         self.metadata_view.upload_beads_sig.connect(self.upload_bead_csv)
-        self.metadata_view.remove_ensemble_sig.connect(self.remove_ensemble_applied_changes)
+        self.metadata_view.assign_cycles_sig.connect(self.assign_cycles)
+        self.metadata_view.remove_ensemble_sig.connect(
+            self.remove_ensemble_applied_changes
+        )
         self.metadata_view.lower_invalid_sig.connect(self.lower_invalid_ratio)
         self.metadata_view.lower_filter_sig.connect(self.lower_filter_ratio)
         self.metadata_view.save_beads_sig.connect(self.save_generated_beads)
@@ -151,6 +169,9 @@ class MainWindow(QMainWindow):
         self.setMenuBar(self.menu_bar_ui)
         if sys.platform == "win32":
             self.menu_bar_ui.installEventFilter(self)
+        self.on_dataset_assignment_changed(
+            self.vm.dataset_assignment_valid, self.vm.dataset_assignment_reason
+        )
 
     def on_beads_generated(self, beads: DataFrame):
         if self.vm.reference_item:
@@ -176,7 +197,12 @@ class MainWindow(QMainWindow):
         beads = file_item.beads
         if file_item.bead_crop_bounds is not None:
             x1, y1, x2, y2 = file_item.bead_crop_bounds
-            beads = beads[(beads['x'] >= x1) & (beads['x'] < x2) & (beads['y'] >= y1) & (beads['y'] < y2)]
+            beads = beads[
+                (beads["x"] >= x1)
+                & (beads["x"] < x2)
+                & (beads["y"] >= y1)
+                & (beads["y"] < y2)
+            ]
 
         total_beads = len(beads)
 
@@ -229,14 +255,123 @@ class MainWindow(QMainWindow):
         self.metadata_vm.statistics_updated.emit(stats)
 
     def update_statistics_for_selected(self, protein_profile: DataFrame):
+        reference_item = self.vm.reference_item
+        if (
+            reference_item is not None
+            and reference_item.beads is not None
+            and not reference_item.beads.empty
+        ):
+            self.calculate_statistics_for_file(reference_item, protein_profile)
+            return
         selected_files = self.get_selected_files()
         for file_item in selected_files:
             if file_item.beads is not None:
                 self.calculate_statistics_for_file(file_item, protein_profile)
-                break  # Process only the first selected file with beads
+                break
+
+    def _get_table_files_in_order(self) -> list[FileItem]:
+        files = []
+        for row in range(self.file_table_widget.rowCount()):
+            item = self.file_table_widget.item(row, 0)
+            if item is None:
+                continue
+            file_item = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(file_item, FileItem):
+                files.append(file_item)
+        return files
+
+    def on_dataset_assignment_changed(self, is_ready: bool, message: str):
+        self.metadata_view.set_dataset_status(message)
+        self.metadata_view.set_processing_visible(is_ready)
+        if is_ready:
+            dataset_files = self.vm.get_dataset_files_ordered()
+            self.metadata_vm.update_selected_items(dataset_files)
+        else:
+            self.metadata_vm.update_selected_items([])
+            self.metadata_view.set_ensemble_sweep_stats(None)
+
+    def assign_cycles(self):
+        files_in_order = self._get_table_files_in_order()
+        if len(files_in_order) == 0:
+            self.show_error("Load at least one file before assigning cycles.")
+            return
+
+        cycle_numbers = [index + 1 for index in range(len(files_in_order))]
+        if self.vm.is_dataset_ready():
+            existing = self.vm.get_dataset_cycle_assignments() or {}
+            initial_assignments = {}
+            for cycle_num, file_item in existing.items():
+                if cycle_num == 0:
+                    initial_assignments[1] = file_item
+                else:
+                    initial_assignments[cycle_num + 1] = file_item
+            initial_protein_file = self.vm.get_dataset_protein_file()
+        else:
+            default_cycles = min(2, len(files_in_order))
+            initial_assignments = {
+                cycle_num: file_item
+                for cycle_num, file_item in zip(
+                    cycle_numbers[:default_cycles], files_in_order[:default_cycles]
+                )
+            }
+            initial_protein_file = None
+        dialog = CycleAssignmentDialog(
+            files_in_order,
+            self,
+            initial_assignments=initial_assignments,
+            initial_protein_file=initial_protein_file,
+            default_cycle_count=2,
+        )
+        if not dialog.exec():
+            return
+
+        assignments_from_dialog = dialog.get_assignments()
+        if assignments_from_dialog is None:
+            self.show_error("Each file must be assigned to exactly one cycle.")
+            return
+
+        reference_item = assignments_from_dialog.get(1)
+        if reference_item is None:
+            self.show_error("Cycle 1 must be assigned.")
+            return
+        if (
+            self.vm.reference_item is None
+            or self.vm.reference_item.path != reference_item.path
+        ):
+            self.vm.set_reference(reference_item)
+        protein_file = dialog.get_protein_file()
+
+        final_assignments = {0: reference_item}
+        for cycle_num, file_item in assignments_from_dialog.items():
+            if cycle_num == 1:
+                continue
+            final_assignments[cycle_num - 1] = file_item
+        is_valid = self.vm.set_dataset_cycle_assignments(
+            final_assignments,
+            protein_file=protein_file,
+        )
+        if not is_valid:
+            self.show_error(self.vm.dataset_assignment_reason)
+
+    def _get_required_dataset_assignments(self) -> dict[int, FileItem] | None:
+        if not self.vm.is_dataset_ready():
+            self.show_error(self.vm.dataset_assignment_reason)
+            return None
+        assignments = self.vm.get_dataset_cycle_assignments()
+        if assignments is None:
+            self.show_error("Assign cycles to continue.")
+            return None
+        return assignments
 
     def show_roi_inspector_window(
-        self, bright_fields, beads_df, cycles, bboxs, labeled_image, protein_profile, max_size
+        self,
+        bright_fields,
+        beads_df,
+        cycles,
+        bboxs,
+        labeled_image,
+        protein_profile,
+        max_size,
     ):
         if len(labeled_image) == 0:
             labeled_image = None
@@ -259,9 +394,17 @@ class MainWindow(QMainWindow):
 
     def save_beads(self, beads):
         # Apply bead crop bounds if set on reference item
-        if self.vm.reference_item and self.vm.reference_item.bead_crop_bounds is not None:
+        if (
+            self.vm.reference_item
+            and self.vm.reference_item.bead_crop_bounds is not None
+        ):
             x1, y1, x2, y2 = self.vm.reference_item.bead_crop_bounds
-            beads = beads[(beads['x'] >= x1) & (beads['x'] < x2) & (beads['y'] >= y1) & (beads['y'] < y2)]
+            beads = beads[
+                (beads["x"] >= x1)
+                & (beads["x"] < x2)
+                & (beads["y"] >= y1)
+                & (beads["y"] < y2)
+            ]
 
         self.status_label.setText(f"Beads generated: {len(beads)}")
         self.progress_bar.setVisible(False)
@@ -373,8 +516,10 @@ class MainWindow(QMainWindow):
             self.show_error(str(e))
 
     def handle_metadata_applied(self, new_metadata: dict):
-        selected_files = self.get_selected_files()
-        self.vm.apply_metadata(new_metadata, selected_files)
+        dataset_files = self.vm.get_dataset_files_ordered()
+        if len(dataset_files) == 0:
+            dataset_files = self.get_selected_files()
+        self.vm.apply_metadata(new_metadata, dataset_files)
 
     def handle_metadata_corrected(self, corrected_values: dict):
         for key, value in corrected_values.items():
@@ -385,8 +530,9 @@ class MainWindow(QMainWindow):
 
     def handle_selection_change(self):
         selected_files = self.get_selected_files()
-        self.metadata_vm.update_selected_items(selected_files)
         self.vm.selected_files = selected_files
+        if not self.vm.is_dataset_ready():
+            self.metadata_vm.update_selected_items(selected_files)
         print(f"Selected {len(selected_files)} files")
 
     def handle_table_emptied(self):
@@ -404,20 +550,27 @@ class MainWindow(QMainWindow):
                 files.append(path)
         self.vm.load_folder(dirs)
         self.vm.load_file(files)
+
     def on_load_folder(self):
         folder = QFileDialog.getExistingDirectory()
         if folder:
             self.vm.load_folder(folder)
 
     def start_alignment(self):
-        selected_files = self.get_selected_files()
-        if not selected_files:
-            self.show_error("No files selected for alignment.")
+        assignments = self._get_required_dataset_assignments()
+        if assignments is None:
             return
-
-        reference_item = self.vm.reference_item
-        if not reference_item:
-            self.show_error("Please set a reference image first.")
+        selected_files = [
+            file_item
+            for cycle_num, file_item in sorted(assignments.items(), key=lambda x: x[0])
+            if cycle_num != 0
+        ]
+        protein_file = self.vm.get_dataset_protein_file()
+        if protein_file is not None:
+            if protein_file.path not in [f.path for f in selected_files]:
+                selected_files.append(protein_file)
+        if len(selected_files) == 0:
+            self.show_error("Assign at least one cycle besides the reference.")
             return
 
         if self.metadata_view.apply_shading_checkbox.isChecked():
@@ -444,19 +597,9 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(True)
 
     def start_bead_generation(self):
-        selected_files = self.get_selected_files()
-        if not selected_files:
-            self.show_error("No files selected for bead generation.")
+        assignments = self._get_required_dataset_assignments()
+        if assignments is None:
             return
-
-        reference_item = self.vm.reference_item
-        if not reference_item:
-            self.show_error("Please set a reference image first.")
-            return
-
-        files_for_assignment = [
-            f for f in selected_files if f.path != reference_item.path
-        ]
 
         # Get StarDist settings from the metadata view
         stardist_settings = self.metadata_view.get_stardist_settings()
@@ -470,64 +613,29 @@ class MainWindow(QMainWindow):
         ensemble_ratio_end = image_processing.DEFAULT_ENSEMBLE_RATIO_END
         ensemble_ratio_step = image_processing.DEFAULT_ENSEMBLE_RATIO_STEP
 
-        if not files_for_assignment:
-            # If only the reference file is selected, we can proceed with one cycle.
-            self.vm.generate_beads(
-                {0: reference_item},
-                use_stardist=use_stardist,
-                model_name=model_name,
-                stardist_use_guess_tiles=use_guess_tiles,
-                stardist_n_tiles=stardist_n_tiles,
-                use_stardist_bead_centers=use_stardist_bead_centers,
-                area_multiplier=area_multiplier,
-                ensemble_ratio_start=ensemble_ratio_start,
-                ensemble_ratio_end=ensemble_ratio_end,
-                ensemble_ratio_step=ensemble_ratio_step,
-            )
-            return
-
-        dialog = CycleAssignmentDialog(files_for_assignment, self)
-        if dialog.exec():
-            assignments_from_dialog = dialog.get_assignments()
-            if assignments_from_dialog is None:
-                self.show_error("Each file must be assigned to exactly one cycle.")
-                return
-
-            # final_assignments = {0: reference_item}
-            # final_assignments.update(assignments_from_dialog)
-
-            self.progress_bar.setVisible(True)
-            self.status_label.setVisible(True)
-            self.cancel_button.setVisible(True)
-            self.cancel_button.clicked.disconnect()
-            self.cancel_button.clicked.connect(self.cancel_bead_generation)
-            self.vm.generate_beads(
-                assignments_from_dialog,
-                use_stardist=use_stardist,
-                model_name=model_name,
-                stardist_use_guess_tiles=use_guess_tiles,
-                stardist_n_tiles=stardist_n_tiles,
-                use_stardist_bead_centers=use_stardist_bead_centers,
-                area_multiplier=area_multiplier,
-                ensemble_ratio_start=ensemble_ratio_start,
-                ensemble_ratio_end=ensemble_ratio_end,
-                ensemble_ratio_step=ensemble_ratio_step,
-            )
+        self.progress_bar.setVisible(True)
+        self.status_label.setVisible(True)
+        self.cancel_button.setVisible(True)
+        self.cancel_button.clicked.disconnect()
+        self.cancel_button.clicked.connect(self.cancel_bead_generation)
+        self.vm.generate_beads(
+            assignments,
+            use_stardist=use_stardist,
+            model_name=model_name,
+            stardist_use_guess_tiles=use_guess_tiles,
+            stardist_n_tiles=stardist_n_tiles,
+            use_stardist_bead_centers=use_stardist_bead_centers,
+            area_multiplier=area_multiplier,
+            ensemble_ratio_start=ensemble_ratio_start,
+            ensemble_ratio_end=ensemble_ratio_end,
+            ensemble_ratio_step=ensemble_ratio_step,
+        )
 
     def upload_bead_csv(self):
-        selected_files = self.get_selected_files()
-        if not selected_files:
-            QMessageBox.warning(
-                self,
-                "No Files Selected",
-                "Please select files to assign to cycles."
-            )
+        assignments = self._get_required_dataset_assignments()
+        if assignments is None:
             return
-
-        reference_item = self.vm.reference_item
-        if not reference_item:
-            self.show_error("Please set a reference image first.")
-            return
+        reference_item = assignments[0]
 
         csv_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -542,26 +650,17 @@ class MainWindow(QMainWindow):
         if not is_valid:
             self.show_error(f"Invalid CSV file: {error_msg}")
             return
-
-        files_for_assignment = [
-            f for f in selected_files if f.path != reference_item.path
-        ]
-
-        dialog = CycleAssignmentDialog(files_for_assignment, self, zero_indexed=False, start_cycle=1)
-        if dialog.exec():
-            assignments_from_dialog = dialog.get_assignments()
-            if assignments_from_dialog is None:
-                self.show_error("Each file must be assigned to exactly one cycle.")
-                return
-
-            cycle_assignments = {0: reference_item}
-            for cycle_num, file_item in assignments_from_dialog.items():
-                cycle_assignments[cycle_num] = file_item
-
-            self.vm.store_uploaded_beads(csv_path, reference_item, cycle_assignments)
+        if num_cycles != len(assignments):
+            self.show_error(
+                f"CSV has {num_cycles} cycle column(s), but current assignment has {len(assignments)} cycle(s). Reassign cycles."
+            )
+            return
+        self.vm.store_uploaded_beads(csv_path, reference_item, assignments)
 
     def on_bead_upload_complete(self, reference_item):
-        print(f"on_bead_upload_complete called, beads: {reference_item.beads is not None}, empty: {reference_item.beads.empty if reference_item.beads is not None else 'N/A'}")
+        print(
+            f"on_bead_upload_complete called, beads: {reference_item.beads is not None}, empty: {reference_item.beads.empty if reference_item.beads is not None else 'N/A'}"
+        )
         self._refresh_ensemble_controls(reference_item)
         if reference_item.beads is not None and not reference_item.beads.empty:
             self.calculate_statistics_for_file(
@@ -570,16 +669,10 @@ class MainWindow(QMainWindow):
             self.metadata_view.collapse_processing_sections()
 
     def start_manual_alignment(self):
-        """Open manual alignment dialog for selected files."""
-        selected_files = self.get_selected_files()
-        if not selected_files:
-            self.show_error("No files selected for manual alignment.")
+        assignments = self._get_required_dataset_assignments()
+        if assignments is None:
             return
-
-        reference_item = self.vm.reference_item
-        if not reference_item:
-            self.show_error("Please set a reference image first.")
-            return
+        reference_item = assignments[0]
 
         # Get brightfield image from reference
         target_image = self.vm._get_brightfield_image(reference_item)
@@ -587,43 +680,33 @@ class MainWindow(QMainWindow):
             self.show_error("Could not load reference image for preview.")
             return
 
-        # Separate reference from other files
-        files_for_assignment = [
-            f for f in selected_files if f.path != reference_item.path
+        assigned_pairs = [
+            (cycle_num, file_item)
+            for cycle_num, file_item in sorted(assignments.items(), key=lambda x: x[0])
+            if cycle_num != 0
         ]
-
-        if not files_for_assignment:
-            self.show_error("Please select at least one file besides the reference to align.")
+        protein_file = self.vm.get_dataset_protein_file()
+        if protein_file is not None:
+            assigned_pairs.append((max(assignments.keys()) + 1, protein_file))
+        if not assigned_pairs:
+            self.show_error("Assign at least one cycle besides the reference.")
             return
 
-        # Use CycleAssignmentWidget to assign files
-        dialog = CycleAssignmentDialog(files_for_assignment, self)
-        if not dialog.exec():
-            return
-
-        assignments_from_dialog = dialog.get_assignments()
-        if assignments_from_dialog is None:
-            self.show_error("Each file must be assigned to exactly one cycle.")
-            return
-
-        # Get moving images from assigned files
         moving_images = []
         assigned_files = []
-        for cycle_num in sorted(assignments_from_dialog.keys()):
-            file_item = assignments_from_dialog[cycle_num]
+        for cycle_num, file_item in assigned_pairs:
             moving_img = self.vm._get_brightfield_image(file_item)
             if moving_img is None:
-                self.show_error(f"Could not load image for {os.path.basename(file_item.path)}")
+                self.show_error(
+                    f"Could not load image for {os.path.basename(file_item.path)}"
+                )
                 return
             moving_images.append(moving_img)
             assigned_files.append(file_item)
 
         # Open alignment preview dialog in edit mode
         preview_dialog = AlignmentPreviewDialog(
-            target_image,
-            moving_images,
-            can_edit=True,
-            can_emit=True
+            target_image, moving_images, can_edit=True, can_emit=True
         )
 
         # Store assigned files in dialog for later use
@@ -639,13 +722,13 @@ class MainWindow(QMainWindow):
         preview_dialog.exec()
 
     def _on_manual_alignment_complete(
-        self,
-        transformation_matrices: list[np.ndarray],
-        assigned_files: list[FileItem]
+        self, transformation_matrices: list[np.ndarray], assigned_files: list[FileItem]
     ):
         """Handle completion of manual alignment."""
         if len(transformation_matrices) != len(assigned_files):
-            self.show_error("Mismatch between transformation matrices and assigned files.")
+            self.show_error(
+                "Mismatch between transformation matrices and assigned files."
+            )
             return
 
         to_be_updated = []
@@ -655,7 +738,11 @@ class MainWindow(QMainWindow):
                 continue
 
             # Get the full multi-channel image
-            full_image = my_f.working_image if my_f.working_image is not None else load_image(my_f)
+            full_image = (
+                my_f.working_image
+                if my_f.working_image is not None
+                else load_image(my_f)
+            )
             transf_matrix = transformation_matrices[i]
 
             # Apply the transformation to all channels
@@ -684,19 +771,19 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Alignment Complete",
-                f"Successfully aligned {len(to_be_updated)} image(s)."
+                f"Successfully aligned {len(to_be_updated)} image(s).",
             )
 
     def start_crop(self):
-        """Handle crop operation for single or multiple files."""
-        selected_files = self.get_selected_files()
-        if not selected_files:
-            self.show_error("No files selected for cropping.")
+        assignments = self._get_required_dataset_assignments()
+        if assignments is None:
             return
-
-        # Single file mode
-        if len(selected_files) == 1:
-            file_item = selected_files[0]
+        assigned_files = [
+            file_item
+            for _, file_item in sorted(assignments.items(), key=lambda x: x[0])
+        ]
+        if len(assigned_files) == 1:
+            file_item = assigned_files[0]
             image = self.vm._get_brightfield_image(file_item)
             if image is None:
                 self.show_error("Could not load image.")
@@ -704,62 +791,28 @@ class MainWindow(QMainWindow):
 
             dialog = CropDialog([image], self)
             dialog.crop_confirmed.connect(
-                lambda x1, y1, x2, y2: self._apply_crop_single(file_item, x1, y1, x2, y2)
+                lambda x1, y1, x2, y2: self._apply_crop_single(
+                    file_item, x1, y1, x2, y2
+                )
             )
             dialog.exec()
+            return
 
-        # Multi-file mode
-        else:
-            reference_item = self.vm.reference_item
-            if not reference_item:
-                self.show_error("Please set a reference image first.")
+        images = []
+        for file_item in assigned_files:
+            img = self.vm._get_brightfield_image(file_item)
+            if img is None:
+                self.show_error(f"Could not load {os.path.basename(file_item.path)}")
                 return
+            images.append(img)
 
-            # Check reference is in selection
-            if reference_item.path not in [f.path for f in selected_files]:
-                self.show_error("Reference file must be included in selection for multi-file crop.")
-                return
-
-            # Filter reference from assignment
-            files_for_assignment = [
-                f for f in selected_files if f.path != reference_item.path
-            ]
-
-            if not files_for_assignment:
-                self.show_error("Please select at least one file besides the reference.")
-                return
-
-            # Use CycleAssignmentWidget
-            dialog = CycleAssignmentDialog(files_for_assignment, self)
-            if not dialog.exec():
-                return
-
-            assignments = dialog.get_assignments()
-            if assignments is None:
-                self.show_error("Each file must be assigned to exactly one cycle.")
-                return
-
-            # Load images for overlay
-            target_image = self.vm._get_brightfield_image(reference_item)
-            moving_images = []
-            assigned_files = [reference_item]  # Reference first
-
-            for cycle_num in sorted(assignments.keys()):
-                file_item = assignments[cycle_num]
-                img = self.vm._get_brightfield_image(file_item)
-                if img is None:
-                    self.show_error(f"Could not load {os.path.basename(file_item.path)}")
-                    return
-                moving_images.append(img)
-                assigned_files.append(file_item)
-
-            # Create overlay crop dialog
-            all_images = [target_image] + moving_images
-            crop_dialog = CropDialog(all_images, self)
-            crop_dialog.crop_confirmed.connect(
-                lambda x1, y1, x2, y2: self._apply_crop_multiple(assigned_files, x1, y1, x2, y2)
+        crop_dialog = CropDialog(images, self)
+        crop_dialog.crop_confirmed.connect(
+            lambda x1, y1, x2, y2: self._apply_crop_multiple(
+                assigned_files, x1, y1, x2, y2
             )
-            crop_dialog.exec()
+        )
+        crop_dialog.exec()
 
     def start_bead_crop(self):
         """Open CropDialog to select a region for filtering beads."""
@@ -795,7 +848,9 @@ class MainWindow(QMainWindow):
                     images.append(cycle_image[bf_channel])
         elif reference_item.cycle_files:
             for cycle_num in sorted(reference_item.cycle_files.keys()):
-                img = self.vm._get_brightfield_image(reference_item.cycle_files[cycle_num])
+                img = self.vm._get_brightfield_image(
+                    reference_item.cycle_files[cycle_num]
+                )
                 if img is not None:
                     images.append(img)
 
@@ -812,35 +867,52 @@ class MainWindow(QMainWindow):
         total_before = len(reference_item.beads)
         dialog = CropDialog(images, self)
         dialog.crop_confirmed.connect(
-            lambda x1, y1, x2, y2: self._apply_bead_crop(reference_item, x1, y1, x2, y2, total_before)
+            lambda x1, y1, x2, y2: self._apply_bead_crop(
+                reference_item, x1, y1, x2, y2, total_before
+            )
         )
         dialog.exec()
 
-    def _apply_bead_crop(self, reference_item: FileItem, x1: int, y1: int, x2: int, y2: int, total_before: int):
+    def _apply_bead_crop(
+        self,
+        reference_item: FileItem,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        total_before: int,
+    ):
         """Store bead crop bounds and recalculate statistics."""
         reference_item.bead_crop_bounds = (x1, y1, x2, y2)
         beads = reference_item.beads
-        filtered = beads[(beads['x'] >= x1) & (beads['x'] < x2) & (beads['y'] >= y1) & (beads['y'] < y2)]
+        filtered = beads[
+            (beads["x"] >= x1)
+            & (beads["x"] < x2)
+            & (beads["y"] >= y1)
+            & (beads["y"] < y2)
+        ]
         total_after = len(filtered)
         self.calculate_statistics_for_file(reference_item, self.metadata_vm.protein_df)
         QMessageBox.information(
             self,
             "Bead Crop Applied",
-            f"Beads: {total_before} → {total_after} (cropped {total_before - total_after})"
+            f"Beads: {total_before} → {total_after} (cropped {total_before - total_after})",
         )
 
-    def _apply_crop_single(self, file_item: FileItem, x1: int, y1: int, x2: int, y2: int):
+    def _apply_crop_single(
+        self, file_item: FileItem, x1: int, y1: int, x2: int, y2: int
+    ):
         """Apply crop to single file."""
         self.vm.apply_crop([file_item], x1, y1, x2, y2)
         QMessageBox.information(self, "Crop Complete", "Image cropped successfully.")
 
-    def _apply_crop_multiple(self, file_items: list[FileItem], x1: int, y1: int, x2: int, y2: int):
+    def _apply_crop_multiple(
+        self, file_items: list[FileItem], x1: int, y1: int, x2: int, y2: int
+    ):
         """Apply crop to multiple files."""
         self.vm.apply_crop(file_items, x1, y1, x2, y2)
         QMessageBox.information(
-            self,
-            "Crop Complete",
-            f"Successfully cropped {len(file_items)} image(s)."
+            self, "Crop Complete", f"Successfully cropped {len(file_items)} image(s)."
         )
 
     def update_progress(self, value, message):
@@ -1031,7 +1103,9 @@ class MainWindow(QMainWindow):
                         and self.drag_pos is not None
                     ):
                         self.move(
-                            self.pos() + event.globalPosition().toPoint() - self.drag_pos
+                            self.pos()
+                            + event.globalPosition().toPoint()
+                            - self.drag_pos
                         )
                         self.drag_pos = event.globalPosition().toPoint()
                         return True  # Consume the event if dragging

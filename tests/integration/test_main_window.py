@@ -102,7 +102,7 @@ class TestMainWindow:
     def test_start_alignment_no_reference(
         self, mock_main_window, mocker
     ):
-        """start_alignment with no reference should show error."""
+        """start_alignment without assignment should show assignment error."""
         window = mock_main_window
 
         # Add files to VM
@@ -118,28 +118,27 @@ class TestMainWindow:
         with patch.object(window, 'show_error') as mock_error:
             window.start_alignment()
 
-            # Should error about missing reference
-            mock_error.assert_called_once_with("Please set a reference image first.")
+            mock_error.assert_called_once_with("Assign cycles to continue.")
 
     def test_start_alignment_no_files_selected(
         self, mock_main_window, mocker
     ):
-        """start_alignment with no files selected should show error."""
+        """start_alignment without dataset assignment should show assignment error."""
         window = mock_main_window
 
-        # Mock get_selected_files to return empty list
-        mocker.patch.object(window, 'get_selected_files', return_value=[])
+        reference_item = FileItem(path="/test/reference.tif")
+        window.vm.reference_item = reference_item
+        window.vm.files[reference_item.path] = reference_item
 
         with patch.object(window, 'show_error') as mock_error:
             window.start_alignment()
 
-            # Should error about no files selected
-            mock_error.assert_called_once_with("No files selected for alignment.")
+            mock_error.assert_called_once_with("Assign cycles to continue.")
 
     def test_start_bead_generation_no_reference(
         self, mock_main_window, mocker
     ):
-        """start_bead_generation with no reference should show error."""
+        """start_bead_generation without assignment should show assignment error."""
         window = mock_main_window
 
         # Add files to VM
@@ -155,8 +154,7 @@ class TestMainWindow:
         with patch.object(window, 'show_error') as mock_error:
             window.start_bead_generation()
 
-            # Should error about missing reference
-            mock_error.assert_called_once_with("Please set a reference image first.")
+            mock_error.assert_called_once_with("Assign cycles to continue.")
 
     def test_start_bead_generation_passes_stardist_and_default_sweep_settings(
         self, mock_main_window, mock_file_item, mocker
@@ -164,7 +162,8 @@ class TestMainWindow:
         window = mock_main_window
         window.vm.reference_item = mock_file_item
         window.vm.files[mock_file_item.path] = mock_file_item
-        mocker.patch.object(window, "get_selected_files", return_value=[mock_file_item])
+        window.vm.dataset_cycle_assignments = {0: mock_file_item}
+        window.vm.dataset_assignment_valid = True
 
         window.metadata_view.stardist_guess_tiles_checkbox.setChecked(False)
         window.metadata_view.stardist_num_tiles_input.setText("3")
@@ -186,6 +185,84 @@ class TestMainWindow:
             ensemble_ratio_end=image_processing.DEFAULT_ENSEMBLE_RATIO_END,
             ensemble_ratio_step=image_processing.DEFAULT_ENSEMBLE_RATIO_STEP,
         )
+
+    def test_start_alignment_includes_optional_protein_file(
+        self, mock_main_window, mock_file_items
+    ):
+        window = mock_main_window
+        ref_item, cy1_item, protein_item = mock_file_items[:3]
+        window.vm.files[ref_item.path] = ref_item
+        window.vm.files[cy1_item.path] = cy1_item
+        window.vm.files[protein_item.path] = protein_item
+        window.vm.reference_item = ref_item
+        window.vm.dataset_cycle_assignments = {0: ref_item, 1: cy1_item}
+        window.vm.dataset_protein_file = protein_item
+        window.vm.dataset_assignment_valid = True
+
+        with patch.object(window.vm, "apply_shading") as mock_apply_shading:
+            window.start_alignment()
+
+        mock_apply_shading.assert_called_once()
+        args, _ = mock_apply_shading.call_args
+        aligned_files = args[0]
+        assert [f.path for f in aligned_files] == [cy1_item.path, protein_item.path]
+
+    def test_assign_cycles_sets_cycle1_as_reference(
+        self, mock_main_window, mock_file_items, mocker
+    ):
+        window = mock_main_window
+        files = mock_file_items[:3]
+        for file_item in files:
+            window.vm.files[file_item.path] = file_item
+            window.file_table_widget.add_file_item(file_item)
+
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = True
+        dialog_instance.get_assignments.return_value = {
+            1: files[1],
+            2: files[0],
+            3: files[2],
+        }
+        dialog_instance.get_protein_file.return_value = None
+        mocker.patch("view.main_window.CycleAssignmentDialog", return_value=dialog_instance)
+
+        window.assign_cycles()
+
+        assert window.vm.reference_item == files[1]
+        assert window.vm.is_dataset_ready() is True
+        assigned = window.vm.get_dataset_cycle_assignments()
+        assert assigned is not None
+        assert assigned[0] == files[1]
+        assert assigned[1] == files[0]
+        assert assigned[2] == files[2]
+
+    def test_assign_cycles_can_mark_optional_protein_file(
+        self, mock_main_window, mock_file_items, mocker
+    ):
+        window = mock_main_window
+        files = mock_file_items[:3]
+        for file_item in files:
+            window.vm.files[file_item.path] = file_item
+            window.file_table_widget.add_file_item(file_item)
+
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = True
+        dialog_instance.get_assignments.return_value = {
+            1: files[0],
+            2: files[1],
+        }
+        dialog_instance.get_protein_file.return_value = files[2]
+        mocker.patch("view.main_window.CycleAssignmentDialog", return_value=dialog_instance)
+
+        window.assign_cycles()
+
+        assert window.vm.reference_item == files[0]
+        assert window.vm.is_dataset_ready() is True
+        assert window.vm.get_dataset_protein_file() == files[2]
+        assigned = window.vm.get_dataset_cycle_assignments()
+        assert assigned is not None
+        assert assigned[0] == files[0]
+        assert assigned[1] == files[1]
 
     def test_on_beads_generated_does_not_auto_save(
         self, mock_main_window, mock_file_item, mocker

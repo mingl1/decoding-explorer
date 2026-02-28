@@ -698,11 +698,16 @@ class FileManagerVM(QObject):
     inspect_beads_signal = pyqtSignal(
         dict, DataFrame, dict, Series, np.ndarray, DataFrame, int
     )
+    dataset_assignment_changed = pyqtSignal(bool, str)
 
     def __init__(self):
         super().__init__()
         self.files: dict[str, FileItem] = {}
         self.reference_item: FileItem | None = None
+        self.dataset_cycle_assignments: dict[int, FileItem] | None = None
+        self.dataset_protein_file: FileItem | None = None
+        self.dataset_assignment_valid = False
+        self.dataset_assignment_reason = "Assign cycles to continue."
         self.emitted_files = set()
         self.register_thread = None
         self.bead_thread = None
@@ -713,9 +718,143 @@ class FileManagerVM(QObject):
         self.upload_thread = None
         self.selected_files = []
         self._pending_files = {}
+        self.dataset_assignment_changed.emit(
+            self.dataset_assignment_valid, self.dataset_assignment_reason
+        )
+
+    def _emit_dataset_assignment_changed(self):
+        self.dataset_assignment_changed.emit(
+            self.dataset_assignment_valid, self.dataset_assignment_reason
+        )
+
+    def clear_dataset_cycle_assignments(self, reason: Optional[str] = None):
+        self.dataset_cycle_assignments = None
+        self.dataset_protein_file = None
+        self.dataset_assignment_valid = False
+        self.dataset_assignment_reason = reason or "Assign cycles to continue."
+        self._emit_dataset_assignment_changed()
+
+    def set_dataset_cycle_assignments(
+        self,
+        assignments: dict[int, FileItem],
+        protein_file: Optional[FileItem] = None,
+    ) -> bool:
+        if self.reference_item is None:
+            self.clear_dataset_cycle_assignments("Please set a reference image first.")
+            return False
+        if self.reference_item.path not in self.files:
+            self.clear_dataset_cycle_assignments(
+                "Reference file is not available in the current session."
+            )
+            return False
+
+        normalized: dict[int, FileItem] = {0: self.reference_item}
+        for cycle_num, file_item in assignments.items():
+            try:
+                cycle_idx = int(cycle_num)
+            except (TypeError, ValueError):
+                self.clear_dataset_cycle_assignments(
+                    "Invalid cycle assignment index."
+                )
+                return False
+
+            if cycle_idx == 0:
+                continue
+            if cycle_idx < 0:
+                self.clear_dataset_cycle_assignments(
+                    "Cycle indices must be non-negative."
+                )
+                return False
+            saved_f = self.files.get(file_item.path)
+            if saved_f is None:
+                self.clear_dataset_cycle_assignments(
+                    f"Assigned file not found: {os.path.basename(file_item.path)}"
+                )
+                return False
+            normalized[cycle_idx] = saved_f
+
+        unique_paths = {f.path for f in normalized.values()}
+        if len(unique_paths) != len(normalized):
+            self.clear_dataset_cycle_assignments(
+                "Each file must be assigned to exactly one cycle."
+            )
+            return False
+
+        saved_protein_file = None
+        if protein_file is not None:
+            saved_protein_file = self.files.get(protein_file.path)
+            if saved_protein_file is None:
+                self.clear_dataset_cycle_assignments(
+                    f"Protein file not found: {os.path.basename(protein_file.path)}"
+                )
+                return False
+            if saved_protein_file.path == self.reference_item.path:
+                self.clear_dataset_cycle_assignments(
+                    "Protein file cannot be the reference."
+                )
+                return False
+            if saved_protein_file.path in unique_paths:
+                self.clear_dataset_cycle_assignments(
+                    "Protein file cannot also be assigned to a cycle."
+                )
+                return False
+
+        self.dataset_cycle_assignments = {
+            cycle_num: file_item
+            for cycle_num, file_item in sorted(normalized.items(), key=lambda x: x[0])
+        }
+        self.dataset_protein_file = saved_protein_file
+        self.dataset_assignment_valid = True
+        protein_text = ""
+        if self.dataset_protein_file is not None:
+            protein_text = f" + protein ({os.path.basename(self.dataset_protein_file.path)})"
+        self.dataset_assignment_reason = (
+            f"Assigned {len(self.dataset_cycle_assignments) - 1} cycle(s){protein_text}."
+        )
+        self._emit_dataset_assignment_changed()
+        return True
+
+    def get_dataset_cycle_assignments(self) -> Optional[dict[int, FileItem]]:
+        if not self.is_dataset_ready():
+            return None
+        assert self.dataset_cycle_assignments is not None
+        return dict(self.dataset_cycle_assignments)
+
+    def get_dataset_files_ordered(self) -> list[FileItem]:
+        assignments = self.get_dataset_cycle_assignments()
+        if assignments is None:
+            return []
+        return [assignments[cycle_num] for cycle_num in sorted(assignments.keys())]
+
+    def get_dataset_protein_file(self) -> Optional[FileItem]:
+        if not self.is_dataset_ready():
+            return None
+        return self.dataset_protein_file
+
+    def is_dataset_ready(self) -> bool:
+        if (
+            not self.dataset_assignment_valid
+            or self.reference_item is None
+            or self.dataset_cycle_assignments is None
+        ):
+            return False
+        if 0 not in self.dataset_cycle_assignments:
+            return False
+        if self.dataset_cycle_assignments[0].path != self.reference_item.path:
+            return False
+        for file_item in self.dataset_cycle_assignments.values():
+            if file_item.path not in self.files:
+                return False
+        if self.dataset_protein_file is not None:
+            if self.dataset_protein_file.path not in self.files:
+                return False
+            if self.dataset_protein_file.path == self.reference_item.path:
+                return False
+        return True
 
     def set_reference_item(self, file_item: FileItem):
         self.reference_item = file_item
+        self.clear_dataset_cycle_assignments("Reference changed. Reassign cycles.")
         logger.debug(f"Reference item set to: {file_item.path}")
 
     def inspect_beads(self, file_item: FileItem, protein_profile: DataFrame):
@@ -830,6 +969,10 @@ class FileManagerVM(QObject):
                 self._pending_files[file_item.path] = file_item
         self.files.update(self._pending_files)
         self._pending_files = {}
+        if len(to_be_emitted) > 0:
+            self.clear_dataset_cycle_assignments(
+                "File list changed. Reassign cycles."
+            )
         self.file_list_updated.emit(to_be_emitted)
 
     def load_file(self, file_paths: List[str] | str):
@@ -847,6 +990,10 @@ class FileManagerVM(QObject):
             self.emitted_files.add(file_item.path)
             self.files[file_item.path] = file_item
             to_be_emitted.append(file_item)
+        if len(to_be_emitted) > 0:
+            self.clear_dataset_cycle_assignments(
+                "File list changed. Reassign cycles."
+            )
         self.file_list_updated.emit(to_be_emitted)
 
     def apply_shading(self, selected_files: List[FileItem]):
@@ -1052,14 +1199,22 @@ class FileManagerVM(QObject):
             self.file_information_update.emit(to_be_updated)
 
     def delete_files(self, selected_files: list[FileItem]):
+        deleted_any = False
         for f in selected_files:
             print(f"Deleting file: {f.path}")
             if f.path in self.files:
                 print("File found in manager, deleting.")
                 del self.files[f.path]
+                deleted_any = True
             if f.path in self.emitted_files:
                 print("File found in emitted files, removing.")
                 self.emitted_files.remove(f.path)
+        if deleted_any:
+            if self.reference_item and self.reference_item.path not in self.files:
+                self.reference_item = None
+            self.clear_dataset_cycle_assignments(
+                "File list changed. Reassign cycles."
+            )
 
     def cancel_alignment(self):
         if self.register_thread:
@@ -1080,6 +1235,7 @@ class FileManagerVM(QObject):
         to_be = []
         prev_ref = self.reference_item
         self.reference_item = file_item
+        self.clear_dataset_cycle_assignments("Reference changed. Reassign cycles.")
         to_be.append(file_item)
         if prev_ref and prev_ref.path != file_item.path:
             to_be.append(prev_ref)
@@ -1089,6 +1245,7 @@ class FileManagerVM(QObject):
         if self.reference_item:
             old_ref = self.reference_item
             self.reference_item = None
+            self.clear_dataset_cycle_assignments("Please set a reference image first.")
             self.file_information_update.emit([old_ref])
 
     def export_files(self, folder_path: str, selected_files: list[FileItem]):
@@ -1122,9 +1279,15 @@ class FileManagerVM(QObject):
             "Reference item must be set before generating beads."
         )
 
-        sorted_cycles = sorted(cycle_assignments.keys())
-        ordered_files = [cycle_assignments[cycle] for cycle in sorted_cycles]
-        ordered_files.insert(0, self.reference_item)
+        normalized_assignments = dict(cycle_assignments)
+        normalized_assignments[0] = self.reference_item
+        sorted_cycles = sorted(
+            [cycle_num for cycle_num in normalized_assignments.keys() if cycle_num != 0]
+        )
+        ordered_files = [self.reference_item]
+        ordered_files.extend(
+            [normalized_assignments[cycle_num] for cycle_num in sorted_cycles]
+        )
         curr_ref_path = self.reference_item.path
 
         self.bead_thread = BeadGenerationThread(
@@ -1143,7 +1306,9 @@ class FileManagerVM(QObject):
             ensemble_ratio_step=ensemble_ratio_step,
         )
         self.bead_thread.bead_generated.connect(
-            lambda res: self._on_beads_generated(res, curr_ref_path, cycle_assignments)
+            lambda res: self._on_beads_generated(
+                res, curr_ref_path, normalized_assignments
+            )
         )
         self.bead_thread.progress.connect(self.bead_progress.emit)
         self.bead_thread.start()

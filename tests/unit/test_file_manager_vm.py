@@ -19,10 +19,110 @@ class TestFileManagerVM:
         vm = mock_file_manager_vm
         assert vm.files == {}
         assert vm.reference_item is None
+        assert vm.dataset_cycle_assignments is None
+        assert vm.dataset_protein_file is None
+        assert vm.dataset_assignment_valid is False
         assert vm.emitted_files == set()
         assert vm.register_thread is None
         assert vm.bead_thread is None
         assert vm.selected_files == []
+
+    def test_set_dataset_cycle_assignments_requires_reference(
+        self, mock_file_manager_vm, mock_file_item
+    ):
+        vm = mock_file_manager_vm
+        vm.files[mock_file_item.path] = mock_file_item
+
+        is_valid = vm.set_dataset_cycle_assignments({1: mock_file_item})
+
+        assert is_valid is False
+        assert vm.dataset_assignment_valid is False
+        assert vm.dataset_cycle_assignments is None
+
+    def test_set_dataset_cycle_assignments_success_and_order(
+        self, mock_file_manager_vm, mock_file_items
+    ):
+        vm = mock_file_manager_vm
+        ref_item, cy1_item, cy2_item = mock_file_items[:3]
+        vm.files[ref_item.path] = ref_item
+        vm.files[cy1_item.path] = cy1_item
+        vm.files[cy2_item.path] = cy2_item
+        vm.reference_item = ref_item
+
+        is_valid = vm.set_dataset_cycle_assignments(
+            {0: ref_item, 1: cy1_item, 2: cy2_item}
+        )
+
+        assert is_valid is True
+        assert vm.dataset_assignment_valid is True
+        ordered_files = vm.get_dataset_files_ordered()
+        assert [f.path for f in ordered_files] == [
+            ref_item.path,
+            cy1_item.path,
+            cy2_item.path,
+        ]
+
+    def test_set_reference_invalidates_dataset_assignments(
+        self, mock_file_manager_vm, mock_file_items
+    ):
+        vm = mock_file_manager_vm
+        ref_item, cy1_item, new_ref_item = mock_file_items[:3]
+        vm.files[ref_item.path] = ref_item
+        vm.files[cy1_item.path] = cy1_item
+        vm.files[new_ref_item.path] = new_ref_item
+        vm.reference_item = ref_item
+        vm.set_dataset_cycle_assignments({0: ref_item, 1: cy1_item, 2: new_ref_item})
+        assert vm.dataset_assignment_valid is True
+
+        vm.set_reference(new_ref_item)
+
+        assert vm.dataset_assignment_valid is False
+        assert vm.dataset_cycle_assignments is None
+
+    def test_set_dataset_cycle_assignments_with_optional_protein_file(
+        self, mock_file_manager_vm, mock_file_items
+    ):
+        vm = mock_file_manager_vm
+        ref_item, cy1_item, protein_item = mock_file_items[:3]
+        vm.files[ref_item.path] = ref_item
+        vm.files[cy1_item.path] = cy1_item
+        vm.files[protein_item.path] = protein_item
+        vm.reference_item = ref_item
+
+        is_valid = vm.set_dataset_cycle_assignments(
+            {0: ref_item, 1: cy1_item},
+            protein_file=protein_item,
+        )
+
+        assert is_valid is True
+        assert vm.dataset_assignment_valid is True
+        assert vm.dataset_protein_file == protein_item
+        assigned = vm.get_dataset_cycle_assignments()
+        assert assigned is not None
+        assert [f.path for f in vm.get_dataset_files_ordered()] == [
+            ref_item.path,
+            cy1_item.path,
+        ]
+
+    def test_set_dataset_cycle_assignments_allows_unassigned_files(
+        self, mock_file_manager_vm, mock_file_items
+    ):
+        vm = mock_file_manager_vm
+        ref_item, cy1_item, cy2_item = mock_file_items[:3]
+        vm.files[ref_item.path] = ref_item
+        vm.files[cy1_item.path] = cy1_item
+        vm.files[cy2_item.path] = cy2_item
+        vm.reference_item = ref_item
+
+        is_valid = vm.set_dataset_cycle_assignments(
+            {0: ref_item, 1: cy1_item}
+        )
+
+        assert is_valid is True
+        assigned = vm.get_dataset_cycle_assignments()
+        assert assigned is not None
+        assert assigned[0] == ref_item
+        assert assigned[1] == cy1_item
 
     def test_load_single_file(self, mock_file_manager_vm, tmp_tiff_path, mocker):
         """Loading a file should add it to files dict."""

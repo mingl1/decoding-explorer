@@ -47,11 +47,10 @@ def test_max_size_correction_persists_on_reselection(qtbot, small_tiff_folder):
     window.metadata_view.max_size_input.clear()
     qtbot.keyClicks(window.metadata_view.max_size_input, "2048")
 
-    qtbot.mouseClick(window.metadata_view.apply_btn, Qt.MouseButton.LeftButton)
     qtbot.wait(500)
 
     corrected_max = int(window.metadata_view.max_size_input.text())
-    print(f"After apply - metadata_view shows: {corrected_max}")
+    print(f"After update - metadata_view shows: {corrected_max}")
     assert corrected_max < 2048, "max_size should be corrected to fit image dimensions"
 
     window.file_table_widget.clearSelection()

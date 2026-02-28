@@ -70,7 +70,6 @@ def test_metadata_update_comprehensive(qtbot, tiff_folder):
     qtbot.keyClicks(window.metadata_view.num_tiles_input, new_values["num_tiles"])
     qtbot.keyClicks(window.metadata_view.overlap_input, new_values["overlap"])
 
-    qtbot.mouseClick(window.metadata_view.apply_btn, Qt.MouseButton.LeftButton)
     qtbot.wait(500)
 
     for row in range(window.file_table_widget.rowCount()):

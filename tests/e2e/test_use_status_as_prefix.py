@@ -59,7 +59,7 @@ def test_use_status_as_prefix_checkbox_enables_disables_prefix_input(qtbot, tiff
 
 def test_use_status_as_prefix_applies_status_to_prefix(qtbot, tiff_folder):
     """
-    Test that when 'use_status_as_prefix' is checked and Apply is clicked,
+    Test that when 'use_status_as_prefix' is checked,
     each file's prefix is set to its status value (lowercase).
     """
     window = MainWindow()
@@ -79,7 +79,6 @@ def test_use_status_as_prefix_applies_status_to_prefix(qtbot, tiff_folder):
     qtbot.mouseClick(window.metadata_view.prefix_checkbox, Qt.MouseButton.LeftButton)
     qtbot.wait(100)
 
-    qtbot.mouseClick(window.metadata_view.apply_btn, Qt.MouseButton.LeftButton)
     qtbot.wait(500)
 
     window.file_table_widget.clearSelection()
@@ -121,7 +120,6 @@ def test_use_status_as_prefix_with_manual_prefix_unchecked(qtbot, tiff_folder):
     window.metadata_view.prefix_input.clear()
     qtbot.keyClicks(window.metadata_view.prefix_input, manual_prefix)
 
-    qtbot.mouseClick(window.metadata_view.apply_btn, Qt.MouseButton.LeftButton)
     qtbot.wait(500)
 
     window.file_table_widget.clearSelection()
@@ -190,7 +188,6 @@ def test_use_status_as_prefix_checkbox_unchecked_when_prefixes_mismatch(qtbot, t
 
     window.metadata_view.prefix_input.clear()
     qtbot.keyClicks(window.metadata_view.prefix_input, "custom_prefix")
-    qtbot.mouseClick(window.metadata_view.apply_btn, Qt.MouseButton.LeftButton)
     qtbot.wait(500)
 
     window.file_table_widget.clearSelection()
@@ -360,7 +357,6 @@ def test_use_status_as_prefix_unchecked_enables_input_for_editing(qtbot, tiff_fo
         "Prefix input should be editable when checkbox is unchecked"
     )
 
-    qtbot.mouseClick(window.metadata_view.apply_btn, Qt.MouseButton.LeftButton)
     qtbot.wait(500)
 
     window.file_table_widget.clearSelection()
@@ -375,7 +371,7 @@ def test_use_status_as_prefix_unchecked_enables_input_for_editing(qtbot, tiff_fo
 
 def test_use_status_as_prefix_unchecked_persists_after_reselection(qtbot, tiff_folder):
     """
-    Test that after unchecking use_status_as_prefix and applying,
+    Test that after unchecking use_status_as_prefix and editing,
     the checkbox remains unchecked when reselecting files.
     Should NOT auto-check based on prefix matching status.
     """
@@ -401,7 +397,6 @@ def test_use_status_as_prefix_unchecked_persists_after_reselection(qtbot, tiff_f
     window.metadata_view.prefix_input.clear()
     qtbot.keyClicks(window.metadata_view.prefix_input, "custom_prefix")
 
-    qtbot.mouseClick(window.metadata_view.apply_btn, Qt.MouseButton.LeftButton)
     qtbot.wait(500)
 
     window.file_table_widget.clearSelection()
@@ -462,7 +457,6 @@ def test_use_status_as_prefix_updates_prefix_immediately_on_status_change(qtbot,
         "Prefix input should be editable when checkbox is unchecked"
     )
 
-    qtbot.mouseClick(window.metadata_view.apply_btn, Qt.MouseButton.LeftButton)
     qtbot.wait(500)
 
     window.file_table_widget.clearSelection()

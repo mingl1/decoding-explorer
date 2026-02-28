@@ -32,7 +32,7 @@ def test_metadata_update_propagates_to_files(qtbot, tiff_folder):
     1. Upload folder with tiffs.
     2. Select all files.
     3. Update metadata (prefix and PhysicalSizeX).
-    4. Apply.
+    4. Metadata auto-updates.
     5. Verify metadata updates are reflected when selecting individual files.
     """
     # Initialize the application
@@ -73,10 +73,7 @@ def test_metadata_update_propagates_to_files(qtbot, tiff_folder):
     window.metadata_view.size_x_input.clear()
     qtbot.keyClicks(window.metadata_view.size_x_input, new_size_x)
     
-    # 4. Click Apply Button
-    qtbot.mouseClick(window.metadata_view.apply_btn, Qt.MouseButton.LeftButton)
-    
-    # Wait for processing (if any)
+    # Wait for metadata propagation
     qtbot.wait(500)
     
     # 5. Verify Metadata Update
@@ -98,4 +95,3 @@ def test_metadata_update_propagates_to_files(qtbot, tiff_folder):
     qtbot.wait(200)
     assert window.metadata_view.prefix_input.text() == new_prefix
     assert float(window.metadata_view.size_x_input.text()) == float(new_size_x)
-
