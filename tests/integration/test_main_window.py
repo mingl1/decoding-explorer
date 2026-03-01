@@ -240,7 +240,31 @@ class TestMainWindow:
             protein_item.path,
         ]
 
-    def test_start_manual_alignment_uses_top_left_preview_default(
+    def test_start_manual_alignment_starts_async_preview_loading(
+        self, mock_main_window, mock_file_items
+    ):
+        window = mock_main_window
+        ref_item, cy1_item, protein_item = mock_file_items[:3]
+        window.vm.files[ref_item.path] = ref_item
+        window.vm.files[cy1_item.path] = cy1_item
+        window.vm.files[protein_item.path] = protein_item
+        window.vm.reference_item = ref_item
+        window.vm.dataset_cycle_assignments = {0: ref_item, 1: cy1_item}
+        window.vm.dataset_protein_file = protein_item
+        window.vm.dataset_assignment_valid = True
+
+        with patch.object(window.vm, "load_manual_align_preview_images") as mock_load:
+            window.start_manual_alignment()
+
+        mock_load.assert_called_once()
+        args, _ = mock_load.call_args
+        assert args[0] == ref_item
+        assert [f.path for f in args[1]] == [cy1_item.path, protein_item.path]
+        assert window.progress_bar.isHidden() is False
+        assert window.status_label.isHidden() is False
+        assert window.cancel_button.isHidden() is False
+
+    def test_manual_align_preview_loaded_uses_top_left_preview_default(
         self, mock_main_window, mock_file_items
     ):
         window = mock_main_window
@@ -257,14 +281,46 @@ class TestMainWindow:
         dialog_instance = MagicMock()
         dialog_instance.exec.return_value = True
 
-        with patch.object(window.vm, "_get_brightfield_image", return_value=preview_image), patch(
+        with patch.object(window.vm, "load_manual_align_preview_images"):
+            window.start_manual_alignment()
+
+        with patch(
             "view.main_window.AlignmentPreviewDialog", return_value=dialog_instance
         ) as mock_dialog:
-            window.start_manual_alignment()
+            window._on_manual_align_preview_loaded(
+                [preview_image, preview_image, preview_image]
+            )
 
         mock_dialog.assert_called_once()
         assert mock_dialog.call_args.kwargs["initial_preview_size"] == 2000
         assert mock_dialog.call_args.kwargs["initial_checked_indices"] == [0]
+        assert mock_dialog.call_args.kwargs["layer_labels"] == ["Cycle 2", "Protein"]
+
+    def test_cancel_manual_align_preview_loading_hides_progress(
+        self, mock_main_window, mock_file_items
+    ):
+        window = mock_main_window
+        ref_item, cy1_item, protein_item = mock_file_items[:3]
+        window.vm.files[ref_item.path] = ref_item
+        window.vm.files[cy1_item.path] = cy1_item
+        window.vm.files[protein_item.path] = protein_item
+        window.vm.reference_item = ref_item
+        window.vm.dataset_cycle_assignments = {0: ref_item, 1: cy1_item}
+        window.vm.dataset_protein_file = protein_item
+        window.vm.dataset_assignment_valid = True
+
+        with patch.object(window.vm, "load_manual_align_preview_images"):
+            window.start_manual_alignment()
+
+        with patch.object(
+            window.vm, "cancel_manual_align_preview_loading"
+        ) as mock_cancel:
+            window.cancel_manual_align_preview_loading()
+
+        mock_cancel.assert_called_once()
+        assert window.progress_bar.isVisible() is False
+        assert window.status_label.isVisible() is False
+        assert window.cancel_button.isVisible() is False
 
     def test_manual_alignment_complete_only_updates_checked_layers(
         self, mock_main_window
@@ -535,6 +591,35 @@ class TestMainWindow:
         with patch.object(window.vm, 'apply_metadata') as mock_apply:
             window.handle_metadata_applied(new_metadata)
             mock_apply.assert_called_once_with(new_metadata, [mock_file_item])
+
+    def test_handle_metadata_applied_includes_dataset_protein_file(
+        self, mock_main_window
+    ):
+        window = mock_main_window
+
+        reference_item = FileItem(path="/test/reference.tif")
+        cycle_item = FileItem(path="/test/cycle_1.tif")
+        protein_item = FileItem(path="/test/protein.tif")
+        new_metadata = {"max_size": 1000}
+
+        with (
+            patch.object(
+                window.vm,
+                "get_dataset_files_ordered",
+                return_value=[reference_item, cycle_item],
+            ),
+            patch.object(
+                window.vm,
+                "get_dataset_protein_file",
+                return_value=protein_item,
+            ),
+            patch.object(window.vm, "apply_metadata") as mock_apply,
+        ):
+            window.handle_metadata_applied(new_metadata)
+
+        mock_apply.assert_called_once_with(
+            new_metadata, [reference_item, cycle_item, protein_item]
+        )
 
     def test_minimum_size_set(self, mock_main_window):
         """MainWindow should have minimum size set."""

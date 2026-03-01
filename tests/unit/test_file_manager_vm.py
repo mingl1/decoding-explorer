@@ -9,7 +9,11 @@ import tifffile
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from PyQt6.QtWidgets import QDialog
-from viewmodel.file_manager_vm import BeadGenerationThread, ExportThread
+from viewmodel.file_manager_vm import (
+    BeadGenerationThread,
+    BrightfieldBatchLoadingThread,
+    ExportThread,
+)
 
 
 class TestFileManagerVM:
@@ -297,6 +301,93 @@ class TestFileManagerVM:
                 vm.apply_shading([])
             except KeyError:
                 pass  # Expected if file not found
+
+    def test_brightfield_batch_loading_thread_returns_ordered_materialized_images(
+        self, mock_file_manager_vm, tmp_path
+    ):
+        vm = mock_file_manager_vm
+
+        ref_array = np.arange(2 * 8 * 8, dtype=np.uint16).reshape(2, 8, 8)
+        moving_array = np.full((2, 8, 8), 3, dtype=np.uint16)
+        ref_path = tmp_path / "ref.tif"
+        moving_path = tmp_path / "moving.tif"
+        tifffile.imwrite(str(ref_path), ref_array)
+        tifffile.imwrite(str(moving_path), moving_array)
+
+        ref_item = FileItem(path=str(ref_path), status=FileStatus.RAW)
+        ref_item.shape = ref_array.shape
+        ref_item.original_shape = ref_array.shape
+        ref_item.metadata.reference_channel = 1
+        ref_item.metadata.max_size = 6
+
+        moving_item = FileItem(path=str(moving_path), status=FileStatus.RAW)
+        moving_item.shape = moving_array.shape
+        moving_item.original_shape = moving_array.shape
+        moving_item.metadata.reference_channel = 0
+        moving_item.metadata.max_size = 6
+        moving_item.working_image = np.full((8, 8), 77, dtype=np.uint16)
+
+        vm.files[ref_item.path] = ref_item
+        vm.files[moving_item.path] = moving_item
+
+        loaded_results = []
+        errors = []
+        thread = BrightfieldBatchLoadingThread(
+            [ref_item, moving_item],
+            vm.files,
+            vm._extract_brightfield_image,
+            materialize=True,
+        )
+        thread.loaded.connect(lambda images: loaded_results.append(images))
+        thread.error.connect(lambda msg: errors.append(msg))
+
+        thread.run()
+
+        assert errors == []
+        assert len(loaded_results) == 1
+        loaded_images = loaded_results[0]
+        assert len(loaded_images) == 2
+        np.testing.assert_array_equal(loaded_images[0], ref_array[1, :6, :6])
+        np.testing.assert_array_equal(
+            loaded_images[1], moving_item.working_image[:6, :6]
+        )
+        assert isinstance(loaded_images[0], np.ndarray)
+        assert isinstance(loaded_images[1], np.ndarray)
+        assert not isinstance(loaded_images[0], np.memmap)
+        assert not isinstance(loaded_images[1], np.memmap)
+
+    def test_brightfield_batch_loading_thread_emits_error_for_invalid_channel(
+        self, mock_file_manager_vm, tmp_path
+    ):
+        vm = mock_file_manager_vm
+
+        img = np.zeros((1, 8, 8), dtype=np.uint16)
+        bad_path = tmp_path / "bad_channel.tif"
+        tifffile.imwrite(str(bad_path), img)
+
+        bad_item = FileItem(path=str(bad_path), status=FileStatus.RAW)
+        bad_item.shape = img.shape
+        bad_item.original_shape = img.shape
+        bad_item.metadata.reference_channel = 2
+        bad_item.metadata.max_size = 8
+        vm.files[bad_item.path] = bad_item
+
+        errors = []
+        loaded_results = []
+        thread = BrightfieldBatchLoadingThread(
+            [bad_item],
+            vm.files,
+            vm._extract_brightfield_image,
+            materialize=True,
+        )
+        thread.error.connect(lambda msg: errors.append(msg))
+        thread.loaded.connect(lambda images: loaded_results.append(images))
+
+        thread.run()
+
+        assert loaded_results == []
+        assert len(errors) == 1
+        assert "exceeds number of channels" in errors[0]
 
     def test_align_channels_no_reference(self, mock_file_manager_vm, mock_file_items, mocker):
         """align_channels with no reference should return early."""

@@ -364,6 +364,65 @@ class ShadingCorrectionThread(QThread):
         self._is_running = False
 
 
+class BrightfieldBatchLoadingThread(QThread):
+    progress = pyqtSignal(int, str)
+    loaded = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        file_items: list[FileItem],
+        files: dict,
+        brightfield_loader,
+        materialize=True,
+    ):
+        super().__init__()
+        self.file_items = file_items
+        self.files = files
+        self.brightfield_loader = brightfield_loader
+        self.materialize = bool(materialize)
+        self._is_running = True
+
+    def run(self):
+        self._is_running = True
+        total_files = len(self.file_items)
+        if total_files == 0:
+            self.error.emit("No images selected for manual alignment preview.")
+            return
+
+        loaded_images = []
+        for i, file_item in enumerate(self.file_items):
+            if not self._is_running:
+                return
+            progress_pct = int((i / total_files) * 100)
+            self.progress.emit(
+                progress_pct,
+                f"Loading manual alignment image {i + 1}/{total_files}",
+            )
+
+            latest_file = self.files.get(file_item.path, file_item)
+            image, error_msg = self.brightfield_loader(
+                latest_file, materialize=self.materialize
+            )
+            if error_msg:
+                self.error.emit(error_msg)
+                return
+            if image is None:
+                self.error.emit(
+                    f"Could not load image for {os.path.basename(latest_file.path)}."
+                )
+                return
+            loaded_images.append(image)
+
+        if not self._is_running:
+            return
+        self.progress.emit(100, "Manual alignment preview ready")
+        self.loaded.emit(loaded_images)
+
+    def cancel(self):
+        self._is_running = False
+
+
 class FolderLoadingThread(QThread):
     progress = pyqtSignal(int, str)
     folder_loaded = pyqtSignal(list)
@@ -680,6 +739,9 @@ class FileManagerVM(QObject):
     file_metadata_updated = pyqtSignal(dict)
     metadata_corrected_sig = pyqtSignal(dict)
     align_progress = pyqtSignal(int, str)
+    manual_align_preview_progress = pyqtSignal(int, str)
+    manual_align_preview_loaded = pyqtSignal(object)
+    manual_align_preview_error = pyqtSignal(str)
     align_error = pyqtSignal(str)
     align_complete = pyqtSignal(list)
     export_progress = pyqtSignal(int, int)
@@ -716,6 +778,7 @@ class FileManagerVM(QObject):
         self.file_thread = None
         self.export_thread = None
         self.upload_thread = None
+        self.manual_align_preview_thread = None
         self.selected_files = []
         self._pending_files = {}
         self.dataset_assignment_changed.emit(
@@ -909,35 +972,61 @@ class FileManagerVM(QObject):
             most_updated_file.metadata.max_size,
         )
 
-    def _get_brightfield_image(self, file_item: FileItem) -> Optional[np.ndarray]:
-        """Retrieve the brightfield image from the file item, considering shading correction."""
-        max_size = int(file_item.metadata.max_size)
-        image = load_image(file_item)
-        bf_channel = int(file_item.metadata.reference_channel)
-        if file_item.working_image is not None:
-            # If shade corrected or aligned image exists, use it
-            if len(file_item.working_image.shape) == 2:
-                return file_item.working_image[:max_size, :max_size]
-            elif len(file_item.working_image.shape) > 2:
-                if bf_channel < file_item.working_image.shape[0]:
-                    return file_item.working_image[bf_channel, :max_size, :max_size]
+    def _extract_brightfield_image(
+        self, file_item: FileItem, materialize=False
+    ) -> tuple[Optional[np.ndarray], Optional[str]]:
+        latest_file = self.files.get(file_item.path, file_item)
+        max_size = int(latest_file.metadata.max_size)
+        bf_channel = int(latest_file.metadata.reference_channel)
+
+        if latest_file.working_image is not None:
+            working = latest_file.working_image
+            if len(working.shape) == 2:
+                brightfield = working[:max_size, :max_size]
+            elif len(working.shape) > 2:
+                if bf_channel < working.shape[0]:
+                    brightfield = working[bf_channel, :max_size, :max_size]
                 else:
-                    self.align_error.emit(
-                        f"Brightfield channel {bf_channel} exceeds number of channels in working image for file {os.path.basename(file_item.path)}."
+                    return (
+                        None,
+                        f"Brightfield channel {bf_channel} exceeds number of channels in working image for file {os.path.basename(latest_file.path)}.",
                     )
-                    return None
-        # Fallback to original image
+            else:
+                return (
+                    None,
+                    f"Unsupported working image dimensions for file {os.path.basename(latest_file.path)}.",
+                )
+            if materialize:
+                return np.array(brightfield), None
+            return brightfield, None
+
+        image = load_image(latest_file)
         if len(image.shape) > 2:
             if bf_channel < image.shape[0]:
-                return image[bf_channel, :max_size, :max_size]
+                brightfield = image[bf_channel, :max_size, :max_size]
             else:
-                self.align_error.emit(
-                    f"Brightfield channel {bf_channel} exceeds number of channels in original image for file {os.path.basename(file_item.path)}."
+                return (
+                    None,
+                    f"Brightfield channel {bf_channel} exceeds number of channels in original image for file {os.path.basename(latest_file.path)}.",
                 )
-                return None
         elif len(image.shape) == 2:
-            return image[:max_size, :max_size]
-        return None
+            brightfield = image[:max_size, :max_size]
+        else:
+            return (
+                None,
+                f"Unsupported image dimensions for file {os.path.basename(latest_file.path)}.",
+            )
+
+        if materialize:
+            return np.array(brightfield), None
+        return brightfield, None
+
+    def _get_brightfield_image(self, file_item: FileItem) -> Optional[np.ndarray]:
+        image, error_msg = self._extract_brightfield_image(file_item, materialize=False)
+        if error_msg:
+            self.align_error.emit(error_msg)
+            return None
+        return image
 
     def _get_status_from_filename(self, file_path: str) -> FileStatus:
         filename_base = os.path.basename(file_path).lower()
@@ -1009,6 +1098,47 @@ class FileManagerVM(QObject):
     def cancel_shading(self):
         if self.shading_thread:
             self.shading_thread.cancel()
+
+    def load_manual_align_preview_images(
+        self, reference_item: FileItem, moving_items: list[FileItem]
+    ):
+        ordered_files = [reference_item]
+        ordered_files.extend(moving_items)
+        if len(ordered_files) == 0:
+            self.manual_align_preview_error.emit(
+                "No images selected for manual alignment preview."
+            )
+            return
+
+        self.cancel_manual_align_preview_loading()
+        self.manual_align_preview_thread = BrightfieldBatchLoadingThread(
+            ordered_files,
+            self.files,
+            self._extract_brightfield_image,
+            materialize=True,
+        )
+        self.manual_align_preview_thread.progress.connect(
+            self.manual_align_preview_progress.emit
+        )
+        self.manual_align_preview_thread.loaded.connect(
+            self.manual_align_preview_loaded.emit
+        )
+        self.manual_align_preview_thread.error.connect(
+            self.manual_align_preview_error.emit
+        )
+        self.manual_align_preview_thread.finished.connect(
+            self._on_manual_align_preview_loading_finished
+        )
+        self.manual_align_preview_thread.start()
+
+    def _on_manual_align_preview_loading_finished(self):
+        finished_thread = self.sender()
+        if finished_thread is self.manual_align_preview_thread:
+            self.manual_align_preview_thread = None
+
+    def cancel_manual_align_preview_loading(self):
+        if self.manual_align_preview_thread:
+            self.manual_align_preview_thread.cancel()
 
     def apply_crop(
         self, file_items: list[FileItem], x1: int, y1: int, x2: int, y2: int

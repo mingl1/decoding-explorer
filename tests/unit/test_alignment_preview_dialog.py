@@ -137,5 +137,73 @@ class TestAlignmentPreviewDialog:
             dialog.accept_alignment()
 
         mock_question.assert_called_once()
+        warning_text = mock_question.call_args.args[2]
+        assert "Moving Image 2" in warning_text
         assert emitted == []
         assert dialog.result_accepted is False
+
+    def test_dialog_uses_custom_layer_labels_for_checkboxes(self, qapp):
+        target = np.zeros((64, 64), dtype=np.uint16)
+        moving = [
+            np.ones((64, 64), dtype=np.uint16),
+            np.full((64, 64), 2, dtype=np.uint16),
+        ]
+
+        dialog = AlignmentPreviewDialog(
+            target,
+            moving,
+            can_edit=True,
+            layer_labels=["Cycle 2", "Protein"],
+            initial_preview_size=64,
+        )
+
+        assert dialog.visibility_checkboxes[0].text() == "Cycle 2"
+        assert dialog.visibility_checkboxes[1].text() == "Protein"
+
+    def test_dialog_falls_back_to_generic_labels_when_label_count_mismatch(self, qapp):
+        target = np.zeros((64, 64), dtype=np.uint16)
+        moving = [
+            np.ones((64, 64), dtype=np.uint16),
+            np.full((64, 64), 2, dtype=np.uint16),
+        ]
+
+        dialog = AlignmentPreviewDialog(
+            target,
+            moving,
+            can_edit=True,
+            layer_labels=["Cycle 2"],
+            initial_preview_size=64,
+        )
+
+        assert dialog.visibility_checkboxes[0].text().startswith("Moving Image")
+        assert dialog.visibility_checkboxes[1].text().startswith("Moving Image")
+
+    def test_warning_uses_semantic_labels_when_available(self, qapp):
+        target = np.zeros((64, 64), dtype=np.uint16)
+        moving = [
+            np.ones((64, 64), dtype=np.uint16),
+            np.full((64, 64), 2, dtype=np.uint16),
+        ]
+
+        dialog = AlignmentPreviewDialog(
+            target,
+            moving,
+            can_edit=True,
+            can_emit=True,
+            initial_checked_indices=[0, 1],
+            layer_labels=["Cycle 2", "Protein"],
+            initial_preview_size=64,
+        )
+
+        dialog.dx_input.setText("1")
+        dialog.dy_input.setText("0")
+        dialog.apply_manual_translation()
+        dialog.visibility_checkboxes[1].setChecked(False)
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.No
+        ) as mock_question:
+            dialog.accept_alignment()
+
+        warning_text = mock_question.call_args.args[2]
+        assert "Protein" in warning_text
