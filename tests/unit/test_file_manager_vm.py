@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -388,6 +389,42 @@ class TestFileManagerVM:
         assert loaded_results == []
         assert len(errors) == 1
         assert "exceeds number of channels" in errors[0]
+
+    def test_brightfield_batch_loading_thread_loads_images_concurrently(self):
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fake_loader(file_item, materialize=False):
+            nonlocal active
+            nonlocal max_active
+            with lock:
+                active += 1
+                if active > max_active:
+                    max_active = active
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return np.zeros((4, 4), dtype=np.uint16), None
+
+        file_items = [
+            FileItem(path=f"/tmp/manual_align_{i}.tif", status=FileStatus.RAW)
+            for i in range(4)
+        ]
+        thread = BrightfieldBatchLoadingThread(
+            file_items, {}, fake_loader, materialize=True
+        )
+
+        loaded_results = []
+        errors = []
+        thread.loaded.connect(lambda images: loaded_results.append(images))
+        thread.error.connect(lambda msg: errors.append(msg))
+        thread.run()
+
+        assert errors == []
+        assert len(loaded_results) == 1
+        assert len(loaded_results[0]) == 4
+        assert max_active > 1
 
     def test_align_channels_no_reference(self, mock_file_manager_vm, mock_file_items, mocker):
         """align_channels with no reference should return early."""

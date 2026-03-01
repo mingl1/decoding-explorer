@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from functools import reduce
 from typing import List, Optional
 
@@ -390,31 +391,69 @@ class BrightfieldBatchLoadingThread(QThread):
             self.error.emit("No images selected for manual alignment preview.")
             return
 
-        loaded_images = []
-        for i, file_item in enumerate(self.file_items):
-            if not self._is_running:
-                return
-            progress_pct = int((i / total_files) * 100)
-            self.progress.emit(
-                progress_pct,
-                f"Loading manual alignment image {i + 1}/{total_files}",
-            )
+        loaded_images: list[Optional[np.ndarray]] = [None] * total_files
 
-            latest_file = self.files.get(file_item.path, file_item)
+        def _load_one(index: int, item: FileItem):
+            latest_file = self.files.get(item.path, item)
             image, error_msg = self.brightfield_loader(
                 latest_file, materialize=self.materialize
             )
-            if error_msg:
-                self.error.emit(error_msg)
-                return
-            if image is None:
-                self.error.emit(
-                    f"Could not load image for {os.path.basename(latest_file.path)}."
+            return index, latest_file.path, image, error_msg
+
+        max_workers = max(1, min(total_files, 8))
+        self.progress.emit(0, f"Loading manual alignment image 0/{total_files}")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            pending = {
+                executor.submit(_load_one, i, file_item): i
+                for i, file_item in enumerate(self.file_items)
+            }
+            completed_count = 0
+
+            while pending:
+                if not self._is_running:
+                    for future in pending:
+                        future.cancel()
+                    return
+
+                done, not_done = wait(
+                    pending.keys(), timeout=0.1, return_when=FIRST_COMPLETED
                 )
-                return
-            loaded_images.append(image)
+                if not done:
+                    continue
+                pending = {future: pending[future] for future in not_done}
+
+                for future in done:
+                    try:
+                        idx, path, image, error_msg = future.result()
+                    except Exception as e:
+                        self.error.emit(f"Error loading manual alignment image: {e}")
+                        for pending_future in pending:
+                            pending_future.cancel()
+                        return
+                    if error_msg:
+                        self.error.emit(error_msg)
+                        for pending_future in pending:
+                            pending_future.cancel()
+                        return
+                    if image is None:
+                        self.error.emit(
+                            f"Could not load image for {os.path.basename(path)}."
+                        )
+                        for pending_future in pending:
+                            pending_future.cancel()
+                        return
+                    loaded_images[idx] = image
+                    completed_count += 1
+                    progress_pct = int((completed_count / total_files) * 100)
+                    self.progress.emit(
+                        progress_pct,
+                        f"Loading manual alignment image {completed_count}/{total_files}",
+                    )
 
         if not self._is_running:
+            return
+        if any(image is None for image in loaded_images):
+            self.error.emit("Could not load all images for manual alignment preview.")
             return
         self.progress.emit(100, "Manual alignment preview ready")
         self.loaded.emit(loaded_images)
