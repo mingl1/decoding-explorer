@@ -2,7 +2,7 @@
 import os
 import sys
 import warnings
-from typing import List
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -699,7 +699,12 @@ class MainWindow(QMainWindow):
 
         # Open alignment preview dialog in edit mode
         preview_dialog = AlignmentPreviewDialog(
-            target_image, moving_images, can_edit=True, can_emit=True
+            target_image,
+            moving_images,
+            can_edit=True,
+            can_emit=True,
+            initial_preview_size=2000,
+            initial_checked_indices=[0] if moving_images else [],
         )
 
         # Store assigned files in dialog for later use
@@ -715,7 +720,9 @@ class MainWindow(QMainWindow):
         preview_dialog.exec()
 
     def _on_manual_alignment_complete(
-        self, transformation_matrices: list[np.ndarray], assigned_files: list[FileItem]
+        self,
+        transformation_matrices: list[Optional[np.ndarray]],
+        assigned_files: list[FileItem],
     ):
         """Handle completion of manual alignment."""
         if len(transformation_matrices) != len(assigned_files):
@@ -726,6 +733,9 @@ class MainWindow(QMainWindow):
 
         to_be_updated = []
         for i, file_item in enumerate(assigned_files):
+            transf_matrix = transformation_matrices[i]
+            if transf_matrix is None:
+                continue
             my_f = self.vm.files.get(file_item.path)
             if not my_f:
                 continue
@@ -736,7 +746,6 @@ class MainWindow(QMainWindow):
                 if my_f.working_image is not None
                 else load_image(my_f)
             )
-            transf_matrix = transformation_matrices[i]
 
             # Apply the transformation to all channels
             if len(full_image.shape) == 2:

@@ -1,4 +1,5 @@
 import math
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -13,7 +14,6 @@ from PyQt6.QtGui import (
     QTransform,
 )
 from PyQt6.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QDialog,
     QGraphicsPixmapItem,
@@ -25,7 +25,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QVBoxLayout,
 )
 
@@ -129,15 +128,11 @@ class ZoomableImageView(QGraphicsView):
             and event.modifiers() == Qt.KeyboardModifier.ShiftModifier
         ):
             if self._parent_dialog and self._parent_dialog.can_edit:
-                selected_index = self._parent_dialog.selected_moving_index
-                if 0 <= selected_index < len(self.moving_items):
-                    if self._parent_dialog.visibility_checkboxes[
-                        selected_index
-                    ].isChecked():
-                        self._is_dragging_layer = True
-                        self._drag_start_pos = self.mapToScene(event.pos())
-                        event.accept()
-                        return
+                if self._parent_dialog._get_editable_indices():
+                    self._is_dragging_layer = True
+                    self._drag_start_pos = self.mapToScene(event.pos())
+                    event.accept()
+                    return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -147,16 +142,15 @@ class ZoomableImageView(QGraphicsView):
             delta = current_pos - self._drag_start_pos
 
             if self._parent_dialog:
-                selected_index = self._parent_dialog.selected_moving_index
-                if 0 <= selected_index < len(self.moving_items):
+                for selected_index in self._parent_dialog._get_editable_indices():
+                    if not (0 <= selected_index < len(self.moving_items)):
+                        continue
                     item = self.moving_items[selected_index]
                     transform = item.transform()
 
-                    # Extract current translation and add delta
                     current_dx = transform.dx()
                     current_dy = transform.dy()
 
-                    # Create new transform with updated translation, preserving rotation/scale
                     new_transform = QTransform(
                         transform.m11(),
                         transform.m12(),
@@ -166,7 +160,7 @@ class ZoomableImageView(QGraphicsView):
                         current_dy + delta.y(),
                     )
                     item.setTransform(new_transform)
-                    self._parent_dialog.update_offset_label()
+                self._parent_dialog.update_offset_label()
 
             self._drag_start_pos = current_pos
             event.accept()
@@ -193,22 +187,79 @@ class AlignmentPreviewDialog(QDialog):
         moving_images: list[np.ndarray],
         can_edit: bool = False,
         can_emit: bool = False,
+        initial_preview_size: Optional[int] = None,
+        initial_checked_indices: Optional[list[int]] = None,
     ):
         super().__init__(None)
 
-        self.target_image = target_image.copy()
-        self.moving_images = [img.copy() for img in moving_images]
-        self.original_moving_images = [img.copy() for img in moving_images]
+        self.full_target_image = target_image.copy()
+        self.full_moving_images = [img.copy() for img in moving_images]
+        self.max_preview_size = self._compute_max_preview_size()
+        self.preview_size = self._clamp_preview_size(initial_preview_size)
+        self.target_image = self._crop_to_preview_size(self.full_target_image)
+        self.moving_images = [
+            self._crop_to_preview_size(img) for img in self.full_moving_images
+        ]
+        self.original_moving_images = [img.copy() for img in self.moving_images]
         self.can_edit = can_edit
         self.can_emit = can_emit
+        self.initial_checked_indices = (
+            set(initial_checked_indices) if initial_checked_indices is not None else None
+        )
         self.adjust_contrast = True
         self.result_accepted = False
-        self.selected_moving_index = 0 if moving_images else -1
         self.move_step = 1
 
         self._setup_ui()
         self.create_direct_overlay()
         self.image_view.mouseDoubleClickEvent = self.reset_zoom
+
+    def _image_hw(self, image: np.ndarray) -> tuple[int, int]:
+        if image.ndim < 2:
+            return (1, 1)
+        return (int(image.shape[-2]), int(image.shape[-1]))
+
+    def _compute_max_preview_size(self) -> int:
+        sizes = []
+        target_h, target_w = self._image_hw(self.full_target_image)
+        sizes.extend([target_h, target_w])
+        for img in self.full_moving_images:
+            h, w = self._image_hw(img)
+            sizes.extend([h, w])
+        if not sizes:
+            return 1
+        return max(1, min(sizes))
+
+    def _clamp_preview_size(self, preview_size: Optional[int]) -> int:
+        if preview_size is None:
+            return self.max_preview_size
+        return max(1, min(int(preview_size), self.max_preview_size))
+
+    def _crop_to_preview_size(self, image: np.ndarray) -> np.ndarray:
+        if image.ndim < 2:
+            return image.copy()
+        return image[..., : self.preview_size, : self.preview_size].copy()
+
+    def _apply_preview_size(self, preview_size: int):
+        self.preview_size = self._clamp_preview_size(preview_size)
+        self.target_image = self._crop_to_preview_size(self.full_target_image)
+        self.moving_images = [
+            self._crop_to_preview_size(img) for img in self.full_moving_images
+        ]
+        self.original_moving_images = [img.copy() for img in self.moving_images]
+
+    def _build_preview_label_text(self) -> str:
+        instruction_text = (
+            "Arrow keys/Inputs: move checked layers, Shift+Drag: move checked layers, Mouse wheel: zoom, Drag: pan, Double-click: reset view"
+            if self.can_edit
+            else "Mouse wheel: zoom, Drag: pan, Double-click: reset view"
+        )
+        if not self.can_edit:
+            return f"Red = Target, Other colors = Aligned | {instruction_text}"
+        return (
+            f"Red = Target, Other colors = Aligned | {instruction_text}\n"
+            f"Hint: Align the top-left region first. Preview starts at {self.preview_size}x{self.preview_size} and can be adjusted up to {self.max_preview_size}."
+        )
 
     def _setup_ui(self):
         self.setWindowTitle("Alignment Preview")
@@ -221,14 +272,7 @@ class AlignmentPreviewDialog(QDialog):
             self._on_contrast_checkbox_changed
         )
 
-        instruction_text = (
-            "Arrow keys/Inputs: move, Shift+Drag: move layer, Mouse wheel: zoom, Drag: pan, Double-click: reset view"
-            if self.can_edit
-            else "Mouse wheel: zoom, Drag: pan, Double-click: reset view"
-        )
-        self.preview_label = QLabel(
-            f"Red = Target, Other colors = Aligned | {instruction_text}"
-        )
+        self.preview_label = QLabel(self._build_preview_label_text())
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.offset_label = QLabel()
@@ -260,26 +304,15 @@ class AlignmentPreviewDialog(QDialog):
         self.visibility_groupbox = QGroupBox("Moving Layers")
         visibility_layout = QVBoxLayout()
         self.visibility_checkboxes = []
-        self.selection_buttons = []
-        self.button_group = QButtonGroup(self)
 
         for i in range(len(self.moving_images)):
             layer_layout = QHBoxLayout()
 
-            if self.can_edit:
-                radio = QRadioButton()
-                radio.setChecked(i == self.selected_moving_index)
-                radio.toggled.connect(
-                    lambda checked, index=i: self._on_layer_selected(index)
-                    if checked
-                    else None
-                )
-                self.selection_buttons.append(radio)
-                self.button_group.addButton(radio)
-                layer_layout.addWidget(radio)
-
             checkbox = QCheckBox(f"Moving Image {i + 1}")
-            checkbox.setChecked(True)
+            if self.initial_checked_indices is None:
+                checkbox.setChecked(True)
+            else:
+                checkbox.setChecked(i in self.initial_checked_indices)
             checkbox.stateChanged.connect(
                 lambda state, index=i: self._on_visibility_changed(index, state)
             )
@@ -301,27 +334,40 @@ class AlignmentPreviewDialog(QDialog):
     def _on_contrast_checkbox_changed(self, state):
         self.adjust_contrast = self.enhance_contrast_checkbox.isChecked()
         self.create_direct_overlay()
+        for i, item in enumerate(self.image_view.moving_items):
+            item.setVisible(self.visibility_checkboxes[i].isChecked())
 
-    def _on_layer_selected(self, index: int):
-        """Called when a different moving layer is selected for editing."""
-        self.selected_moving_index = index
-        self.update_offset_label()
+    def _get_editable_indices(self) -> list[int]:
+        return [
+            i for i, checkbox in enumerate(self.visibility_checkboxes) if checkbox.isChecked()
+        ]
+
+    def _has_identity_transform(self, transform: QTransform) -> bool:
+        matrix = transform_to_matrix(transform)
+        identity = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+        return bool(np.allclose(matrix, identity, atol=1e-6))
 
     def _on_visibility_changed(self, index: int, state):
         """Called when a moving layer visibility checkbox is toggled."""
         visible = state == Qt.CheckState.Checked.value
         self.image_view.toggle_moving_item_visibility(index, visible)
-
-        # If editing is enabled and this layer is hidden, deselect it
-        if self.can_edit and not visible and index == self.selected_moving_index:
-            # Try to select another visible layer
-            for i in range(len(self.moving_images)):
-                if i != index and self.visibility_checkboxes[i].isChecked():
-                    self.selection_buttons[i].setChecked(True)
-                    break
+        self.update_offset_label()
 
     def _setup_editable_controls(self):
         """Create UI controls for when manual editing is enabled."""
+        preview_group = QGroupBox("Preview (Top-Left Crop)")
+        preview_layout = QHBoxLayout()
+        self.preview_size_input = QLineEdit(str(self.preview_size))
+        self.preview_size_input.setValidator(QIntValidator(1, self.max_preview_size))
+        self.preview_size_input.setFixedWidth(80)
+        self.apply_preview_size_button = QPushButton("Apply")
+        self.apply_preview_size_button.clicked.connect(self.apply_preview_size)
+        preview_layout.addWidget(QLabel("Size:"))
+        preview_layout.addWidget(self.preview_size_input)
+        preview_layout.addWidget(QLabel(f"(max {self.max_preview_size})"))
+        preview_layout.addWidget(self.apply_preview_size_button)
+        preview_group.setLayout(preview_layout)
+
         trans_group = QGroupBox("Translate (Display Pixels)")
         trans_layout = QHBoxLayout()
         int_validator = NullableIntValidator(-99999, 99999)
@@ -379,6 +425,7 @@ class AlignmentPreviewDialog(QDialog):
         self.reset_button = QPushButton("Reset Transformations")
         self.reset_button.clicked.connect(self.reset_transformations)
 
+        self.control_layout.addWidget(preview_group)
         self.control_layout.addWidget(trans_group)
         self.control_layout.addWidget(rot_group)
         self.control_layout.addWidget(scale_group)
@@ -386,6 +433,44 @@ class AlignmentPreviewDialog(QDialog):
         self.control_layout.addStretch()
         self.control_layout.addWidget(self.reset_button)
         self._setup_confirm_cancel_buttons()
+
+    def apply_preview_size(self):
+        if not self.preview_size_input.text():
+            return
+
+        try:
+            new_size = int(self.preview_size_input.text())
+        except ValueError:
+            QMessageBox.warning(
+                self, "Invalid Input", "Please enter a valid integer preview size."
+            )
+            return
+
+        clamped_size = self._clamp_preview_size(new_size)
+        if clamped_size != new_size:
+            self.preview_size_input.setText(str(clamped_size))
+            QMessageBox.information(
+                self,
+                "Preview Size Adjusted",
+                f"Preview size was adjusted to {clamped_size} (max {self.max_preview_size}).",
+            )
+        if clamped_size == self.preview_size:
+            return
+
+        saved_transforms = [item.transform() for item in self.image_view.moving_items]
+        saved_visibility = [checkbox.isChecked() for checkbox in self.visibility_checkboxes]
+        self._apply_preview_size(clamped_size)
+        self.create_direct_overlay()
+
+        for i, item in enumerate(self.image_view.moving_items):
+            if i < len(saved_transforms):
+                item.setTransform(saved_transforms[i])
+            if i < len(saved_visibility):
+                item.setVisible(saved_visibility[i])
+
+        self.preview_size_input.setText(str(clamped_size))
+        self.preview_label.setText(self._build_preview_label_text())
+        self.update_offset_label()
 
     def _setup_confirm_cancel_buttons(self):
         self.confirm_button = QPushButton("Confirm Alignment")
@@ -405,17 +490,11 @@ class AlignmentPreviewDialog(QDialog):
         self.button_layout.addStretch()
 
     def apply_manual_translation(self):
-        """Applies translation based on the dx/dy input fields to selected moving image."""
-        if self.selected_moving_index < 0 or self.selected_moving_index >= len(
-            self.moving_images
-        ):
-            return
-
-        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+        """Applies translation based on the dx/dy input fields to checked moving images."""
+        editable_indices = self._get_editable_indices()
+        if not editable_indices:
             QMessageBox.warning(
-                self,
-                "Layer Hidden",
-                "Cannot edit a hidden layer. Please make the layer visible first.",
+                self, "No Layer Selected", "Check at least one moving layer to edit."
             )
             return
 
@@ -439,20 +518,14 @@ class AlignmentPreviewDialog(QDialog):
         if dx == 0 and dy == 0:
             return
 
-        self.move_aligned_image(dx, dy)
+        self.move_aligned_images(dx, dy)
 
     def apply_rotation(self):
-        """Apply rotation to selected moving image."""
-        if self.selected_moving_index < 0 or self.selected_moving_index >= len(
-            self.moving_images
-        ):
-            return
-
-        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+        """Apply rotation to checked moving images."""
+        editable_indices = self._get_editable_indices()
+        if not editable_indices:
             QMessageBox.warning(
-                self,
-                "Layer Hidden",
-                "Cannot edit a hidden layer. Please make the layer visible first.",
+                self, "No Layer Selected", "Check at least one moving layer to edit."
             )
             return
 
@@ -461,16 +534,17 @@ class AlignmentPreviewDialog(QDialog):
 
         try:
             angle = float(self.rotation_input.text())
-            item = self.image_view.moving_items[self.selected_moving_index]
-            transform = item.transform()
-            center = item.boundingRect().center()
+            for idx in editable_indices:
+                item = self.image_view.moving_items[idx]
+                transform = item.transform()
+                center = item.boundingRect().center()
 
-            t = QTransform()
-            t.translate(center.x(), center.y())
-            t.rotate(angle)
-            t.translate(-center.x(), -center.y())
+                t = QTransform()
+                t.translate(center.x(), center.y())
+                t.rotate(angle)
+                t.translate(-center.x(), -center.y())
 
-            item.setTransform(transform * t)
+                item.setTransform(transform * t)
             self.update_offset_label()
         except ValueError:
             QMessageBox.warning(
@@ -478,17 +552,11 @@ class AlignmentPreviewDialog(QDialog):
             )
 
     def apply_scale(self):
-        """Apply scale to selected moving image."""
-        if self.selected_moving_index < 0 or self.selected_moving_index >= len(
-            self.moving_images
-        ):
-            return
-
-        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+        """Apply scale to checked moving images."""
+        editable_indices = self._get_editable_indices()
+        if not editable_indices:
             QMessageBox.warning(
-                self,
-                "Layer Hidden",
-                "Cannot edit a hidden layer. Please make the layer visible first.",
+                self, "No Layer Selected", "Check at least one moving layer to edit."
             )
             return
 
@@ -497,16 +565,17 @@ class AlignmentPreviewDialog(QDialog):
 
         try:
             scale = float(self.scale_input.text())
-            item = self.image_view.moving_items[self.selected_moving_index]
-            transform = item.transform()
-            center = item.boundingRect().center()
+            for idx in editable_indices:
+                item = self.image_view.moving_items[idx]
+                transform = item.transform()
+                center = item.boundingRect().center()
 
-            t = QTransform()
-            t.translate(center.x(), center.y())
-            t.scale(scale, scale)
-            t.translate(-center.x(), -center.y())
+                t = QTransform()
+                t.translate(center.x(), center.y())
+                t.scale(scale, scale)
+                t.translate(-center.x(), -center.y())
 
-            item.setTransform(transform * t)
+                item.setTransform(transform * t)
             self.update_offset_label()
         except ValueError:
             QMessageBox.warning(
@@ -514,99 +583,92 @@ class AlignmentPreviewDialog(QDialog):
             )
 
     def apply_flip_horizontal(self):
-        """Apply horizontal flip to selected moving image."""
-        if self.selected_moving_index < 0 or self.selected_moving_index >= len(
-            self.moving_images
-        ):
-            return
-
-        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+        """Apply horizontal flip to checked moving images."""
+        editable_indices = self._get_editable_indices()
+        if not editable_indices:
             QMessageBox.warning(
-                self,
-                "Layer Hidden",
-                "Cannot edit a hidden layer. Please make the layer visible first.",
+                self, "No Layer Selected", "Check at least one moving layer to edit."
             )
             return
 
-        item = self.image_view.moving_items[self.selected_moving_index]
-        transform = item.transform()
-        center = item.boundingRect().center()
+        for idx in editable_indices:
+            item = self.image_view.moving_items[idx]
+            transform = item.transform()
+            center = item.boundingRect().center()
 
-        t = QTransform()
-        t.translate(center.x(), center.y())
-        t.scale(-1, 1)
-        t.translate(-center.x(), -center.y())
+            t = QTransform()
+            t.translate(center.x(), center.y())
+            t.scale(-1, 1)
+            t.translate(-center.x(), -center.y())
 
-        item.setTransform(transform * t)
+            item.setTransform(transform * t)
         self.update_offset_label()
 
     def apply_flip_vertical(self):
-        """Apply vertical flip to selected moving image."""
-        if self.selected_moving_index < 0 or self.selected_moving_index >= len(
-            self.moving_images
-        ):
-            return
-
-        if not self.visibility_checkboxes[self.selected_moving_index].isChecked():
+        """Apply vertical flip to checked moving images."""
+        editable_indices = self._get_editable_indices()
+        if not editable_indices:
             QMessageBox.warning(
-                self,
-                "Layer Hidden",
-                "Cannot edit a hidden layer. Please make the layer visible first.",
+                self, "No Layer Selected", "Check at least one moving layer to edit."
             )
             return
 
-        item = self.image_view.moving_items[self.selected_moving_index]
-        transform = item.transform()
-        center = item.boundingRect().center()
+        for idx in editable_indices:
+            item = self.image_view.moving_items[idx]
+            transform = item.transform()
+            center = item.boundingRect().center()
 
-        t = QTransform()
-        t.translate(center.x(), center.y())
-        t.scale(1, -1)
-        t.translate(-center.x(), -center.y())
+            t = QTransform()
+            t.translate(center.x(), center.y())
+            t.scale(1, -1)
+            t.translate(-center.x(), -center.y())
 
-        item.setTransform(transform * t)
+            item.setTransform(transform * t)
         self.update_offset_label()
 
-    def move_aligned_image(self, dx, dy):
-        """Move the selected moving image by dx, dy pixels in screen coordinates."""
-        if self.selected_moving_index < 0 or self.selected_moving_index >= len(
-            self.moving_images
-        ):
+    def move_aligned_images(self, dx, dy):
+        """Move checked moving images by dx, dy pixels in screen coordinates."""
+        editable_indices = self._get_editable_indices()
+        if not editable_indices:
             return
 
-        item = self.image_view.moving_items[self.selected_moving_index]
-        transform = item.transform()
-
-        # Extract current translation and add delta
-        current_dx = transform.dx()
-        current_dy = transform.dy()
-
-        # Create new transform with updated translation, preserving rotation/scale
-        new_transform = QTransform(
-            transform.m11(),
-            transform.m12(),
-            transform.m21(),
-            transform.m22(),
-            current_dx + dx,
-            current_dy + dy,
-        )
-        item.setTransform(new_transform)
+        for idx in editable_indices:
+            item = self.image_view.moving_items[idx]
+            transform = item.transform()
+            current_dx = transform.dx()
+            current_dy = transform.dy()
+            new_transform = QTransform(
+                transform.m11(),
+                transform.m12(),
+                transform.m21(),
+                transform.m22(),
+                current_dx + dx,
+                current_dy + dy,
+            )
+            item.setTransform(new_transform)
         self.update_offset_label()
 
     def update_offset_label(self):
-        """Update the label showing the current transformation matrix of selected moving image."""
-        if self.selected_moving_index < 0 or self.selected_moving_index >= len(
-            self.image_view.moving_items
-        ):
-            self.offset_label.setText("No layer selected")
+        """Update the label showing the current transformation matrix of checked moving images."""
+        editable_indices = self._get_editable_indices()
+        if not editable_indices:
+            self.offset_label.setText("No checked layer")
             return
 
-        item = self.image_view.moving_items[self.selected_moving_index]
-        transform_matrix = item.transform()
-        transform_text = readable_matrix_string(transform_to_matrix(transform_matrix))
-        self.offset_label.setText(
-            f"Layer {self.selected_moving_index + 1}: {transform_text}"
-        )
+        label_lines = []
+        for idx in editable_indices:
+            if idx >= len(self.image_view.moving_items):
+                continue
+            item = self.image_view.moving_items[idx]
+            transform_matrix = item.transform()
+            transform_text = readable_matrix_string(
+                transform_to_matrix(transform_matrix)
+            )
+            label_lines.append(f"Layer {idx + 1}: {transform_text}")
+        if not label_lines:
+            self.offset_label.setText("No checked layer")
+            return
+        self.offset_label.setText(" | ".join(label_lines))
 
     def reset_transformations(self):
         """Reset all transformations on all moving images."""
@@ -617,9 +679,29 @@ class AlignmentPreviewDialog(QDialog):
 
     def accept_alignment(self):
         """Accept the alignment and emit transformed images if editing was enabled."""
-        self.result_accepted = True
-
         if self.can_edit and self.can_emit:
+            unchecked_with_changes = []
+            for i, item in enumerate(self.image_view.moving_items):
+                if self.visibility_checkboxes[i].isChecked():
+                    continue
+                if not self._has_identity_transform(item.transform()):
+                    unchecked_with_changes.append(i + 1)
+
+            if unchecked_with_changes:
+                layer_text = ", ".join(str(idx) for idx in unchecked_with_changes)
+                reply = QMessageBox.question(
+                    self,
+                    "Unchecked Layers Have Edits",
+                    (
+                        f"Layer(s) {layer_text} are unchecked and have unapplied edits. "
+                        "Their transforms will not be saved. Continue?"
+                    ),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+
             # Apply transformations to original images and emit them
             transformed_images = []
             transformation_matrices_list = []
@@ -627,6 +709,10 @@ class AlignmentPreviewDialog(QDialog):
             h, w = self.target_image.shape[:2]
 
             for i, item in enumerate(self.image_view.moving_items):
+                if not self.visibility_checkboxes[i].isChecked():
+                    transformation_matrices_list.append(None)
+                    transformed_images.append(self.original_moving_images[i].copy())
+                    continue
                 final_transformation = item.transform()
                 transf_matrix = transform_to_matrix(final_transformation)
                 transformation_matrices_list.append(transf_matrix)
@@ -639,6 +725,7 @@ class AlignmentPreviewDialog(QDialog):
             self.transformation_matrices.emit(transformation_matrices_list)
             self.moving_images_changed.emit(transformed_images)
 
+        self.result_accepted = True
         self.accept()
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -657,11 +744,7 @@ class AlignmentPreviewDialog(QDialog):
             super().keyPressEvent(event)
             return
 
-        # Check if selected layer is visible
-        if (
-            self.selected_moving_index >= 0
-            and not self.visibility_checkboxes[self.selected_moving_index].isChecked()
-        ):
+        if not self._get_editable_indices():
             super().keyPressEvent(event)
             return
 
@@ -673,7 +756,7 @@ class AlignmentPreviewDialog(QDialog):
         }
 
         if event.key() in key_map:
-            self.move_aligned_image(*key_map[event.key()])
+            self.move_aligned_images(*key_map[event.key()])
         else:
             super().keyPressEvent(event)
 
