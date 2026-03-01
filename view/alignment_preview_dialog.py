@@ -189,6 +189,7 @@ class AlignmentPreviewDialog(QDialog):
         can_emit: bool = False,
         initial_preview_size: Optional[int] = None,
         initial_checked_indices: Optional[list[int]] = None,
+        layer_labels: Optional[list[str]] = None,
     ):
         super().__init__(None)
 
@@ -206,6 +207,12 @@ class AlignmentPreviewDialog(QDialog):
         self.initial_checked_indices = (
             set(initial_checked_indices) if initial_checked_indices is not None else None
         )
+        if layer_labels is not None and len(layer_labels) == len(self.moving_images):
+            self.layer_labels = list(layer_labels)
+        else:
+            self.layer_labels = [
+                f"Moving Image {i + 1}" for i in range(len(self.moving_images))
+            ]
         self.adjust_contrast = True
         self.result_accepted = False
         self.move_step = 1
@@ -308,7 +315,7 @@ class AlignmentPreviewDialog(QDialog):
         for i in range(len(self.moving_images)):
             layer_layout = QHBoxLayout()
 
-            checkbox = QCheckBox(f"Moving Image {i + 1}")
+            checkbox = QCheckBox(self.layer_labels[i])
             if self.initial_checked_indices is None:
                 checkbox.setChecked(True)
             else:
@@ -688,12 +695,17 @@ class AlignmentPreviewDialog(QDialog):
                     unchecked_with_changes.append(i + 1)
 
             if unchecked_with_changes:
-                layer_text = ", ".join(str(idx) for idx in unchecked_with_changes)
+                layer_text = ", ".join(
+                    self.layer_labels[idx - 1]
+                    if 0 <= idx - 1 < len(self.layer_labels)
+                    else f"Layer {idx}"
+                    for idx in unchecked_with_changes
+                )
                 reply = QMessageBox.question(
                     self,
                     "Unchecked Layers Have Edits",
                     (
-                        f"Layer(s) {layer_text} are unchecked and have unapplied edits. "
+                        f"{layer_text} are unchecked and have unapplied edits. "
                         "Their transforms will not be saved. Continue?"
                     ),
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,

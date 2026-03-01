@@ -57,6 +57,8 @@ class MainWindow(QMainWindow):
             self._grip_size = 8
 
         self.vm = FileManagerVM()
+        self._manual_align_assigned_files: list[FileItem] = []
+        self._manual_align_layer_labels: list[str] = []
 
         self.file_table_widget = FileTableWidget(
             file_dropped_callback=self.handle_dropped_paths, vm=self.vm
@@ -110,6 +112,11 @@ class MainWindow(QMainWindow):
         self.vm.file_list_updated.connect(self.update_file_list)
         self.vm.file_information_update.connect(self.update_files_view)
         self.vm.align_progress.connect(self.update_progress)
+        self.vm.manual_align_preview_progress.connect(self.update_progress)
+        self.vm.manual_align_preview_loaded.connect(
+            self._on_manual_align_preview_loaded
+        )
+        self.vm.manual_align_preview_error.connect(self._on_manual_align_preview_error)
         self.vm.align_error.connect(self.show_error)
         self.vm.align_complete.connect(self.alignment_finished)
         self.vm.export_progress.connect(self.update_export_progress)
@@ -510,6 +517,12 @@ class MainWindow(QMainWindow):
 
     def handle_metadata_applied(self, new_metadata: dict):
         dataset_files = self.vm.get_dataset_files_ordered()
+        protein_file = self.vm.get_dataset_protein_file()
+        if (
+            protein_file is not None
+            and protein_file.path not in {file_item.path for file_item in dataset_files}
+        ):
+            dataset_files.append(protein_file)
         if len(dataset_files) == 0:
             dataset_files = self.get_selected_files()
         self.vm.apply_metadata(new_metadata, dataset_files)
@@ -667,37 +680,44 @@ class MainWindow(QMainWindow):
             return
         reference_item = assignments[0]
 
-        # Get brightfield image from reference
-        target_image = self.vm._get_brightfield_image(reference_item)
-        if target_image is None:
-            self.show_error("Could not load reference image for preview.")
-            return
-
         assigned_pairs = [
-            (cycle_num, file_item)
+            (f"Cycle {cycle_num + 1}", file_item)
             for cycle_num, file_item in sorted(assignments.items(), key=lambda x: x[0])
             if cycle_num != 0
         ]
         protein_file = self.vm.get_dataset_protein_file()
         if protein_file is not None:
-            assigned_pairs.append((max(assignments.keys()) + 1, protein_file))
+            assigned_pairs.append(("Protein", protein_file))
         if not assigned_pairs:
             self.show_error("Assign at least one cycle besides the reference.")
             return
 
-        moving_images = []
-        assigned_files = []
-        for cycle_num, file_item in assigned_pairs:
-            moving_img = self.vm._get_brightfield_image(file_item)
-            if moving_img is None:
-                self.show_error(
-                    f"Could not load image for {os.path.basename(file_item.path)}"
-                )
-                return
-            moving_images.append(moving_img)
-            assigned_files.append(file_item)
+        self._manual_align_assigned_files = [file_item for _, file_item in assigned_pairs]
+        self._manual_align_layer_labels = [label for label, _ in assigned_pairs]
+        self.progress_bar.setVisible(True)
+        self.status_label.setVisible(True)
+        self.cancel_button.setVisible(True)
+        self.cancel_button.clicked.disconnect()
+        self.cancel_button.clicked.connect(self.cancel_manual_align_preview_loading)
+        self.vm.load_manual_align_preview_images(
+            reference_item, self._manual_align_assigned_files
+        )
 
-        # Open alignment preview dialog in edit mode
+    def _on_manual_align_preview_loaded(self, loaded_images: object):
+        expected_count = 1 + len(self._manual_align_assigned_files)
+        if not isinstance(loaded_images, list) or len(loaded_images) != expected_count:
+            self._restore_cancel_to_alignment()
+            self.show_error("Could not load all images for manual alignment preview.")
+            self._manual_align_assigned_files = []
+            self._manual_align_layer_labels = []
+            return
+
+        target_image = loaded_images[0]
+        moving_images = loaded_images[1:]
+        assigned_files = list(self._manual_align_assigned_files)
+        layer_labels = list(self._manual_align_layer_labels)
+        self._restore_cancel_to_alignment()
+
         preview_dialog = AlignmentPreviewDialog(
             target_image,
             moving_images,
@@ -705,19 +725,32 @@ class MainWindow(QMainWindow):
             can_emit=True,
             initial_preview_size=2000,
             initial_checked_indices=[0] if moving_images else [],
+            layer_labels=layer_labels,
         )
-
-        # Store assigned files in dialog for later use
         preview_dialog.assigned_files = assigned_files
-
-        # Connect signals to handle transformed results
         preview_dialog.transformation_matrices.connect(
             lambda matrices: self._on_manual_alignment_complete(
                 matrices, assigned_files
             )
         )
-
         preview_dialog.exec()
+        self._manual_align_assigned_files = []
+        self._manual_align_layer_labels = []
+
+    def _on_manual_align_preview_error(self, message: str):
+        self._restore_cancel_to_alignment()
+        self._manual_align_assigned_files = []
+        self._manual_align_layer_labels = []
+        if message:
+            self.show_error(message)
+
+    def _restore_cancel_to_alignment(self):
+        self.status_label.setVisible(False)
+        self.progress_bar.setVisible(False)
+        self.cancel_button.setVisible(False)
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.clicked.disconnect()
+        self.cancel_button.clicked.connect(self.cancel_alignment)
 
     def _on_manual_alignment_complete(
         self,
@@ -972,6 +1005,12 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.cancel_button.setVisible(False)
         self.cancel_button.setEnabled(True)
+
+    def cancel_manual_align_preview_loading(self):
+        self.vm.cancel_manual_align_preview_loading()
+        self._manual_align_assigned_files = []
+        self._manual_align_layer_labels = []
+        self._restore_cancel_to_alignment()
 
     def cancel_bead_generation(self):
         self.vm.cancel_bead_generation()
