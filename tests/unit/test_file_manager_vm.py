@@ -446,6 +446,8 @@ class TestFileManagerVM:
         vm.files[cy2_item.path] = cy2_item
         vm.files[protein_item.path] = protein_item
         vm.reference_item = ref_item
+        vm.dataset_cycle_assignments = {0: ref_item, 1: cy1_item, 2: cy2_item}
+        vm.dataset_protein_file = protein_item
 
         aligned_images = [
             np.full((2, 32, 32), 11, dtype=np.uint16),
@@ -457,8 +459,14 @@ class TestFileManagerVM:
         dialog.exec.return_value = QDialog.DialogCode.Accepted
 
         with patch.object(vm, "_get_brightfield_image", return_value=np.zeros((32, 32), dtype=np.uint16)), \
-             patch("viewmodel.file_manager_vm.AlignmentPreviewDialog", return_value=dialog):
+             patch("viewmodel.file_manager_vm.AlignmentPreviewDialog", return_value=dialog) as mock_dialog:
             vm._on_alignment_complete(aligned_images, [cy1_item, cy2_item, protein_item])
+
+        assert mock_dialog.call_args.kwargs["layer_labels"] == [
+            "Cycle 2",
+            "Cycle 3",
+            "Protein",
+        ]
 
         for expected, file_item in zip(aligned_images, [cy1_item, cy2_item, protein_item]):
             saved = vm.files[file_item.path]
