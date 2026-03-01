@@ -82,46 +82,97 @@ def resource_path(relative_path):
 
 
 def shading_correction(bright_layer_array):
-    # Load an image
-    # image = cv2.imread(filepath)
+    input_array = np.asarray(bright_layer_array)
+    print(
+        "[shading_correction] start "
+        f"shape={input_array.shape} dtype={input_array.dtype} ndim={input_array.ndim}"
+    )
+    if input_array.size > 0:
+        print(
+            "[shading_correction] input_range "
+            f"min={np.min(input_array)} max={np.max(input_array)}"
+        )
+    else:
+        print("[shading_correction] input is empty")
+
     bright_layer_array = cv2.cvtColor(
         bright_layer_array, cv2.COLOR_GRAY2BGR
     )  # convert into RGB image
+    print(
+        "[shading_correction] after_gray2bgr "
+        f"shape={bright_layer_array.shape} dtype={bright_layer_array.dtype}"
+    )
     bright_layer_array = (bright_layer_array / 255).astype(
         np.uint8
     )  # convert from 16 uint to 8 bit
+    if bright_layer_array.size > 0:
+        print(
+            "[shading_correction] after_uint8_scale "
+            f"min={np.min(bright_layer_array)} max={np.max(bright_layer_array)}"
+        )
     image = bright_layer_array
     pixel_size = 7  # this is the size of little square to rescale the intensity
     tile_size_n = int((image.shape[0]) / pixel_size)
+    print(
+        "[shading_correction] clahe_params "
+        f"pixel_size={pixel_size} tile_size_n={tile_size_n} image_shape={image.shape}"
+    )
 
     def adjust_local_contrast(
         image, clip_limit=2.0, tile_size=(tile_size_n, tile_size_n)
     ):
-        # Convert image to LAB color space
-        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-
-        # Split the LAB image into L, A, and B channels
-        l_channel, a_channel, b_channel = cv2.split(lab)
-
-        # Calculate the percentile values for the L channel
-        min_val, max_val = np.percentile(l_channel, (0, 100))
-
-        # Scale the values of the L channel to 0-255 range
-        l_channel_scaled = np.array(
-            255 * (l_channel - min_val) / (max_val - min_val), dtype=np.uint8
+        print(
+            "[shading_correction] adjust_local_contrast "
+            f"clip_limit={clip_limit} tile_size={tile_size} "
+            f"image_shape={image.shape} image_dtype={image.dtype}"
         )
+        try:
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
 
-        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to the scaled L channel
-        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_size)
-        l_channel_clahe = clahe.apply(l_channel_scaled)
+            l_channel, a_channel, b_channel = cv2.split(lab)
 
-        # Merge the adjusted L channel with the original A and B channels
-        lab = cv2.merge((l_channel_clahe, a_channel, b_channel))
+            min_val, max_val = np.percentile(l_channel, (0, 100))
+            print(
+                "[shading_correction] l_channel_percentiles "
+                f"min={min_val} max={max_val} span={max_val - min_val}"
+            )
 
-        # Convert back to BGR color space
-        result = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            l_channel_scaled = np.array(
+                255 * (l_channel - min_val) / (max_val - min_val), dtype=np.uint8
+            )
+            if l_channel_scaled.size > 0:
+                print(
+                    "[shading_correction] l_channel_scaled_range "
+                    f"min={np.min(l_channel_scaled)} max={np.max(l_channel_scaled)}"
+                )
 
-        return result
+            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_size)
+            l_channel_clahe = clahe.apply(l_channel_scaled)
+            if l_channel_clahe.size > 0:
+                print(
+                    "[shading_correction] l_channel_clahe_range "
+                    f"min={np.min(l_channel_clahe)} max={np.max(l_channel_clahe)}"
+                )
+
+            lab = cv2.merge((l_channel_clahe, a_channel, b_channel))
+
+            result = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            print(
+                "[shading_correction] adjust_local_contrast_done "
+                f"result_shape={result.shape} result_dtype={result.dtype}"
+            )
+
+            return result
+        except Exception as e:
+            print(
+                "[shading_correction] adjust_local_contrast_error "
+                f"type={type(e).__name__} message={e}"
+            )
+            print(
+                "[shading_correction] adjust_local_contrast_context "
+                f"tile_size={tile_size} image_shape={image.shape}"
+            )
+            raise
 
     # Adjust local contrast
     adjusted_image = adjust_local_contrast(image)
@@ -130,6 +181,14 @@ def shading_correction(bright_layer_array):
     converted_image = cv2.cvtColor(adjusted_image, cv2.COLOR_BGR2GRAY)
     converted_image = converted_image.astype(np.uint16)
     converted_image = to_uint16(converted_image * 256)
+    if converted_image.size > 0:
+        print(
+            "[shading_correction] done "
+            f"shape={converted_image.shape} dtype={converted_image.dtype} "
+            f"min={np.min(converted_image)} max={np.max(converted_image)}"
+        )
+    else:
+        print("[shading_correction] done with empty output")
 
     # Display original and adjusted images
     # cv2.imshow('Original', image)
@@ -145,8 +204,10 @@ def get_memory_usage_mb():
     mem_bytes = process.memory_info().rss  # Resident Set Size
     return mem_bytes / (1024 * 1024)  # MB
 
+
 import itertools
 import math
+
 
 def get_std_dev(numbers):
     """Calculates the standard deviation of a list of numbers."""
@@ -156,6 +217,7 @@ def get_std_dev(numbers):
     variance = sum([(x - mean) ** 2 for x in numbers]) / len(numbers)
     return math.sqrt(variance)
 
+
 def find_min_std_partition(numbers):
     """
     Finds the binary grouping of numbers that minimizes the weighted
@@ -163,7 +225,7 @@ def find_min_std_partition(numbers):
     """
     n = len(numbers)
 
-    min_total_std = float('inf')
+    min_total_std = float("inf")
     best_groups = ([], [])
 
     # Iterate through all possible sizes for the first group (from 1 to n-1)
@@ -171,10 +233,10 @@ def find_min_std_partition(numbers):
         # Generate all unique combinations of size k for the first group
         for group1_tuple in itertools.combinations(numbers, k):
             group1 = list(group1_tuple)
-            
+
             # The second group contains all numbers not in the first group
             group2 = [num for num in numbers if num not in group1]
-            
+
             # Special handling for duplicate numbers
             if len(group1) + len(group2) != n:
                 original_copy = list(numbers)
@@ -189,16 +251,17 @@ def find_min_std_partition(numbers):
             # Calculate standard deviations for each group
             std1 = get_std_dev(group1)
             std2 = get_std_dev(group2)
-            
+
             # Calculate the weighted total standard deviation
             total_std = (len(group1) * std1 + len(group2) * std2) / n
-            
+
             # Check if this partition is better than the current best
             if total_std < min_total_std:
                 min_total_std = total_std
                 best_groups = [group1, group2]
 
     return best_groups, min_total_std
+
 
 def calculate_ncc(img1, img2):
     """
