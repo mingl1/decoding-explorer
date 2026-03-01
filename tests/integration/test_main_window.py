@@ -1,6 +1,7 @@
 import os
 from unittest.mock import MagicMock, patch, call
 
+import cv2
 import image_processing
 import numpy as np
 import pytest
@@ -238,6 +239,82 @@ class TestMainWindow:
             cy2_item.path,
             protein_item.path,
         ]
+
+    def test_start_manual_alignment_uses_top_left_preview_default(
+        self, mock_main_window, mock_file_items
+    ):
+        window = mock_main_window
+        ref_item, cy1_item, protein_item = mock_file_items[:3]
+        window.vm.files[ref_item.path] = ref_item
+        window.vm.files[cy1_item.path] = cy1_item
+        window.vm.files[protein_item.path] = protein_item
+        window.vm.reference_item = ref_item
+        window.vm.dataset_cycle_assignments = {0: ref_item, 1: cy1_item}
+        window.vm.dataset_protein_file = protein_item
+        window.vm.dataset_assignment_valid = True
+
+        preview_image = np.zeros((3200, 3200), dtype=np.uint16)
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = True
+
+        with patch.object(window.vm, "_get_brightfield_image", return_value=preview_image), patch(
+            "view.main_window.AlignmentPreviewDialog", return_value=dialog_instance
+        ) as mock_dialog:
+            window.start_manual_alignment()
+
+        mock_dialog.assert_called_once()
+        assert mock_dialog.call_args.kwargs["initial_preview_size"] == 2000
+        assert mock_dialog.call_args.kwargs["initial_checked_indices"] == [0]
+
+    def test_manual_alignment_complete_only_updates_checked_layers(
+        self, mock_main_window
+    ):
+        window = mock_main_window
+
+        cycle2_item = FileItem(path="/tmp/cycle2.tif", status=FileStatus.RAW)
+        hidden_item = FileItem(path="/tmp/hidden_cycle.tif", status=FileStatus.RAW)
+        protein_item = FileItem(path="/tmp/protein.tif", status=FileStatus.RAW)
+
+        cycle2_image = np.arange(16, dtype=np.uint16).reshape(4, 4)
+        hidden_image = np.arange(16, dtype=np.uint16).reshape(4, 4) + 100
+        protein_image = np.arange(16, dtype=np.uint16).reshape(4, 4) + 200
+
+        cycle2_item.working_image = cycle2_image.copy()
+        hidden_item.working_image = hidden_image.copy()
+        protein_item.working_image = protein_image.copy()
+
+        window.vm.files[cycle2_item.path] = cycle2_item
+        window.vm.files[hidden_item.path] = hidden_item
+        window.vm.files[protein_item.path] = protein_item
+
+        cycle2_matrix = np.array([[1, 0, 1], [0, 1, 0]], dtype=np.float32)
+        protein_matrix = np.array([[1, 0, 0], [0, 1, 1]], dtype=np.float32)
+
+        with patch("view.main_window.QMessageBox.information") as mock_info:
+            window._on_manual_alignment_complete(
+                [cycle2_matrix, None, protein_matrix],
+                [cycle2_item, hidden_item, protein_item],
+            )
+
+        expected_cycle2 = cv2.warpAffine(cycle2_image, cycle2_matrix, (4, 4))
+        expected_protein = cv2.warpAffine(protein_image, protein_matrix, (4, 4))
+
+        np.testing.assert_array_equal(
+            window.vm.files[cycle2_item.path].working_image, expected_cycle2
+        )
+        np.testing.assert_array_equal(
+            window.vm.files[protein_item.path].working_image, expected_protein
+        )
+        np.testing.assert_array_equal(
+            window.vm.files[hidden_item.path].working_image, hidden_image
+        )
+
+        assert window.vm.files[cycle2_item.path].status == FileStatus.ALIGNED
+        assert window.vm.files[protein_item.path].status == FileStatus.ALIGNED
+        assert window.vm.files[hidden_item.path].status == FileStatus.RAW
+
+        mock_info.assert_called_once()
+        assert "2 image(s)" in mock_info.call_args.args[2]
 
     def test_assign_cycles_sets_cycle1_as_reference(
         self, mock_main_window, mock_file_items, mocker
