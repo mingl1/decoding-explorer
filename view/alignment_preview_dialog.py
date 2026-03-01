@@ -219,6 +219,7 @@ class AlignmentPreviewDialog(QDialog):
 
         self._setup_ui()
         self.create_direct_overlay()
+        self._sync_moving_item_visibility()
         self.image_view.mouseDoubleClickEvent = self.reset_zoom
 
     def _image_hw(self, image: np.ndarray) -> tuple[int, int]:
@@ -341,7 +342,12 @@ class AlignmentPreviewDialog(QDialog):
     def _on_contrast_checkbox_changed(self, state):
         self.adjust_contrast = self.enhance_contrast_checkbox.isChecked()
         self.create_direct_overlay()
+        self._sync_moving_item_visibility()
+
+    def _sync_moving_item_visibility(self):
         for i, item in enumerate(self.image_view.moving_items):
+            if i >= len(self.visibility_checkboxes):
+                continue
             item.setVisible(self.visibility_checkboxes[i].isChecked())
 
     def _get_editable_indices(self) -> list[int]:
@@ -473,7 +479,9 @@ class AlignmentPreviewDialog(QDialog):
             if i < len(saved_transforms):
                 item.setTransform(saved_transforms[i])
             if i < len(saved_visibility):
-                item.setVisible(saved_visibility[i])
+                self.visibility_checkboxes[i].setChecked(saved_visibility[i])
+
+        self._sync_moving_item_visibility()
 
         self.preview_size_input.setText(str(clamped_size))
         self.preview_label.setText(self._build_preview_label_text())

@@ -108,6 +108,24 @@ class TestAlignmentPreviewDialog:
         assert dialog.visibility_checkboxes[0].isChecked() is True
         assert dialog.visibility_checkboxes[1].isChecked() is False
 
+    def test_manual_dialog_initial_checked_indices_hide_unchecked_layers(self, qapp):
+        target = np.zeros((64, 64), dtype=np.uint16)
+        moving = [
+            np.ones((64, 64), dtype=np.uint16),
+            np.full((64, 64), 2, dtype=np.uint16),
+        ]
+
+        dialog = AlignmentPreviewDialog(
+            target,
+            moving,
+            can_edit=True,
+            initial_checked_indices=[0],
+            initial_preview_size=64,
+        )
+
+        assert dialog.image_view.moving_items[0].isVisible() is True
+        assert dialog.image_view.moving_items[1].isVisible() is False
+
     def test_accept_alignment_warns_when_unchecked_layer_has_edits(self, qapp):
         target = np.zeros((64, 64), dtype=np.uint16)
         moving = [
