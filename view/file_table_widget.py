@@ -300,8 +300,13 @@ class FileTableWidget(QTableWidget):
                     and physical_size_x_item
                     and physical_size_y_item
                     and alignment_channel_item
-                    and filename_item.text() == os.path.basename(file_path)
                 ):
+                    stored_item = filename_item.data(Qt.ItemDataRole.UserRole)
+                    stored_path = (
+                        stored_item.path if isinstance(stored_item, FileItem) else None
+                    )
+                    if stored_path != file_path:
+                        continue
                     is_reference = (
                         self.vm.reference_item
                         and file_item.path == self.vm.reference_item.path
