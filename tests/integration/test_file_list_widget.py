@@ -250,6 +250,37 @@ class TestFileListWidgetShapeUpdate:
         shape_text = widget.item(0, 2).text()
         assert shape_text == "C=5, Y=1024, X=1024"
 
+    def test_update_file_display_uses_full_path_for_duplicate_filenames(
+        self, mock_file_table_widget
+    ):
+        widget = mock_file_table_widget
+        widget.setSortingEnabled(False)
+
+        first_item = FileItem(path="/test/a/protein.tif", status=FileStatus.RAW)
+        first_item.shape = (1, 512, 512)
+        first_item.original_shape = (1, 512, 512)
+        first_item.dtype = "uint16"
+
+        second_item = FileItem(path="/test/b/protein.tif", status=FileStatus.RAW)
+        second_item.shape = (1, 512, 512)
+        second_item.original_shape = (1, 512, 512)
+        second_item.dtype = "uint16"
+
+        widget.add_file_item(first_item)
+        widget.add_file_item(second_item)
+
+        updated_second_item = FileItem(
+            path="/test/b/protein.tif",
+            status=FileStatus.RAW,
+            shape=(1, 256, 256),
+            dtype="uint16",
+        )
+
+        widget.update_file_display([updated_second_item])
+
+        assert widget.item(0, 2).text() == "C=1, Y=512, X=512"
+        assert widget.item(1, 2).text() == "C=1, Y=256, X=256"
+
 
 class TestFileListWidgetMetadataIntegration:
     """Integration tests for metadata updates affecting the FileTableWidget."""

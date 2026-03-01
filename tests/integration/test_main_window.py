@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from model.file_item import FileItem
 from model.status_enum import FileStatus
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QDialog
 
 
@@ -620,6 +621,53 @@ class TestMainWindow:
         mock_apply.assert_called_once_with(
             new_metadata, [reference_item, cycle_item, protein_item]
         )
+
+    def test_handle_metadata_applied_updates_assigned_protein_tiff_shape(
+        self, mock_main_window
+    ):
+        window = mock_main_window
+
+        reference_item = FileItem(path="/test/reference.tif", status=FileStatus.RAW)
+        reference_item.shape = (1, 512, 512)
+        reference_item.original_shape = (1, 512, 512)
+        reference_item.dtype = "uint16"
+
+        cycle_item = FileItem(path="/test/cycle_1.tif", status=FileStatus.RAW)
+        cycle_item.shape = (1, 512, 512)
+        cycle_item.original_shape = (1, 512, 512)
+        cycle_item.dtype = "uint16"
+
+        protein_item = FileItem(path="/test/protein.tif", status=FileStatus.RAW)
+        protein_item.shape = (1, 512, 512)
+        protein_item.original_shape = (1, 512, 512)
+        protein_item.dtype = "uint16"
+
+        for file_item in [reference_item, cycle_item, protein_item]:
+            window.vm.files[file_item.path] = file_item
+        window.update_file_list([reference_item, cycle_item, protein_item])
+
+        window.vm.reference_item = reference_item
+        assert window.vm.set_dataset_cycle_assignments(
+            {0: reference_item, 1: cycle_item},
+            protein_file=protein_item,
+        )
+
+        window.handle_metadata_applied({"max_size": 256})
+
+        assert window.vm.files[protein_item.path].shape == (1, 256, 256)
+
+        protein_row = None
+        for row in range(window.file_table_widget.rowCount()):
+            filename_item = window.file_table_widget.item(row, 0)
+            if filename_item is None:
+                continue
+            row_item = filename_item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(row_item, FileItem) and row_item.path == protein_item.path:
+                protein_row = row
+                break
+
+        assert protein_row is not None
+        assert window.file_table_widget.item(protein_row, 2).text() == "C=1, Y=256, X=256"
 
     def test_minimum_size_set(self, mock_main_window):
         """MainWindow should have minimum size set."""
