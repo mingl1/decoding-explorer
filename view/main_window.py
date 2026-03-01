@@ -292,6 +292,12 @@ class MainWindow(QMainWindow):
         self.metadata_view.set_processing_visible(is_ready)
         if is_ready:
             dataset_files = self.vm.get_dataset_files_ordered()
+            protein_file = self.vm.get_dataset_protein_file()
+            if (
+                protein_file is not None
+                and protein_file.path not in {file_item.path for file_item in dataset_files}
+            ):
+                dataset_files.append(protein_file)
             self.metadata_vm.update_selected_items(dataset_files)
         else:
             self.metadata_vm.update_selected_items([])
