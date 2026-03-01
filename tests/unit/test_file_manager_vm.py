@@ -8,7 +8,8 @@ import pytest
 import tifffile
 from model.file_item import FileItem
 from model.status_enum import FileStatus
-from viewmodel.file_manager_vm import BeadGenerationThread
+from PyQt6.QtWidgets import QDialog
+from viewmodel.file_manager_vm import BeadGenerationThread, ExportThread
 
 
 class TestFileManagerVM:
@@ -305,6 +306,38 @@ class TestFileManagerVM:
         result = vm.align_channels(mock_file_items)
         assert result is None  # Returns None when no reference
 
+    def test_alignment_complete_updates_two_cycles_and_protein(
+        self, mock_file_manager_vm, mock_file_items
+    ):
+        vm = mock_file_manager_vm
+        ref_item, cy1_item, cy2_item = mock_file_items[:3]
+        protein_item = FileItem(path="/tmp/protein_assigned.tif", status=FileStatus.RAW)
+
+        vm.files[ref_item.path] = ref_item
+        vm.files[cy1_item.path] = cy1_item
+        vm.files[cy2_item.path] = cy2_item
+        vm.files[protein_item.path] = protein_item
+        vm.reference_item = ref_item
+
+        aligned_images = [
+            np.full((2, 32, 32), 11, dtype=np.uint16),
+            np.full((2, 32, 32), 22, dtype=np.uint16),
+            np.full((2, 32, 32), 33, dtype=np.uint16),
+        ]
+
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.DialogCode.Accepted
+
+        with patch.object(vm, "_get_brightfield_image", return_value=np.zeros((32, 32), dtype=np.uint16)), \
+             patch("viewmodel.file_manager_vm.AlignmentPreviewDialog", return_value=dialog):
+            vm._on_alignment_complete(aligned_images, [cy1_item, cy2_item, protein_item])
+
+        for expected, file_item in zip(aligned_images, [cy1_item, cy2_item, protein_item]):
+            saved = vm.files[file_item.path]
+            assert saved.status == FileStatus.ALIGNED
+            assert saved.metadata.prefix == FileStatus.ALIGNED.name.lower()
+            np.testing.assert_array_equal(saved.working_image, expected)
+
     def test_cancel_alignment(self, mock_file_manager_vm, mock_register_thread):
         """cancel_alignment should call cancel on register thread."""
         vm = mock_file_manager_vm
@@ -342,6 +375,56 @@ class TestFileManagerVM:
         with patch('viewmodel.file_manager_vm.load_image', return_value=mock_image):
             # Should run without error
             vm.export_files(str(export_folder), [item])
+
+    def test_export_thread_exports_aligned_two_cycles_and_protein(
+        self, tmp_path
+    ):
+        export_folder = tmp_path / "export"
+        export_folder.mkdir()
+
+        def make_item(filename: str, fill_value: int) -> tuple[FileItem, np.ndarray]:
+            image_path = tmp_path / filename
+            tifffile.imwrite(str(image_path), np.zeros((2, 16, 16), dtype=np.uint16))
+            item = FileItem(path=str(image_path), status=FileStatus.ALIGNED)
+            item.metadata.max_size = 16
+            item.metadata.prefix = FileStatus.ALIGNED.name.lower()
+            aligned_image = np.full((2, 16, 16), fill_value, dtype=np.uint16)
+            item.working_image = aligned_image
+            return item, aligned_image
+
+        cy1_item, cy1_aligned = make_item("cycle1.tif", 101)
+        cy2_item, cy2_aligned = make_item("cycle2.tif", 202)
+        protein_item, protein_aligned = make_item("protein.tif", 303)
+
+        files = {
+            cy1_item.path: cy1_item,
+            cy2_item.path: cy2_item,
+            protein_item.path: protein_item,
+        }
+        selected = [cy1_item, cy2_item, protein_item]
+
+        thread = ExportThread(str(export_folder), files, selected)
+        thread.run()
+
+        exported = sorted(f.name for f in export_folder.glob("*.tif"))
+        assert exported == [
+            "aligned_cycle1.tif",
+            "aligned_cycle2.tif",
+            "aligned_protein.tif",
+        ]
+
+        np.testing.assert_array_equal(
+            tifffile.imread(str(export_folder / "aligned_cycle1.tif")),
+            cy1_aligned,
+        )
+        np.testing.assert_array_equal(
+            tifffile.imread(str(export_folder / "aligned_cycle2.tif")),
+            cy2_aligned,
+        )
+        np.testing.assert_array_equal(
+            tifffile.imread(str(export_folder / "aligned_protein.tif")),
+            protein_aligned,
+        )
 
     def test_apply_metadata_shape_uses_min_when_max_size_larger_than_original(self, mock_file_manager_vm, mock_file_item):
         """When max_size is larger than original shape, shape should use min (original dimensions)."""

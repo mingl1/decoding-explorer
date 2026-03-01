@@ -207,6 +207,38 @@ class TestMainWindow:
         aligned_files = args[0]
         assert [f.path for f in aligned_files] == [cy1_item.path, protein_item.path]
 
+    def test_start_alignment_includes_optional_protein_file_with_two_cycles(
+        self, mock_main_window, mock_file_items
+    ):
+        window = mock_main_window
+        ref_item, cy1_item, cy2_item = mock_file_items[:3]
+        protein_item = FileItem(path="/tmp/protein_assigned.tif")
+
+        for file_item in [ref_item, cy1_item, cy2_item, protein_item]:
+            window.vm.files[file_item.path] = file_item
+
+        window.vm.reference_item = ref_item
+        window.vm.dataset_cycle_assignments = {
+            0: ref_item,
+            1: cy1_item,
+            2: cy2_item,
+        }
+        window.vm.dataset_protein_file = protein_item
+        window.vm.dataset_assignment_valid = True
+        window.metadata_view.apply_shading_checkbox.setChecked(False)
+
+        with patch.object(window.vm, "align_channels") as mock_align_channels:
+            window.start_alignment()
+
+        mock_align_channels.assert_called_once()
+        args, _ = mock_align_channels.call_args
+        aligned_files = args[0]
+        assert [f.path for f in aligned_files] == [
+            cy1_item.path,
+            cy2_item.path,
+            protein_item.path,
+        ]
+
     def test_assign_cycles_sets_cycle1_as_reference(
         self, mock_main_window, mock_file_items, mocker
     ):

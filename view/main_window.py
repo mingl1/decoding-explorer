@@ -296,7 +296,6 @@ class MainWindow(QMainWindow):
             self.show_error("Load at least one file before assigning cycles.")
             return
 
-        cycle_numbers = [index + 1 for index in range(len(files_in_order))]
         if self.vm.is_dataset_ready():
             existing = self.vm.get_dataset_cycle_assignments() or {}
             initial_assignments = {}
@@ -307,13 +306,7 @@ class MainWindow(QMainWindow):
                     initial_assignments[cycle_num + 1] = file_item
             initial_protein_file = self.vm.get_dataset_protein_file()
         else:
-            default_cycles = min(2, len(files_in_order))
-            initial_assignments = {
-                cycle_num: file_item
-                for cycle_num, file_item in zip(
-                    cycle_numbers[:default_cycles], files_in_order[:default_cycles]
-                )
-            }
+            initial_assignments = None
             initial_protein_file = None
         dialog = CycleAssignmentDialog(
             files_in_order,

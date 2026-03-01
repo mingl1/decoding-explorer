@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Optional
 
 from PyQt6.QtWidgets import (
@@ -38,6 +39,17 @@ class CycleAssignmentDialog(QDialog):
         self._option_to_file: dict[str, FileItem] = {}
         self._path_to_option: dict[str, str] = {}
         self._file_options = self._build_file_options(files)
+
+        if initial_assignments is None or initial_protein_file is None:
+            (
+                suggested_assignments,
+                suggested_protein_file,
+            ) = self._suggest_initial_selection()
+            if initial_assignments is None:
+                initial_assignments = suggested_assignments
+            if initial_protein_file is None:
+                initial_protein_file = suggested_protein_file
+
         self.layout = QVBoxLayout(self)
 
         if cycle_numbers is None:
@@ -96,6 +108,79 @@ class CycleAssignmentDialog(QDialog):
         self.ok_button.clicked.connect(self.accept)
         self.layout.addWidget(self.ok_button)
 
+    def _suggest_initial_selection(
+        self,
+    ) -> tuple[dict[int, FileItem], Optional[FileItem]]:
+        if len(self.files) == 0:
+            return {}, None
+
+        protein_file = None
+        non_protein_files: list[FileItem] = []
+        for file_item in self.files:
+            normalized_name = self._normalize_name(file_item.path)
+            if protein_file is None and "protein" in normalized_name:
+                protein_file = file_item
+                continue
+            non_protein_files.append(file_item)
+
+        if len(non_protein_files) == 0:
+            return {}, protein_file
+
+        parsed_cycles: dict[str, int] = {}
+        max_named_cycle = 0
+        for file_item in non_protein_files:
+            cycle_number = self._extract_cycle_number(file_item.path)
+            if cycle_number is None:
+                continue
+            parsed_cycles[file_item.path] = cycle_number
+            if cycle_number > max_named_cycle:
+                max_named_cycle = cycle_number
+
+        cycle_slots = max(self.default_cycle_count, max_named_cycle)
+        cycle_slots = min(len(non_protein_files), cycle_slots)
+        cycle_slots = max(1, cycle_slots)
+
+        assignments: dict[int, FileItem] = {}
+        assigned_paths = set()
+        for file_item in non_protein_files:
+            cycle_number = parsed_cycles.get(file_item.path)
+            if cycle_number is None:
+                continue
+            if cycle_number < 1 or cycle_number > cycle_slots:
+                continue
+            if cycle_number in assignments:
+                continue
+            assignments[cycle_number] = file_item
+            assigned_paths.add(file_item.path)
+
+        remaining = [
+            file_item for file_item in non_protein_files if file_item.path not in assigned_paths
+        ]
+        for cycle_num in range(1, cycle_slots + 1):
+            if cycle_num in assignments:
+                continue
+            if len(remaining) == 0:
+                break
+            assignments[cycle_num] = remaining.pop(0)
+
+        return assignments, protein_file
+
+    def _normalize_name(self, file_path: str) -> str:
+        base_name = os.path.basename(file_path).lower()
+        return re.sub(r"[^a-z0-9]", "", base_name)
+
+    def _extract_cycle_number(self, file_path: str) -> Optional[int]:
+        normalized_name = self._normalize_name(file_path)
+        patterns = [
+            r"cycle(\d+)",
+            r"cy(\d+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, normalized_name)
+            if match is not None:
+                return int(match.group(1))
+        return None
+
     def get_assignments(self):
         assignments = {}
         selected_files = set()
@@ -113,10 +198,7 @@ class CycleAssignmentDialog(QDialog):
                 cycle_num = i + 1
                 assignments[cycle_num] = file_item
 
-        required_cycles = len(self.comboboxes)
-        if protein_selection != "None":
-            required_cycles -= 1
-        if len(assignments) != required_cycles:
+        if len(assignments) != len(self.comboboxes):
             return None
 
         return assignments
