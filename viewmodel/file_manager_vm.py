@@ -1353,7 +1353,13 @@ class FileManagerVM(QObject):
                 # Fallback to first channel if ref_channel is out of bounds
                 moving_images.append(aligned_tifs[i][0])
 
-        dialog = AlignmentPreviewDialog(target_image, moving_images, can_emit=True)
+        layer_labels = self._build_alignment_preview_layer_labels(selected)
+        dialog = AlignmentPreviewDialog(
+            target_image,
+            moving_images,
+            can_emit=True,
+            layer_labels=layer_labels,
+        )
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
             to_be_updated = []
@@ -1366,6 +1372,30 @@ class FileManagerVM(QObject):
                 my_f.metadata.prefix = FileStatus.ALIGNED.name.lower()
                 to_be_updated.append(my_f)
             self.file_information_update.emit(to_be_updated)
+
+    def _build_alignment_preview_layer_labels(self, selected: list[FileItem]) -> list[str]:
+        cycle_path_to_label = {}
+        if self.dataset_cycle_assignments is not None:
+            for cycle_num, file_item in self.dataset_cycle_assignments.items():
+                if cycle_num == 0:
+                    continue
+                cycle_path_to_label[file_item.path] = f"Cycle {cycle_num + 1}"
+
+        protein_path = None
+        if self.dataset_protein_file is not None:
+            protein_path = self.dataset_protein_file.path
+
+        labels = []
+        for index, file_item in enumerate(selected):
+            if protein_path is not None and file_item.path == protein_path:
+                labels.append("Protein")
+                continue
+            label = cycle_path_to_label.get(file_item.path)
+            if label is not None:
+                labels.append(label)
+                continue
+            labels.append(f"Moving Image {index + 1}")
+        return labels
 
     def delete_files(self, selected_files: list[FileItem]):
         deleted_any = False
