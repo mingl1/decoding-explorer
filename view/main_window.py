@@ -34,6 +34,7 @@ from view.alignment_preview_dialog import AlignmentPreviewDialog
 from view.crop_dialog import CropDialog
 from view.cycle_assignment_dialog import CycleAssignmentDialog
 from view.decoding_workflow_panel import DecodingWorkflowPanel
+from view.export_selection_dialog import ExportSelectionDialog
 from view.file_table_widget import FileTableWidget
 from view.roi_inspector import ROIInspector
 from viewmodel.file_manager_vm import FileManagerVM, load_image
@@ -152,7 +153,7 @@ class MainWindow(QMainWindow):
         )
         self.metadata_view.lower_invalid_sig.connect(self.lower_invalid_ratio)
         self.metadata_view.lower_filter_sig.connect(self.lower_filter_ratio)
-        self.metadata_view.save_beads_sig.connect(self.save_generated_beads)
+        self.metadata_view.export_sig.connect(self.start_export_flow)
         self.metadata_view.manually_align_sig.connect(self.start_manual_alignment)
         self.metadata_view.crop_selected_sig.connect(self.start_crop)
         self.metadata_view.crop_beads_sig.connect(self.start_bead_crop)
@@ -398,31 +399,19 @@ class MainWindow(QMainWindow):
         self.roi_inspector = ROIInspector(data)
         self.roi_inspector.show()
 
-    def save_beads(self, beads):
-        # Apply bead crop bounds if set on reference item
-        if (
-            self.vm.reference_item
-            and self.vm.reference_item.bead_crop_bounds is not None
-        ):
-            x1, y1, x2, y2 = self.vm.reference_item.bead_crop_bounds
+    def _get_cropped_beads_for_export(self, reference_item: FileItem):
+        beads = reference_item.beads
+        if beads is None or beads.empty:
+            return None
+        if reference_item.bead_crop_bounds is not None:
+            x1, y1, x2, y2 = reference_item.bead_crop_bounds
             beads = beads[
                 (beads["x"] >= x1)
                 & (beads["x"] < x2)
                 & (beads["y"] >= y1)
                 & (beads["y"] < y2)
             ]
-
-        self.status_label.setText(f"Beads generated: {len(beads)}")
-        self.progress_bar.setVisible(False)
-        self.cancel_button.setVisible(False)
-        file = QFileDialog.getSaveFileName(
-            self, "Save Beads Data", "", "Excel Files (*.xlsx), CSV Files (*.csv)"
-        )
-        if file:
-            if file[0].endswith(".xlsx"):
-                beads.to_excel(file[0], index=False)
-            elif file[0].endswith(".csv"):
-                beads.to_csv(file[0], index=False)
+        return beads
 
     def recompute_ensemble_sweep(self, start: float, end: float, step: float):
         reference_item = self.vm.reference_item
@@ -481,14 +470,7 @@ class MainWindow(QMainWindow):
     def lower_filter_ratio(self):
         self._apply_ensemble_ratio_delta(-0.05)
 
-    def save_generated_beads(self):
-        reference_item = self.vm.reference_item
-        if reference_item is None:
-            self.show_error("Please set a reference image first.")
-            return
-        if reference_item.beads is None or reference_item.beads.empty:
-            self.show_error("No beads available. Generate or upload beads first.")
-            return
+    def _apply_pending_ensemble_for_export(self, reference_item: FileItem) -> bool:
         selected_ratio = self.metadata_view.get_selected_ensemble_ratio()
         applied_ratio = reference_item.ensemble_ratio_applied
         if (
@@ -503,8 +485,80 @@ class MainWindow(QMainWindow):
                 self._refresh_ensemble_controls(reference_item)
             except Exception as e:
                 self.show_error(str(e))
+                return False
+        return True
+
+    def start_export_flow(self):
+        assignments = self._get_required_dataset_assignments()
+        if assignments is None:
+            return
+        reference_item = assignments.get(0)
+        if reference_item is None:
+            self.show_error("Cycle 1 must be assigned.")
+            return
+        protein_file = self.vm.get_dataset_protein_file()
+        tiff_options = []
+        for cycle_num in sorted(assignments.keys()):
+            file_item = assignments[cycle_num]
+            if cycle_num == 0:
+                label = "Cycle 1 (Reference)"
+            else:
+                label = f"Cycle {cycle_num + 1}"
+            checked = protein_file is None and cycle_num == 0
+            tiff_options.append((label, file_item, checked))
+        if protein_file is not None:
+            tiff_options = [
+                (label, file_item, False)
+                for label, file_item, _ in tiff_options
+            ]
+            tiff_options.append(("Protein TIFF", protein_file, True))
+
+        beads_available = (
+            reference_item.beads is not None and not reference_item.beads.empty
+        )
+        dialog = ExportSelectionDialog(
+            tiff_options=tiff_options,
+            beads_enabled=beads_available,
+            beads_checked=beads_available,
+            beads_format="csv",
+            parent=self,
+        )
+        if not dialog.exec():
+            return
+
+        selected_tiff_files = dialog.get_selected_tiff_files()
+        export_beads = dialog.should_export_beads()
+        if len(selected_tiff_files) == 0 and not export_beads:
+            self.show_error("Select at least one export item.")
+            return
+
+        folder = QFileDialog.getExistingDirectory()
+        if not folder:
+            return
+
+        beads = None
+        beads_format = "csv"
+        if export_beads:
+            if not self._apply_pending_ensemble_for_export(reference_item):
                 return
-        self.save_beads(reference_item.beads)
+            beads = self._get_cropped_beads_for_export(reference_item)
+            if beads is None or beads.empty:
+                self.show_error("No beads available. Generate or upload beads first.")
+                return
+            beads_format = dialog.get_beads_format()
+
+        if len(selected_tiff_files) > 0:
+            self.vm.export_files(folder, selected_tiff_files)
+
+        if export_beads and beads is not None:
+            output_path = os.path.join(folder, f"beads_result.{beads_format}")
+            if beads_format == "xlsx":
+                beads.to_excel(output_path, index=False)
+            else:
+                beads.to_csv(output_path, index=False)
+
+        if len(selected_tiff_files) == 0:
+            self.on_export_complete()
 
     def remove_ensemble_applied_changes(self):
         reference_item = self.vm.reference_item

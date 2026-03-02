@@ -172,7 +172,10 @@ class BeadGenerationThread(QThread):
                 )
                 if self.use_stardist and self._estimator:
                     stage = self._estimator.map_message_to_stage(m)
-                    if stage == "initial_detection" and stage not in stardist_bootstrap_stages:
+                    if (
+                        stage == "initial_detection"
+                        and stage not in stardist_bootstrap_stages
+                    ):
                         stardist_bootstrap_stages.add(stage)
                         (
                             hb_progress_value,
@@ -855,9 +858,7 @@ class FileManagerVM(QObject):
             try:
                 cycle_idx = int(cycle_num)
             except (TypeError, ValueError):
-                self.clear_dataset_cycle_assignments(
-                    "Invalid cycle assignment index."
-                )
+                self.clear_dataset_cycle_assignments("Invalid cycle assignment index.")
                 return False
 
             if cycle_idx == 0:
@@ -909,9 +910,11 @@ class FileManagerVM(QObject):
         self.dataset_assignment_valid = True
         protein_text = ""
         if self.dataset_protein_file is not None:
-            protein_text = f" + protein ({os.path.basename(self.dataset_protein_file.path)})"
+            protein_text = (
+                f" + protein ({os.path.basename(self.dataset_protein_file.path)})"
+            )
         self.dataset_assignment_reason = (
-            f"Assigned {len(self.dataset_cycle_assignments) - 1} cycle(s){protein_text}."
+            f"Assigned {len(self.dataset_cycle_assignments)} cycle(s){protein_text}."
         )
         self._emit_dataset_assignment_changed()
         return True
@@ -1098,9 +1101,7 @@ class FileManagerVM(QObject):
         self.files.update(self._pending_files)
         self._pending_files = {}
         if len(to_be_emitted) > 0:
-            self.clear_dataset_cycle_assignments(
-                "File list changed. Reassign cycles."
-            )
+            self.clear_dataset_cycle_assignments("File list changed. Reassign cycles.")
         self.file_list_updated.emit(to_be_emitted)
 
     def load_file(self, file_paths: List[str] | str):
@@ -1119,9 +1120,7 @@ class FileManagerVM(QObject):
             self.files[file_item.path] = file_item
             to_be_emitted.append(file_item)
         if len(to_be_emitted) > 0:
-            self.clear_dataset_cycle_assignments(
-                "File list changed. Reassign cycles."
-            )
+            self.clear_dataset_cycle_assignments("File list changed. Reassign cycles.")
         self.file_list_updated.emit(to_be_emitted)
 
     def apply_shading(self, selected_files: List[FileItem]):
@@ -1373,7 +1372,9 @@ class FileManagerVM(QObject):
                 to_be_updated.append(my_f)
             self.file_information_update.emit(to_be_updated)
 
-    def _build_alignment_preview_layer_labels(self, selected: list[FileItem]) -> list[str]:
+    def _build_alignment_preview_layer_labels(
+        self, selected: list[FileItem]
+    ) -> list[str]:
         cycle_path_to_label = {}
         if self.dataset_cycle_assignments is not None:
             for cycle_num, file_item in self.dataset_cycle_assignments.items():
@@ -1411,9 +1412,7 @@ class FileManagerVM(QObject):
         if deleted_any:
             if self.reference_item and self.reference_item.path not in self.files:
                 self.reference_item = None
-            self.clear_dataset_cycle_assignments(
-                "File list changed. Reassign cycles."
-            )
+            self.clear_dataset_cycle_assignments("File list changed. Reassign cycles.")
 
     def cancel_alignment(self):
         if self.register_thread:

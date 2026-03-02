@@ -430,22 +430,22 @@ class TestMainWindow:
         assert assigned[0] == files[0]
         assert assigned[1] == files[1]
 
-    def test_on_beads_generated_does_not_auto_save(
+    def test_on_beads_generated_does_not_auto_export(
         self, mock_main_window, mock_file_item, mocker
     ):
-        """on_beads_generated should not trigger save_beads automatically."""
+        """on_beads_generated should not trigger export automatically."""
         window = mock_main_window
 
         window.vm.reference_item = mock_file_item
         window.vm.files[mock_file_item.path] = mock_file_item
 
-        with patch.object(window, 'save_beads') as mock_save:
+        with patch.object(window, "start_export_flow") as mock_export:
             import pandas as pd
-            beads = pd.DataFrame({'x': [1, 2, 3]})
+            beads = pd.DataFrame({"x": [1, 2, 3]})
             window.on_beads_generated(beads)
-            mock_save.assert_not_called()
+            mock_export.assert_not_called()
 
-    def test_save_generated_beads_applies_pending_ratio_before_export(
+    def test_start_export_flow_applies_pending_ratio_before_beads_export(
         self, mock_main_window, mock_file_item
     ):
         window = mock_main_window
@@ -459,6 +459,8 @@ class TestMainWindow:
         mock_file_item.ensemble_ratio_applied = 1.0
         window.vm.reference_item = mock_file_item
         window.vm.files[mock_file_item.path] = mock_file_item
+        window.vm.dataset_cycle_assignments = {0: mock_file_item}
+        window.vm.dataset_assignment_valid = True
 
         stats_df = pd.DataFrame(
             [
@@ -468,10 +470,165 @@ class TestMainWindow:
         )
         window.metadata_view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=1.0)
 
-        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "save_beads") as mock_save:
-            window.save_generated_beads()
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = True
+        dialog_instance.get_selected_tiff_files.return_value = []
+        dialog_instance.should_export_beads.return_value = True
+        dialog_instance.get_beads_format.return_value = "csv"
+
+        with (
+            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
+            patch("view.main_window.QFileDialog.getExistingDirectory", return_value="/tmp/export"),
+            patch("pandas.DataFrame.to_csv") as mock_to_csv,
+            patch.object(window.vm, "apply_ensemble_ratio") as mock_apply,
+        ):
+            window.start_export_flow()
             mock_apply.assert_called_once_with(mock_file_item, 1.05)
-            mock_save.assert_called_once()
+            mock_to_csv.assert_called_once_with("/tmp/export/beads_result.csv", index=False)
+
+    def test_start_export_flow_forwards_selected_tiff_targets(
+        self, mock_main_window
+    ):
+        window = mock_main_window
+        reference_item = FileItem(path="/tmp/ref.tif")
+        cycle_item = FileItem(path="/tmp/cycle2.tif")
+        protein_item = FileItem(path="/tmp/protein.tif")
+
+        for file_item in [reference_item, cycle_item, protein_item]:
+            window.vm.files[file_item.path] = file_item
+        window.vm.reference_item = reference_item
+        window.vm.dataset_cycle_assignments = {0: reference_item, 1: cycle_item}
+        window.vm.dataset_protein_file = protein_item
+        window.vm.dataset_assignment_valid = True
+
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = True
+        dialog_instance.get_selected_tiff_files.return_value = [cycle_item, protein_item]
+        dialog_instance.should_export_beads.return_value = False
+
+        with (
+            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
+            patch("view.main_window.QFileDialog.getExistingDirectory", return_value="/tmp/export"),
+            patch.object(window.vm, "export_files") as mock_export,
+        ):
+            window.start_export_flow()
+            mock_export.assert_called_once_with("/tmp/export", [cycle_item, protein_item])
+
+    def test_start_export_flow_cancelled_dialog_does_not_export(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+        window.vm.dataset_cycle_assignments = {0: mock_file_item}
+        window.vm.dataset_assignment_valid = True
+
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = False
+
+        with (
+            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
+            patch("view.main_window.QFileDialog.getExistingDirectory") as mock_folder,
+            patch.object(window.vm, "export_files") as mock_export,
+        ):
+            window.start_export_flow()
+            mock_export.assert_not_called()
+            mock_folder.assert_not_called()
+
+    def test_start_export_flow_cancelled_folder_does_not_export(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+        window.vm.dataset_cycle_assignments = {0: mock_file_item}
+        window.vm.dataset_assignment_valid = True
+
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = True
+        dialog_instance.get_selected_tiff_files.return_value = [mock_file_item]
+        dialog_instance.should_export_beads.return_value = False
+
+        with (
+            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
+            patch("view.main_window.QFileDialog.getExistingDirectory", return_value=""),
+            patch.object(window.vm, "export_files") as mock_export,
+        ):
+            window.start_export_flow()
+            mock_export.assert_not_called()
+
+    def test_start_export_flow_no_selection_shows_error(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+        window.vm.dataset_cycle_assignments = {0: mock_file_item}
+        window.vm.dataset_assignment_valid = True
+
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = True
+        dialog_instance.get_selected_tiff_files.return_value = []
+        dialog_instance.should_export_beads.return_value = False
+
+        with (
+            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
+            patch("view.main_window.QFileDialog.getExistingDirectory") as mock_folder,
+            patch.object(window, "show_error") as mock_error,
+        ):
+            window.start_export_flow()
+            mock_error.assert_called_once_with("Select at least one export item.")
+            mock_folder.assert_not_called()
+
+    def test_start_export_flow_defaults_to_protein_when_assigned(
+        self, mock_main_window
+    ):
+        window = mock_main_window
+        reference_item = FileItem(path="/tmp/ref.tif")
+        cycle_item = FileItem(path="/tmp/cycle2.tif")
+        protein_item = FileItem(path="/tmp/protein.tif")
+
+        for file_item in [reference_item, cycle_item, protein_item]:
+            window.vm.files[file_item.path] = file_item
+        window.vm.reference_item = reference_item
+        window.vm.dataset_cycle_assignments = {0: reference_item, 1: cycle_item}
+        window.vm.dataset_protein_file = protein_item
+        window.vm.dataset_assignment_valid = True
+
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = False
+
+        with patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance) as mock_dialog:
+            window.start_export_flow()
+
+        options = mock_dialog.call_args.kwargs["tiff_options"]
+        states = {label: checked for label, _, checked in options}
+        assert states["Cycle 1 (Reference)"] is False
+        assert states["Cycle 2"] is False
+        assert states["Protein TIFF"] is True
+
+    def test_start_export_flow_defaults_to_reference_when_no_protein(
+        self, mock_main_window, mock_file_item
+    ):
+        window = mock_main_window
+        cycle_item = FileItem(path="/tmp/cycle2.tif")
+        window.vm.reference_item = mock_file_item
+        window.vm.files[mock_file_item.path] = mock_file_item
+        window.vm.files[cycle_item.path] = cycle_item
+        window.vm.dataset_cycle_assignments = {0: mock_file_item, 1: cycle_item}
+        window.vm.dataset_protein_file = None
+        window.vm.dataset_assignment_valid = True
+
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = False
+
+        with patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance) as mock_dialog:
+            window.start_export_flow()
+
+        options = mock_dialog.call_args.kwargs["tiff_options"]
+        states = {label: checked for label, _, checked in options}
+        assert states["Cycle 1 (Reference)"] is True
+        assert states["Cycle 2"] is False
 
     def test_remove_ensemble_applied_changes_calls_vm(
         self, mock_main_window, mock_file_item
@@ -549,7 +706,7 @@ class TestMainWindow:
 
         mock_apply.assert_called_once_with(mock_file_item, 1.55)
 
-    def test_save_generated_beads_does_not_snap_out_of_range_selected_ratio(
+    def test_start_export_flow_does_not_snap_out_of_range_selected_ratio(
         self, mock_main_window, mock_file_item
     ):
         window = mock_main_window
@@ -564,6 +721,8 @@ class TestMainWindow:
         mock_file_item.ensemble_ratio_selected = 1.55
         window.vm.reference_item = mock_file_item
         window.vm.files[mock_file_item.path] = mock_file_item
+        window.vm.dataset_cycle_assignments = {0: mock_file_item}
+        window.vm.dataset_assignment_valid = True
 
         stats_df = pd.DataFrame(
             [
@@ -573,11 +732,21 @@ class TestMainWindow:
         )
         window.metadata_view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.55, applied_ratio=1.55)
 
-        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "save_beads") as mock_save:
-            window.save_generated_beads()
+        dialog_instance = MagicMock()
+        dialog_instance.exec.return_value = True
+        dialog_instance.get_selected_tiff_files.return_value = []
+        dialog_instance.should_export_beads.return_value = True
+        dialog_instance.get_beads_format.return_value = "csv"
 
+        with (
+            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
+            patch("view.main_window.QFileDialog.getExistingDirectory", return_value="/tmp/export"),
+            patch("pandas.DataFrame.to_csv") as mock_to_csv,
+            patch.object(window.vm, "apply_ensemble_ratio") as mock_apply,
+        ):
+            window.start_export_flow()
         mock_apply.assert_not_called()
-        mock_save.assert_called_once()
+        mock_to_csv.assert_called_once_with("/tmp/export/beads_result.csv", index=False)
 
     def test_handle_metadata_applied_updates_items(
         self, mock_main_window, mock_file_item, mocker
