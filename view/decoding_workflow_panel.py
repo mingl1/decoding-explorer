@@ -33,7 +33,7 @@ class DecodingWorkflowPanel(QWidget):
     remove_ensemble_sig = pyqtSignal()
     lower_invalid_sig = pyqtSignal()
     lower_filter_sig = pyqtSignal()
-    save_beads_sig = pyqtSignal()
+    export_sig = pyqtSignal()
     protein_files_uploaded = pyqtSignal(list)
     upload_beads_sig = pyqtSignal()
     manually_align_sig = pyqtSignal()
@@ -122,7 +122,7 @@ class DecodingWorkflowPanel(QWidget):
             "align_arrays": "Align Arrays",
             "bead_generation": "Bead Generation",
             "crop": "Crop",
-            "statistics": "Statistics",
+            "statistics": "Statistics & Export",
         }
         self._section_collapsed = {
             "metadata": False,
@@ -253,8 +253,8 @@ class DecodingWorkflowPanel(QWidget):
         self.lower_invalid_btn.clicked.connect(self.lower_invalid_sig.emit)
         self.lower_filter_btn = QPushButton("Lower Filter")
         self.lower_filter_btn.clicked.connect(self.lower_filter_sig.emit)
-        self.save_beads_btn = QPushButton("Save Beads")
-        self.save_beads_btn.clicked.connect(self.save_beads_sig.emit)
+        self.export_btn = QPushButton("Export")
+        self.export_btn.clicked.connect(self.export_sig.emit)
         self.upload_beads_btn = QPushButton("Upload Bead CSV")
         self.upload_beads_btn.clicked.connect(self.upload_beads_sig.emit)
         self.ensemble_slider = QSlider(Qt.Orientation.Horizontal)
@@ -270,7 +270,7 @@ class DecodingWorkflowPanel(QWidget):
         self.inspect_beads_btn.clicked.connect(self.vm.inspect_beads)
         self.crop_beads_btn = QPushButton("Crop Beads")
         self.crop_beads_btn.clicked.connect(self.crop_beads_sig.emit)
-        stats_title = make_section_title("Statistics", "statistics")
+        stats_title = make_section_title("Statistics & Export", "statistics")
         stats_sep = make_separator()
         self.total_beads_label = QLabel("Total Beads: N/A")
         self.filtered_beads_label = QLabel("Filtered Beads: N/A")
@@ -387,7 +387,6 @@ class DecodingWorkflowPanel(QWidget):
         self.form_layout.addRow(self.upload_protein_key_btn)
         self.form_layout.addRow(self.protein_key_files_label)
         self.form_layout.addRow(self.generate_beads_btn)
-        self.form_layout.addRow(self.save_beads_btn)
         self.form_layout.addRow(self.upload_beads_btn)
         self._section_widgets["bead_generation"] = [
             self.use_stardist_checkbox,
@@ -403,7 +402,6 @@ class DecodingWorkflowPanel(QWidget):
             self.upload_protein_key_btn,
             self.protein_key_files_label,
             self.generate_beads_btn,
-            self.save_beads_btn,
             self.upload_beads_btn,
         ]
 
@@ -438,6 +436,7 @@ class DecodingWorkflowPanel(QWidget):
         summary_layout.addWidget(self.error_label)
         summary_layout.addWidget(self.inspect_beads_btn)
         summary_layout.addWidget(self.crop_beads_btn)
+        summary_layout.addWidget(self.export_btn)
         summary_layout.addWidget(self.counts_table_container)
         self.statistics_summary_tab.setLayout(summary_layout)
 
@@ -448,6 +447,7 @@ class DecodingWorkflowPanel(QWidget):
         self.form_layout.addRow(self.statistics_tabs)
         self._section_widgets["statistics"] = [
             self.statistics_tabs,
+            self.export_btn,
         ]
         self._section_separators["metadata"] = metadata_sep
         self._section_separators["align_arrays"] = align_arrays_sep
@@ -772,7 +772,7 @@ class DecodingWorkflowPanel(QWidget):
 
     def _set_ensemble_controls_enabled(self, enabled: bool):
         controls = [
-            self.save_beads_btn,
+            self.export_btn,
             self.lower_invalid_btn,
             self.lower_filter_btn,
         ]
@@ -827,7 +827,7 @@ class DecodingWorkflowPanel(QWidget):
             self.ensemble_invalid_pct_label.setText("Preview Invalid: N/A")
             self.ensemble_filtered_pct_label.setText("Preview Filtered: N/A")
             self._set_ensemble_controls_enabled(False)
-            self.save_beads_btn.setEnabled(True)
+            self.export_btn.setEnabled(True)
             self.reset_ensemble_btn.setEnabled(False)
             return
 

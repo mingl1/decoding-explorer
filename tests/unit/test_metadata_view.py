@@ -188,9 +188,11 @@ class TestMetadataView:
         view.show()
 
         assert view.generate_beads_btn.isVisible()
+        assert view.export_btn.isVisible()
 
         view._toggle_section("bead_generation")
         assert not view.generate_beads_btn.isVisible()
+        assert view.export_btn.isVisible()
 
     def test_statistics_section_toggle_hides_content(self, qapp):
         """Clicking on Statistics section title should hide its content widgets."""
@@ -202,10 +204,12 @@ class TestMetadataView:
         view.show()
 
         assert view.statistics_tabs.isVisible()
+        assert view.export_btn.isVisible()
         assert view.total_beads_label.isVisible()
 
         view._toggle_section("statistics")
         assert not view.statistics_tabs.isVisible()
+        assert not view.export_btn.isVisible()
 
     def test_all_sections_can_be_toggled_independently(self, qapp):
         """Each section should be toggleable independently of others."""
