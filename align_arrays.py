@@ -167,11 +167,13 @@ class Register(QThread):
                 )
                 return
             alignment_layers.append(
-                adjust_contrast(tif["image"][bf_channel][:m, :m], 50, 99)
+                adjust_contrast(tif["image"][bf_channel][:m, :m], 30, 99)
             )
 
+        alignment_reference_bf = adjust_contrast(reference_bf, 30, 99)
+
         fixed_map = TileMap(
-            "fixed", reference_bf, int(self.overlap), int(self.num_tiles)
+            "fixed", alignment_reference_bf, int(self.overlap), int(self.num_tiles)
         )
         aligned_outputs = []
         moving_maps = []
@@ -366,8 +368,6 @@ class Register(QThread):
     ):
         source = moving_img.copy()
         target = fixed_img.copy()
-        source = self.adjust_contrast(source, 50, 99)
-        target = self.adjust_contrast(target, 50, 99)
         start_time = time.time()
         # Strategy 1: Optical flow with multiple scales
         moving_points = self.find_points_robust(source, top_k=self.max_points)
