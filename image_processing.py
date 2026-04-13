@@ -291,9 +291,9 @@ def beadfinding(
     label_image, num_labels = label(cleared_mask, return_num=True)
     if num_labels == 0:
         return np.empty((0, 2), dtype=np.uint16)
-    component_areas = np.bincount(
-        label_image.ravel(), minlength=int(num_labels) + 1
-    )[1:]
+    component_areas = np.bincount(label_image.ravel(), minlength=int(num_labels) + 1)[
+        1:
+    ]
     split_result = _split_large_components(
         label_image=label_image,
         areas=component_areas,
@@ -1628,35 +1628,35 @@ def stardist_segmentation(
     return stardist_labels
 
 
-def beadfinding_notebook_stardist(
-    brightfield,
-    scale=1.0,
-    block_size=700,
-    n_tiles=1,
-    progress_units_callback=None,
-    progress_callback=None,
-):
-    model = StarDist2D.from_pretrained("2D_versatile_fluo")
-    normalized = normalize(brightfield.astype(np.float32), 1, 99)
-    label_image, _, _, _ = _predict_instances_with_generator(
-        model=model,
-        img=normalized,
-        n_tiles=n_tiles,
-        scale=scale,
-        progress_units_callback=progress_units_callback,
-        progress_stage="initial_detection",
-        progress_message_callback=progress_callback,
-        nms_message="Initial bead detection... Running NMS",
-    )
-    num_labels = int(label_image.max())
-    if num_labels == 0:
-        return np.array([]).reshape(0, 2)
-    centroids = ndimage.center_of_mass(
-        label_image, label_image, range(1, num_labels + 1)
-    )
-    centers = np.array(centroids, dtype=np.float32)
-    centers = np.array([[x, y] for y, x in centers], dtype=np.float32)
-    return centers
+# def beadfinding_notebook_stardist(
+#     brightfield,
+#     scale=1.0,
+#     block_size=700,
+#     n_tiles=1,
+#     progress_units_callback=None,
+#     progress_callback=None,
+# ):
+#     model = StarDist2D.from_pretrained("2D_versatile_fluo")
+#     normalized = normalize(brightfield.astype(np.float32), 1, 99)
+#     label_image, _, _, _ = _predict_instances_with_generator(
+#         model=model,
+#         img=normalized,
+#         n_tiles=n_tiles,
+#         scale=scale,
+#         progress_units_callback=progress_units_callback,
+#         progress_stage="initial_detection",
+#         progress_message_callback=progress_callback,
+#         nms_message="Initial bead detection... Running NMS",
+#     )
+#     num_labels = int(label_image.max())
+#     if num_labels == 0:
+#         return np.array([]).reshape(0, 2)
+#     centroids = ndimage.center_of_mass(
+#         label_image, label_image, range(1, num_labels + 1)
+#     )
+#     centers = np.array(centroids, dtype=np.float32)
+#     centers = np.array([[x, y] for y, x in centers], dtype=np.float32)
+#     return centers
 
 
 def quantile_normalize_layers(cycle_img, flor_layers):
@@ -2081,15 +2081,13 @@ def _resolve_model_dir(model_name: str) -> str:
 
 def load_custom_model(model_dir: str):
     if os.path.exists(os.path.join(model_dir, "config.json")):
-        return StarDist2D(
-            None, name=os.path.basename(model_dir), basedir=os.path.dirname(model_dir)
-        )
+        return StarDist2D.from_openvino(model_dir=resource_path(model_dir))
     for item in os.listdir(model_dir):
         subpath = os.path.join(model_dir, item)
         if os.path.isdir(subpath) and os.path.exists(
             os.path.join(subpath, "config.json")
         ):
-            return StarDist2D(None, name=item, basedir=model_dir)
+            return StarDist2D.from_openvino(model_dir=resource_path(subpath))
     raise ValueError(f"No StarDist model found in {model_dir}")
 
 

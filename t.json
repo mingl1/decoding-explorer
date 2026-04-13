@@ -1,99 +1,170 @@
 {
-  "started_at": "2026-02-27T17:54:42.481267",
-  "ended_at": "2026-02-27T17:54:42.566649",
-  "total_duration_s": 0.085179,
+  "started_at": "2026-04-13T13:26:09.864796",
+  "ended_at": "2026-04-13T13:58:17.691238",
+  "total_duration_s": 1927.828282,
   "status": "success",
   "error": null,
-  "use_stardist": false,
+  "use_stardist": true,
   "model_name": "model_5_400epoch",
   "stardist_use_guess_tiles": true,
   "stardist_n_tiles": 1,
   "use_stardist_bead_centers": false,
   "area_multiplier": 1.8,
-  "max_size": 32,
+  "max_size": 10000,
   "signal_to_noise_cutoff": 0.1,
   "ensemble_ratio_start": 1.0,
   "ensemble_ratio_end": 1.5,
   "ensemble_ratio_step": 0.05,
   "counts": {
-    "initial_beads": 1,
-    "unique_beads": 1,
-    "final_detected_beads": 1,
-    "pre_resolution_rows": 1,
-    "post_resolution_rows": 1
+    "beads": 2729848,
+    "pre_ensemble_beads": 2729848,
+    "ensemble_sweep_rows": 11,
+    "ensemble_ratio_applied": 1.0
   },
   "events": [
     {
       "progress": 0,
       "message": "Preprocessing brightfield image...",
-      "offset_s": 3.2e-05,
-      "duration_s": 0.000188
+      "offset_s": 0.000203,
+      "duration_s": 1.080846
     },
     {
       "progress": 10,
       "message": "Initial bead detection...",
-      "offset_s": 0.00022,
-      "duration_s": 0.00032
-    },
-    {
-      "progress": 20,
-      "message": "Removing duplicate beads...",
-      "offset_s": 0.00054,
-      "duration_s": 0.000231
+      "offset_s": 1.081049,
+      "duration_s": 118.762607
     },
     {
       "progress": 30,
-      "message": "Performing second pass bead detection...",
-      "offset_s": 0.000771,
-      "duration_s": 0.000161
+      "message": "Getting activation regions from cycles",
+      "offset_s": 119.843656,
+      "duration_s": 47.348002
     },
     {
-      "progress": 40,
-      "message": "Calculating signal-to-noise ratios...",
-      "offset_s": 0.000932,
-      "duration_s": 0.084181
+      "progress": 30,
+      "message": "Getting activation regions from cycles - Running NMS",
+      "offset_s": 167.191658,
+      "duration_s": 141.300488
+    },
+    {
+      "progress": 30,
+      "message": "Getting activation regions from cycles - Running NMS",
+      "offset_s": 308.492146,
+      "duration_s": 133.137696
+    },
+    {
+      "progress": 30,
+      "message": "Getting activation regions from cycles - Running NMS",
+      "offset_s": 441.629842,
+      "duration_s": 251.807188
+    },
+    {
+      "progress": 30,
+      "message": "Getting activation regions from cycles - Running NMS",
+      "offset_s": 693.43703,
+      "duration_s": 277.644598
+    },
+    {
+      "progress": 30,
+      "message": "Getting activation regions from cycles - Running NMS",
+      "offset_s": 971.081628,
+      "duration_s": 291.795366
+    },
+    {
+      "progress": 30,
+      "message": "Getting activation regions from cycles - Running NMS",
+      "offset_s": 1262.876994,
+      "duration_s": 121.934978
+    },
+    {
+      "progress": 30,
+      "message": "Getting activation regions from cycles - Running NMS",
+      "offset_s": 1384.811972,
+      "duration_s": 130.715843
+    },
+    {
+      "progress": 30,
+      "message": "Getting activation regions from cycles - Running NMS",
+      "offset_s": 1515.527815,
+      "duration_s": 74.675537
+    },
+    {
+      "progress": 60,
+      "message": "Assigning beads labels",
+      "offset_s": 1590.203352,
+      "duration_s": 14.381713
+    },
+    {
+      "progress": 72,
+      "message": "Running Voronoi ensemble analysis",
+      "offset_s": 1604.585065,
+      "duration_s": 0.00014
+    },
+    {
+      "progress": 76,
+      "message": "Voronoi median: building ensemble cache",
+      "offset_s": 1604.585205,
+      "duration_s": 269.312699
+    },
+    {
+      "progress": 84,
+      "message": "Voronoi median: sweeping ensemble ratios",
+      "offset_s": 1873.897904,
+      "duration_s": 49.919261
     },
     {
       "progress": 90,
-      "message": "Filtering out rows with all zeros...",
-      "offset_s": 0.085113,
-      "duration_s": 1.3e-05
+      "message": "Voronoi median: applying selected ratio",
+      "offset_s": 1923.817165,
+      "duration_s": 4.010472
     },
     {
       "progress": 95,
       "message": "Bead generation complete.",
-      "offset_s": 0.085126,
-      "duration_s": 5.3e-05
+      "offset_s": 1927.827637,
+      "duration_s": 0.000645
     }
   ],
   "step_durations": [
     {
       "message": "Preprocessing brightfield image...",
-      "duration_s": 0.000188
+      "duration_s": 1.080846
     },
     {
       "message": "Initial bead detection...",
-      "duration_s": 0.00032
+      "duration_s": 118.762607
     },
     {
-      "message": "Removing duplicate beads...",
-      "duration_s": 0.000231
+      "message": "Getting activation regions from cycles",
+      "duration_s": 47.348002
     },
     {
-      "message": "Performing second pass bead detection...",
-      "duration_s": 0.000161
+      "message": "Getting activation regions from cycles - Running NMS",
+      "duration_s": 1423.011694
     },
     {
-      "message": "Calculating signal-to-noise ratios...",
-      "duration_s": 0.084181
+      "message": "Assigning beads labels",
+      "duration_s": 14.381713
     },
     {
-      "message": "Filtering out rows with all zeros...",
-      "duration_s": 1.3e-05
+      "message": "Running Voronoi ensemble analysis",
+      "duration_s": 0.00014
+    },
+    {
+      "message": "Voronoi median: building ensemble cache",
+      "duration_s": 269.312699
+    },
+    {
+      "message": "Voronoi median: sweeping ensemble ratios",
+      "duration_s": 49.919261
+    },
+    {
+      "message": "Voronoi median: applying selected ratio",
+      "duration_s": 4.010472
     },
     {
       "message": "Bead generation complete.",
-      "duration_s": 5.3e-05
+      "duration_s": 0.000645
     }
   ]
 }

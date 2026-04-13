@@ -125,7 +125,9 @@ class Register(QThread):
 
             file_item = self.files_dict.get(f.path)
             if not file_item:
-                self.error.emit(f"File {f.path} not found in manager. Skipping alignment for this file.")
+                self.error.emit(
+                    f"File {f.path} not found in manager. Skipping alignment for this file."
+                )
                 continue
 
             image = load_image_from_path(f.path, file_item.shape, m)
@@ -141,15 +143,15 @@ class Register(QThread):
                 continue
 
             if file_item.working_image is not None:
-                image[bf_channel] = np.array(file_item.working_image)[
-                    :m, :m
-                ]
+                image[bf_channel] = np.array(file_item.working_image)[:m, :m]
 
-            self.tifs.append({
-                "image": image,
-                "alignment_layer": bf_channel,
-                "file_path": f.path,
-            })
+            self.tifs.append(
+                {
+                    "image": image,
+                    "alignment_layer": bf_channel,
+                    "file_path": f.path,
+                }
+            )
 
         if self._handle_cancel():
             return
@@ -167,10 +169,10 @@ class Register(QThread):
                 )
                 return
             alignment_layers.append(
-                adjust_contrast(tif["image"][bf_channel][:m, :m], 30, 99)
+                adjust_contrast(tif["image"][bf_channel][:m, :m], 50, 99)
             )
 
-        alignment_reference_bf = adjust_contrast(reference_bf, 30, 99)
+        alignment_reference_bf = adjust_contrast(reference_bf, 50, 99)
 
         fixed_map = TileMap(
             "fixed", alignment_reference_bf, int(self.overlap), int(self.num_tiles)
@@ -628,7 +630,10 @@ class Register(QThread):
             number = int(match.group())
             result = number - 1  # 0 index
             self.reference_params["protein_detection_layer"] = result
-        print("protein_detection_layer is: ", self.reference_params["protein_detection_layer"])
+        print(
+            "protein_detection_layer is: ",
+            self.reference_params["protein_detection_layer"],
+        )
 
     def set_max_size(self, value):
         self.reference_params["max_size"] = value
