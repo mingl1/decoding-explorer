@@ -294,10 +294,9 @@ class MainWindow(QMainWindow):
         if is_ready:
             dataset_files = self.vm.get_dataset_files_ordered()
             protein_file = self.vm.get_dataset_protein_file()
-            if (
-                protein_file is not None
-                and protein_file.path not in {file_item.path for file_item in dataset_files}
-            ):
+            if protein_file is not None and protein_file.path not in {
+                file_item.path for file_item in dataset_files
+            }:
                 dataset_files.append(protein_file)
             self.metadata_vm.update_selected_items(dataset_files)
         else:
@@ -508,8 +507,7 @@ class MainWindow(QMainWindow):
             tiff_options.append((label, file_item, checked))
         if protein_file is not None:
             tiff_options = [
-                (label, file_item, False)
-                for label, file_item, _ in tiff_options
+                (label, file_item, False) for label, file_item, _ in tiff_options
             ]
             tiff_options.append(("Protein TIFF", protein_file, True))
 
@@ -578,10 +576,9 @@ class MainWindow(QMainWindow):
     def handle_metadata_applied(self, new_metadata: dict):
         dataset_files = self.vm.get_dataset_files_ordered()
         protein_file = self.vm.get_dataset_protein_file()
-        if (
-            protein_file is not None
-            and protein_file.path not in {file_item.path for file_item in dataset_files}
-        ):
+        if protein_file is not None and protein_file.path not in {
+            file_item.path for file_item in dataset_files
+        }:
             dataset_files.append(protein_file)
         if len(dataset_files) == 0:
             dataset_files = self.get_selected_files()
@@ -752,7 +749,9 @@ class MainWindow(QMainWindow):
             self.show_error("Assign at least one cycle besides the reference.")
             return
 
-        self._manual_align_assigned_files = [file_item for _, file_item in assigned_pairs]
+        self._manual_align_assigned_files = [
+            file_item for _, file_item in assigned_pairs
+        ]
         self._manual_align_layer_labels = [label for label, _ in assigned_pairs]
         self.progress_bar.setVisible(True)
         self.status_label.setVisible(True)
@@ -879,7 +878,7 @@ class MainWindow(QMainWindow):
         ]
         if len(assigned_files) == 1:
             file_item = assigned_files[0]
-            image = self.vm._get_brightfield_image(file_item)
+            image = self.vm._get_brightfield_image(file_item, use_original=True)
             if image is None:
                 self.show_error("Could not load image.")
                 return
@@ -895,7 +894,7 @@ class MainWindow(QMainWindow):
 
         images = []
         for file_item in assigned_files:
-            img = self.vm._get_brightfield_image(file_item)
+            img = self.vm._get_brightfield_image(file_item, use_original=True)
             if img is None:
                 self.show_error(f"Could not load {os.path.basename(file_item.path)}")
                 return
@@ -994,11 +993,23 @@ class MainWindow(QMainWindow):
             f"Beads: {total_before} → {total_after} (cropped {total_before - total_after})",
         )
 
+    def _refresh_metadata_for_dataset(self):
+        if not self.vm.is_dataset_ready():
+            return
+        dataset_files = self.vm.get_dataset_files_ordered()
+        protein_file = self.vm.get_dataset_protein_file()
+        if protein_file is not None and protein_file.path not in {
+            f.path for f in dataset_files
+        }:
+            dataset_files.append(protein_file)
+        self.metadata_vm.update_selected_items(dataset_files)
+
     def _apply_crop_single(
         self, file_item: FileItem, x1: int, y1: int, x2: int, y2: int
     ):
         """Apply crop to single file."""
         self.vm.apply_crop([file_item], x1, y1, x2, y2)
+        self._refresh_metadata_for_dataset()
         QMessageBox.information(self, "Crop Complete", "Image cropped successfully.")
 
     def _apply_crop_multiple(
@@ -1006,6 +1017,7 @@ class MainWindow(QMainWindow):
     ):
         """Apply crop to multiple files."""
         self.vm.apply_crop(file_items, x1, y1, x2, y2)
+        self._refresh_metadata_for_dataset()
         QMessageBox.information(
             self, "Crop Complete", f"Successfully cropped {len(file_items)} image(s)."
         )

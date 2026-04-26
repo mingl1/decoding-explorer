@@ -509,9 +509,27 @@ class DecodingWorkflowPanel(QWidget):
         metadata_changes = self.get_metadata_changes()
         files_to_update = []
 
-        for file_item in self.vm.selected_files:
-            max_size_changed = "max_size" in metadata_changes
+        # Clamp max_size to the min side of all selected files.
+        # Use crop_bounds if cropped, else original_shape — never f.shape which is
+        # mutated by this handler and would corrupt the cap on subsequent keystrokes.
+        if "max_size" in metadata_changes:
+            caps = []
+            for f in self.vm.selected_files:
+                if f.metadata.crop_bounds is not None:
+                    x1, y1, x2, y2 = f.metadata.crop_bounds
+                    caps.append(min(y2 - y1, x2 - x1))
+                elif len(f.original_shape) >= 2:
+                    caps.append(min(int(f.original_shape[-2]), int(f.original_shape[-1])))
+            if caps:
+                cap = min(caps)
+                if metadata_changes["max_size"] > cap:
+                    self.max_size_input.blockSignals(True)
+                    self.max_size_input.setText(str(cap))
+                    self.max_size_input.blockSignals(False)
+                    metadata_changes["max_size"] = cap
 
+        max_size_changed = "max_size" in metadata_changes
+        for file_item in self.vm.selected_files:
             if "prefix" in metadata_changes:
                 file_item.metadata.prefix = metadata_changes["prefix"]
             if "axes" in metadata_changes:
@@ -538,19 +556,11 @@ class DecodingWorkflowPanel(QWidget):
                 original_shape = file_item.original_shape
 
                 if len(original_shape) >= 2:
-                    max_viable_size = min(
-                        min(int(original_shape[-2]), int(original_shape[-1])), max_size
-                    )
-                    file_item.metadata.max_size = max_viable_size
-
+                    file_item.metadata.max_size = max_size
                     if len(original_shape) == 3:
-                        file_item.shape = (
-                            original_shape[0],
-                            max_viable_size,
-                            max_viable_size,
-                        )
+                        file_item.shape = (original_shape[0], max_size, max_size)
                     else:
-                        file_item.shape = (max_viable_size, max_viable_size)
+                        file_item.shape = (max_size, max_size)
                 else:
                     file_item.metadata.max_size = max_size
                     file_item.shape = (max_size, max_size)

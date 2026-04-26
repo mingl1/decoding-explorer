@@ -1015,19 +1015,23 @@ class FileManagerVM(QObject):
         )
 
     def _extract_brightfield_image(
-        self, file_item: FileItem, materialize=False
+        self,
+        file_item: FileItem,
+        materialize=False,
+        use_original=False,
     ) -> tuple[Optional[np.ndarray], Optional[str]]:
         latest_file = self.files.get(file_item.path, file_item)
-        max_size = int(latest_file.metadata.max_size)
+        # None slice == full dimension; used when caller wants the untruncated image
+        sz = None if use_original else int(latest_file.metadata.max_size)
         bf_channel = int(latest_file.metadata.reference_channel)
 
-        if latest_file.working_image is not None:
+        if latest_file.working_image is not None and not use_original:
             working = latest_file.working_image
             if len(working.shape) == 2:
-                brightfield = working[:max_size, :max_size]
+                brightfield = working[:sz, :sz]
             elif len(working.shape) > 2:
                 if bf_channel < working.shape[0]:
-                    brightfield = working[bf_channel, :max_size, :max_size]
+                    brightfield = working[bf_channel, :sz, :sz]
                 else:
                     return (
                         None,
@@ -1045,14 +1049,14 @@ class FileManagerVM(QObject):
         image = load_image(latest_file)
         if len(image.shape) > 2:
             if bf_channel < image.shape[0]:
-                brightfield = image[bf_channel, :max_size, :max_size]
+                brightfield = image[bf_channel, :sz, :sz]
             else:
                 return (
                     None,
                     f"Brightfield channel {bf_channel} exceeds number of channels in original image for file {os.path.basename(latest_file.path)}.",
                 )
         elif len(image.shape) == 2:
-            brightfield = image[:max_size, :max_size]
+            brightfield = image[:sz, :sz]
         else:
             return (
                 None,
@@ -1063,8 +1067,14 @@ class FileManagerVM(QObject):
             return np.array(brightfield), None
         return brightfield, None
 
-    def _get_brightfield_image(self, file_item: FileItem) -> Optional[np.ndarray]:
-        image, error_msg = self._extract_brightfield_image(file_item, materialize=False)
+    def _get_brightfield_image(
+        self, file_item: FileItem, use_original=False
+    ) -> Optional[np.ndarray]:
+        image, error_msg = self._extract_brightfield_image(
+            file_item,
+            materialize=False,
+            use_original=use_original,
+        )
         if error_msg:
             self.align_error.emit(error_msg)
             return None
@@ -1196,11 +1206,7 @@ class FileManagerVM(QObject):
             if not my_f:
                 continue
 
-            # Get full image (use working_image if available, otherwise load original)
-            if my_f.working_image is not None:
-                full_image = my_f.working_image
-            else:
-                full_image = np.array(load_image(my_f))
+            full_image = np.array(load_image(my_f))
 
             # Validate bounds
             if len(full_image.shape) == 3:
@@ -1224,6 +1230,11 @@ class FileManagerVM(QObject):
             my_f.working_image = cropped
             my_f.shape = cropped.shape
 
+            # Cap max_size to the new (smaller) cropped dimensions
+            cropped_min_side = min(cropped.shape[-2], cropped.shape[-1])
+            if int(my_f.metadata.max_size) > cropped_min_side:
+                my_f.metadata.max_size = cropped_min_side
+
             # Update metadata crop_bounds for reference
             my_f.metadata.crop_bounds = (x1, y1, x2, y2)
 
@@ -1240,10 +1251,7 @@ class FileManagerVM(QObject):
         # min of width and height for all files selected
         max_viable_size = reduce(
             lambda x, y: min(x, y),
-            [
-                min(int(f.original_shape[-2]), int(f.original_shape[-1]))
-                for f in selected_files
-            ],
+            [min(int(f.shape[-2]), int(f.shape[-1])) for f in selected_files],
             int(metadata_changes.get("max_size", float("inf"))),
         )
         corrected_values = {}

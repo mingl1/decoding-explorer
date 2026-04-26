@@ -1,13 +1,10 @@
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
+import pyqtgraph as pg
+from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QBrush,
     QColor,
-    QImage,
     QIntValidator,
-    QPainter,
     QPen,
-    QPixmap,
 )
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -15,10 +12,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGraphicsEllipseItem,
     QGraphicsItem,
-    QGraphicsPixmapItem,
     QGraphicsRectItem,
-    QGraphicsScene,
-    QGraphicsView,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -28,7 +22,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from utils import to_uint8
+from utils import adjust_contrast, to_uint8
 
 
 class ResizeHandle(QGraphicsEllipseItem):
@@ -44,31 +38,33 @@ class ResizeHandle(QGraphicsEllipseItem):
         """
         self.base_size = 12  # Base size in screen pixels
         size = self.base_size
-        super().__init__(-size/2, -size/2, size, size, parent)
+        super().__init__(-size / 2, -size / 2, size, size, parent)
 
         self.handle_type = handle_type
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)  # Keep constant screen size
+        self.setFlag(
+            QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True
+        )  # Keep constant screen size
         self.setAcceptHoverEvents(True)
         self.setCursor(self._get_cursor())
 
         # Visual style
-        self.setBrush(QBrush(QColor(255, 255, 0, 200)))  # Yellow
+        self.setBrush(pg.mkBrush(QColor(255, 255, 0, 200)))  # Yellow
         self.setPen(QPen(QColor(0, 0, 0), 2))
         self.setZValue(12)  # Above crop rect
 
     def _get_cursor(self):
         """Get appropriate cursor for handle position."""
         cursors = {
-            'nw': Qt.CursorShape.SizeFDiagCursor,
-            'n': Qt.CursorShape.SizeVerCursor,
-            'ne': Qt.CursorShape.SizeBDiagCursor,
-            'e': Qt.CursorShape.SizeHorCursor,
-            'se': Qt.CursorShape.SizeFDiagCursor,
-            's': Qt.CursorShape.SizeVerCursor,
-            'sw': Qt.CursorShape.SizeBDiagCursor,
-            'w': Qt.CursorShape.SizeHorCursor,
+            "nw": Qt.CursorShape.SizeFDiagCursor,
+            "n": Qt.CursorShape.SizeVerCursor,
+            "ne": Qt.CursorShape.SizeBDiagCursor,
+            "e": Qt.CursorShape.SizeHorCursor,
+            "se": Qt.CursorShape.SizeFDiagCursor,
+            "s": Qt.CursorShape.SizeVerCursor,
+            "sw": Qt.CursorShape.SizeBDiagCursor,
+            "w": Qt.CursorShape.SizeHorCursor,
         }
         return cursors.get(self.handle_type, Qt.CursorShape.ArrowCursor)
 
@@ -84,7 +80,7 @@ class InteractiveCropRect(QGraphicsRectItem):
 
         # Create 8 resize handles
         self.handles = {}
-        handle_positions = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
+        handle_positions = ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
         for pos in handle_positions:
             handle = ResizeHandle(pos, self)
             self.handles[pos] = handle
@@ -108,14 +104,14 @@ class InteractiveCropRect(QGraphicsRectItem):
         cy = (y1 + y2) / 2
 
         positions = {
-            'nw': (x1, y1),
-            'n': (cx, y1),
-            'ne': (x2, y1),
-            'e': (x2, cy),
-            'se': (x2, y2),
-            's': (cx, y2),
-            'sw': (x1, y2),
-            'w': (x1, cy),
+            "nw": (x1, y1),
+            "n": (cx, y1),
+            "ne": (x2, y1),
+            "e": (x2, cy),
+            "se": (x2, y2),
+            "s": (cx, y2),
+            "sw": (x1, y2),
+            "w": (x1, cy),
         }
 
         for pos, (x, y) in positions.items():
@@ -131,56 +127,49 @@ class InteractiveCropRect(QGraphicsRectItem):
         return None
 
 
-class ZoomableImageView(QGraphicsView):
+class ZoomableImageView(pg.GraphicsView):
     """Zoomable image view for crop dialog."""
 
-    mouse_moved = pyqtSignal(int, int)  # x, y in scene coordinates
-    crop_changed = pyqtSignal(float, float, float, float)  # x1, y1, x2, y2 in scene coordinates
+    mouse_moved = pyqtSignal(int, int)  # x, y in image coordinates
+    crop_changed = pyqtSignal(
+        float, float, float, float
+    )  # x1, y1, x2, y2 in image coordinates
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, background="k")
 
-        self._scene = QGraphicsScene(self)
-        self.image_items: list[QGraphicsPixmapItem] = []
-        self.setScene(self._scene)
+        self._vb = pg.ViewBox(lockAspect=True, invertY=True, enableMenu=False)
+        self._vb.setMouseMode(pg.ViewBox.PanMode)
+        self.setCentralItem(self._vb)
 
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        self.image_items: list[pg.ImageItem] = []
 
-        # Enable mouse tracking
         self.setMouseTracking(True)
         viewport = self.viewport()
         if viewport:
             viewport.setMouseTracking(True)
 
-        # Zoom limits
-        self.min_zoom = 0.1  # 10% of original size
-        self.max_zoom = 150.0  # 10x original size
-        self.current_zoom = 1.0
-
         # Handle dragging state
-        self.dragging_handle = None
+        self.dragging_handle: ResizeHandle | None = None
         self.drag_start_pos = None
         self.drag_start_rect = None
         self.crop_rect_item: InteractiveCropRect | None = None
 
-    def set_images(self, pixmaps: list[QPixmap], opacities: list[float] | None = None):
-        """Set images to display."""
-        # Clear existing items
+    def set_images(self, arrays: list[np.ndarray], opacities: list[float] | None = None):
+        """Set RGBA numpy arrays as image layers."""
         for item in self.image_items:
-            self._scene.removeItem(item)
+            self._vb.removeItem(item)
         self.image_items.clear()
 
         if opacities is None:
-            opacities = [1.0] * len(pixmaps)
+            opacities = [1.0] * len(arrays)
 
-        for pixmap, opacity in zip(pixmaps, opacities):
-            item = QGraphicsPixmapItem(pixmap)
+        for rgba, opacity in zip(arrays, opacities):
+            item = pg.ImageItem(axisOrder="row-major")
+            item.setImage(rgba, autoLevels=False, levels=[0, 255])
             item.setOpacity(opacity)
             self.image_items.append(item)
-            self._scene.addItem(item)
+            self._vb.addItem(item)
 
         QTimer.singleShot(0, self.reset_zoom)
 
@@ -191,46 +180,13 @@ class ZoomableImageView(QGraphicsView):
 
     def reset_zoom(self):
         """Reset zoom to fit all items."""
-        if not self.scene():
+        if not self.image_items:
             return
-        self.get_scene().setSceneRect(self.get_scene().itemsBoundingRect())
-        if self.image_items:
-            self.fitInView(self.image_items[0], Qt.AspectRatioMode.KeepAspectRatio)
-            self.centerOn(self.image_items[0])
-
-        # Reset zoom tracking
-        self.current_zoom = 1.0
+        self._vb.autoRange(padding=0)
 
     def get_scene(self):
         """Get the scene."""
-        s = self.scene()
-        assert s is not None
-        return s
-
-    def wheelEvent(self, event):
-        """Handle mouse wheel events for zooming with limits."""
-        if event is None:
-            return
-        angle = event.angleDelta().y()
-        if angle > 0:
-            zoom_factor = 1.15
-        else:
-            zoom_factor = 1 / 1.15
-
-        # Calculate new zoom level
-        new_zoom = self.current_zoom * zoom_factor
-
-        # Enforce zoom limits
-        if new_zoom < self.min_zoom:
-            # Already at min zoom, don't zoom out further
-            return
-        elif new_zoom > self.max_zoom:
-            # Already at max zoom, don't zoom in further
-            return
-
-        # Apply zoom
-        self.scale(zoom_factor, zoom_factor)
-        self.current_zoom = new_zoom
+        return self.sceneObj
 
     def mousePressEvent(self, event):
         """Handle mouse press for handle dragging."""
@@ -238,15 +194,12 @@ class ZoomableImageView(QGraphicsView):
             return
 
         if event.button() == Qt.MouseButton.LeftButton and self.crop_rect_item:
-            # Check if we clicked on a handle by looking at items at the click position
-            items = self.items(event.pos())
-            for item in items:
+            for item in self.items(event.pos()):
                 if isinstance(item, ResizeHandle):
-                    # Start dragging this handle
                     self.dragging_handle = item
-                    self.drag_start_pos = self.mapToScene(event.pos())
+                    scene_pos = self.mapToScene(event.pos())
+                    self.drag_start_pos = self._vb.mapSceneToView(scene_pos)
                     self.drag_start_rect = QRectF(self.crop_rect_item.rect())
-                    self.setDragMode(QGraphicsView.DragMode.NoDrag)
                     event.accept()
                     return
 
@@ -259,16 +212,14 @@ class ZoomableImageView(QGraphicsView):
 
         pos = event.position()
         scene_pos = self.mapToScene(int(pos.x()), int(pos.y()))
+        view_pos = self._vb.mapSceneToView(scene_pos)
 
-        # Handle dragging
         if self.dragging_handle and self.drag_start_pos and self.drag_start_rect:
-            self._resize_crop_rect(scene_pos)
+            self._resize_crop_rect(view_pos)
             event.accept()
         else:
-            # Emit scene coordinates
-            self.mouse_moved.emit(int(scene_pos.x()), int(scene_pos.y()))
-
-        super().mouseMoveEvent(event)
+            self.mouse_moved.emit(int(view_pos.x()), int(view_pos.y()))
+            super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release to stop dragging."""
@@ -276,58 +227,59 @@ class ZoomableImageView(QGraphicsView):
             return
 
         if event.button() == Qt.MouseButton.LeftButton and self.dragging_handle:
-            # End dragging
             self.dragging_handle = None
             self.drag_start_pos = None
             self.drag_start_rect = None
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
 
-            # Emit final crop bounds
             if self.crop_rect_item:
                 rect = self.crop_rect_item.rect()
-                self.crop_changed.emit(rect.left(), rect.top(), rect.right(), rect.bottom())
+                self.crop_changed.emit(
+                    rect.left(), rect.top(), rect.right(), rect.bottom()
+                )
 
             event.accept()
             return
 
         super().mouseReleaseEvent(event)
 
-    def _resize_crop_rect(self, scene_pos):
+    def _resize_crop_rect(self, view_pos):
         """Resize crop rectangle based on handle drag."""
-        if not self.dragging_handle or not self.drag_start_pos or not self.drag_start_rect or not self.crop_rect_item:
+        if (
+            not self.dragging_handle
+            or not self.drag_start_pos
+            or not self.drag_start_rect
+            or not self.crop_rect_item
+        ):
             return
 
-        delta_x = scene_pos.x() - self.drag_start_pos.x()
-        delta_y = scene_pos.y() - self.drag_start_pos.y()
+        delta_x = view_pos.x() - self.drag_start_pos.x()
+        delta_y = view_pos.y() - self.drag_start_pos.y()
 
         handle_type = self.dragging_handle.handle_type
         rect = QRectF(self.drag_start_rect)
 
         # Update rectangle based on which handle is being dragged
-        if 'n' in handle_type:  # North handles
+        if "n" in handle_type:  # North handles
             new_top = rect.top() + delta_y
             if rect.bottom() - new_top >= self.crop_rect_item.min_size:
                 rect.setTop(new_top)
 
-        if 's' in handle_type:  # South handles
+        if "s" in handle_type:  # South handles
             new_bottom = rect.bottom() + delta_y
             if new_bottom - rect.top() >= self.crop_rect_item.min_size:
                 rect.setBottom(new_bottom)
 
-        if 'w' in handle_type:  # West handles
+        if "w" in handle_type:  # West handles
             new_left = rect.left() + delta_x
             if rect.right() - new_left >= self.crop_rect_item.min_size:
                 rect.setLeft(new_left)
 
-        if 'e' in handle_type:  # East handles
+        if "e" in handle_type:  # East handles
             new_right = rect.right() + delta_x
             if new_right - rect.left() >= self.crop_rect_item.min_size:
                 rect.setRight(new_right)
 
-        # Update the crop rectangle
         self.crop_rect_item.setRect(rect)
-
-        # Emit updated bounds for live preview in text fields
         self.crop_changed.emit(rect.left(), rect.top(), rect.right(), rect.bottom())
 
 
@@ -420,6 +372,11 @@ class CropDialog(QDialog):
 
         crop_group.setLayout(crop_layout)
 
+        # Auto contrast toggle
+        self.auto_contrast_checkbox = QCheckBox("Auto Contrast")
+        self.auto_contrast_checkbox.setChecked(False)
+        self.auto_contrast_checkbox.stateChanged.connect(self._on_auto_contrast_changed)
+
         # Layer visibility controls (if multiple images)
         if len(self.preview_images) > 1:
             self.visibility_groupbox = QGroupBox("Layers to be cropped")
@@ -459,6 +416,7 @@ class CropDialog(QDialog):
         main_layout.addWidget(self.coord_label)
         main_layout.addWidget(self.image_view)
         main_layout.addWidget(crop_group)
+        main_layout.addWidget(self.auto_contrast_checkbox)
         if len(self.preview_images) > 1:
             main_layout.addWidget(self.visibility_groupbox)
         main_layout.addLayout(button_layout)
@@ -468,40 +426,37 @@ class CropDialog(QDialog):
     def _create_overlay(self):
         """Create image overlay with colorization."""
         colors = ["red", "green", "blue", "cyan", "magenta", "yellow"]
-        pixmaps = []
+        arrays = []
         opacities = []
 
         for i, img in enumerate(self.preview_images):
             color = colors[i % len(colors)]
-            pixmap = colorize_grayscale(to_uint8(img), color)
-            pixmaps.append(pixmap)
+            rgba = colorize_grayscale(to_uint8(img), color)
+            arrays.append(rgba)
 
-            # Reference is opaque, others are semi-transparent
             if i == 0:
                 opacities.append(1.0)
             else:
                 opacities.append(0.5)
 
-        self.image_view.set_images(pixmaps, opacities)
+        self.image_view.set_images(arrays, opacities)
 
-        # Add interactive crop rectangle overlay
+        # Add interactive crop rectangle to the ViewBox (image pixel coordinates)
         self.crop_rect = InteractiveCropRect()
-        self.image_view.get_scene().addItem(self.crop_rect)
-        self.image_view.crop_rect_item = self.crop_rect  # Store reference in view
+        self.image_view._vb.addItem(self.crop_rect, ignoreBounds=True)
+        self.image_view.crop_rect_item = self.crop_rect
 
         # Add pixel highlight rectangle
         self.highlight_rect = QGraphicsRectItem()
         highlight_pen = QPen(Qt.GlobalColor.yellow, 1, Qt.PenStyle.SolidLine)
         self.highlight_rect.setPen(highlight_pen)
         self.highlight_rect.setZValue(11)  # Above crop rect
-        self.image_view.get_scene().addItem(self.highlight_rect)
+        self.image_view._vb.addItem(self.highlight_rect, ignoreBounds=True)
 
     def _on_mouse_move(self, scene_x: int, scene_y: int):
         """Update coordinate label and pixel highlight on mouse move."""
-        # Update coordinate label (scene coordinates are already at full resolution)
         self.coord_label.setText(f"Current Position: X: {scene_x}, Y: {scene_y}")
 
-        # Update pixel highlight rectangle (small square at cursor)
         if self.highlight_rect:
             highlight_size = 4
             self.highlight_rect.setRect(
@@ -516,18 +471,36 @@ class CropDialog(QDialog):
         visible = state == Qt.CheckState.Checked.value
         self.image_view.toggle_layer_visibility(index, visible)
 
+    def _refresh_pixmaps(self):
+        """Update image layers in-place without touching scene structure or zoom."""
+        colors = ["red", "green", "blue", "cyan", "magenta", "yellow"]
+        for i, img in enumerate(self.preview_images):
+            if i >= len(self.image_view.image_items):
+                break
+            color = colors[i % len(colors)]
+            if self.auto_contrast_checkbox.isChecked():
+                img_u8 = to_uint8(adjust_contrast(img, 30, 99))
+            else:
+                img_u8 = to_uint8(img)
+            rgba = colorize_grayscale(img_u8, color)
+            self.image_view.image_items[i].setImage(rgba, autoLevels=False, levels=[0, 255])
+
+    def _on_auto_contrast_changed(self):
+        """Swap image data with/without contrast — no scene or zoom changes."""
+        self._refresh_pixmaps()
+        if len(self.preview_images) > 1:
+            for i, cb in enumerate(self.visibility_checkboxes):
+                self.image_view.toggle_layer_visibility(i, cb.isChecked())
+
     def _on_crop_changed_by_drag(self, x1: float, y1: float, x2: float, y2: float):
         """Update text fields when crop bounds change via handle dragging."""
-        # Prevent circular updates
         self.updating_from_drag = True
 
-        # Update text fields (coordinates are already at full resolution)
         self.start_x_input.setText(str(int(x1)))
         self.start_y_input.setText(str(int(y1)))
         self.end_x_input.setText(str(int(x2)))
         self.end_y_input.setText(str(int(y2)))
 
-        # Update size label
         width = int(x2 - x1)
         height = int(y2 - y1)
         self.size_label.setText(f"Crop Size: {width} x {height} pixels")
@@ -536,7 +509,6 @@ class CropDialog(QDialog):
 
     def _update_crop_preview(self):
         """Update crop rectangle overlay based on input fields."""
-        # Skip if we're updating from a drag operation to prevent circular updates
         if self.updating_from_drag:
             return
 
@@ -546,7 +518,6 @@ class CropDialog(QDialog):
             x2 = int(self.end_x_input.text()) if self.end_x_input.text() else 0
             y2 = int(self.end_y_input.text()) if self.end_y_input.text() else 0
 
-            # Update crop rectangle (no scaling needed - coordinates are at full resolution)
             width = x2 - x1
             height = y2 - y1
 
@@ -554,7 +525,6 @@ class CropDialog(QDialog):
                 if self.crop_rect:
                     self.crop_rect.setRect(x1, y1, width, height)
 
-                # Update size label
                 self.size_label.setText(f"Crop Size: {width} x {height} pixels")
             else:
                 self.size_label.setText("Crop Size: Invalid")
@@ -596,7 +566,6 @@ class CropDialog(QDialog):
             )
             return
 
-        # Emit signal with full resolution coordinates
         self.crop_confirmed.emit(x1, y1, x2, y2)
         self.accept()
 
@@ -607,8 +576,8 @@ class CropDialog(QDialog):
             event.accept()
 
 
-def colorize_grayscale(gray_img: np.ndarray, color: str) -> QPixmap:
-    """Colorize grayscale image and make black pixels fully transparent."""
+def colorize_grayscale(gray_img: np.ndarray, color: str) -> np.ndarray:
+    """Colorize grayscale image; black pixels are fully transparent. Returns RGBA uint8 array."""
     h, w = gray_img.shape
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
 
@@ -629,7 +598,6 @@ def colorize_grayscale(gray_img: np.ndarray, color: str) -> QPixmap:
         rgba[:, :, 1] = gray_img
 
     mask = gray_img > 0
-    rgba[:, :, 3] = mask.astype(np.uint8) * 255  # Alpha
+    rgba[:, :, 3] = mask.astype(np.uint8) * 255
 
-    qimage = QImage(rgba.data, w, h, 4 * w, QImage.Format.Format_RGBA8888)
-    return QPixmap.fromImage(qimage)
+    return np.ascontiguousarray(rgba)
