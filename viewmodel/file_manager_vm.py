@@ -20,7 +20,7 @@ import utils
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from view.alignment_preview_dialog import AlignmentPreviewDialog
-from viewmodel.bead_progress_estimator import BeadProgressEstimator
+from viewmodel.bead_eta_estimator import BeadEtaEstimator
 from viewmodel.stardist_runtime_eta import StarDistRuntimeEtaTracker
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ class BeadGenerationThread(QThread):
         if self.use_stardist:
             self._estimator = StarDistRuntimeEtaTracker()
         else:
-            self._estimator = BeadProgressEstimator(mode="legacy")
+            self._estimator = BeadEtaEstimator(mode="legacy")
         success = False
         try:
             ref_bf_channel = int(self.ref_file.metadata.reference_channel)
@@ -290,19 +290,20 @@ class BeadGenerationThread(QThread):
                 return
             self._last_progress_emit_second = elapsed_second_bucket
             self._last_progress_emit_message = message
-        if 0 <= progress_int < 100:
-            status_parts = [
-                f"Elapsed {BeadProgressEstimator.format_eta(elapsed_seconds)}"
-            ]
+        if 0 < progress_int < 100:
+            step_overrun = bool(getattr(self._estimator, "step_overrun", False))
+            status_parts = []
             if step_eta_seconds is not None and step_eta_seconds > 0:
+                prefix = "~" if step_overrun else ""
                 status_parts.append(
-                    f"Step ETA {BeadProgressEstimator.format_eta(step_eta_seconds)}"
+                    f"Step ETA {prefix}{BeadEtaEstimator.format_eta(step_eta_seconds)}"
                 )
             if total_eta_seconds is not None and total_eta_seconds > 0:
                 status_parts.append(
-                    f"Total ETA {BeadProgressEstimator.format_eta(total_eta_seconds)}"
+                    f"Total ETA {BeadEtaEstimator.format_eta(total_eta_seconds)}"
                 )
-            message = f"{message} ({', '.join(status_parts)})"
+            if status_parts:
+                message = f"{message} ({', '.join(status_parts)})"
         self.progress.emit(progress_int, message)
 
     def cancel(self):

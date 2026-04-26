@@ -837,8 +837,8 @@ class TestFileManagerVM:
         pre_values = [v for v, m in emitted if "Preprocessing brightfield image..." in m]
         assert pre_values
         assert pre_values[0] < 30
-        assert any("ETA" in m for v, m in emitted if v >= 0 and v < 100)
-        assert any("Elapsed" in m for v, m in emitted if v >= 0 and v < 100)
+        assert any("ETA" in m for v, m in emitted if v > 0 and v < 100)
+        assert not any("Elapsed" in m for v, m in emitted)
         assert max(v for v, _ in emitted if v >= 0) <= 99
 
     def test_bead_generation_thread_heartbeat_emits_between_sparse_callbacks(self, qapp, tmp_tiff_path):
