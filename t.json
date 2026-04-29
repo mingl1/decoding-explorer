@@ -1,7 +1,7 @@
 {
-  "started_at": "2026-04-13T13:26:09.864796",
-  "ended_at": "2026-04-13T13:58:17.691238",
-  "total_duration_s": 1927.828282,
+  "started_at": "2026-04-29T08:00:27.502411",
+  "ended_at": "2026-04-29T08:04:36.398392",
+  "total_duration_s": 248.895756,
   "status": "success",
   "error": null,
   "use_stardist": true,
@@ -10,14 +10,14 @@
   "stardist_n_tiles": 1,
   "use_stardist_bead_centers": false,
   "area_multiplier": 1.8,
-  "max_size": 10000,
+  "max_size": 5000,
   "signal_to_noise_cutoff": 0.1,
   "ensemble_ratio_start": 1.0,
   "ensemble_ratio_end": 1.5,
   "ensemble_ratio_step": 0.05,
   "counts": {
-    "beads": 2729848,
-    "pre_ensemble_beads": 2729848,
+    "beads": 687823,
+    "pre_ensemble_beads": 687823,
     "ensemble_sweep_rows": 11,
     "ensemble_ratio_applied": 1.0
   },
@@ -25,146 +25,1184 @@
     {
       "progress": 0,
       "message": "Preprocessing brightfield image...",
-      "offset_s": 0.000203,
-      "duration_s": 1.080846
+      "offset_s": 0.000127,
+      "duration_s": 0.579227
     },
     {
       "progress": 10,
       "message": "Initial bead detection...",
-      "offset_s": 1.081049,
-      "duration_s": 118.762607
+      "offset_s": 0.579354,
+      "duration_s": 1.81938
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 1/100)",
+      "offset_s": 2.398734,
+      "duration_s": 0.049179
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 2/100)",
+      "offset_s": 2.447913,
+      "duration_s": 0.170136
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 3/100)",
+      "offset_s": 2.618049,
+      "duration_s": 0.001851
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 4/100)",
+      "offset_s": 2.6199,
+      "duration_s": 0.040814
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 5/100)",
+      "offset_s": 2.660714,
+      "duration_s": 0.006603
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 6/100)",
+      "offset_s": 2.667317,
+      "duration_s": 0.009132
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 7/100)",
+      "offset_s": 2.676449,
+      "duration_s": 0.022089
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 8/100)",
+      "offset_s": 2.698538,
+      "duration_s": 0.011121
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 9/100)",
+      "offset_s": 2.709659,
+      "duration_s": 0.033653
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 10/100)",
+      "offset_s": 2.743312,
+      "duration_s": 1.695387
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 11/100)",
+      "offset_s": 4.438699,
+      "duration_s": 0.30629
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 12/100)",
+      "offset_s": 4.744989,
+      "duration_s": 0.028909
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 13/100)",
+      "offset_s": 4.773898,
+      "duration_s": 0.145147
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 14/100)",
+      "offset_s": 4.919045,
+      "duration_s": 0.001895
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 15/100)",
+      "offset_s": 4.92094,
+      "duration_s": 0.047629
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 16/100)",
+      "offset_s": 4.968569,
+      "duration_s": 0.049707
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 17/100)",
+      "offset_s": 5.018276,
+      "duration_s": 0.008527
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 18/100)",
+      "offset_s": 5.026803,
+      "duration_s": 0.033167
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 19/100)",
+      "offset_s": 5.05997,
+      "duration_s": 0.027807
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 20/100)",
+      "offset_s": 5.087777,
+      "duration_s": 1.496438
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 21/100)",
+      "offset_s": 6.584215,
+      "duration_s": 0.555878
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 22/100)",
+      "offset_s": 7.140093,
+      "duration_s": 0.041028
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 23/100)",
+      "offset_s": 7.181121,
+      "duration_s": 0.034282
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 24/100)",
+      "offset_s": 7.215403,
+      "duration_s": 0.093036
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 25/100)",
+      "offset_s": 7.308439,
+      "duration_s": 0.044528
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 26/100)",
+      "offset_s": 7.352967,
+      "duration_s": 0.022567
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 27/100)",
+      "offset_s": 7.375534,
+      "duration_s": 0.020089
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 28/100)",
+      "offset_s": 7.395623,
+      "duration_s": 0.035344
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 29/100)",
+      "offset_s": 7.430967,
+      "duration_s": 0.040484
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 30/100)",
+      "offset_s": 7.471451,
+      "duration_s": 1.310617
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 31/100)",
+      "offset_s": 8.782068,
+      "duration_s": 0.84653
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 32/100)",
+      "offset_s": 9.628598,
+      "duration_s": 0.009849
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 33/100)",
+      "offset_s": 9.638447,
+      "duration_s": 0.017819
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 34/100)",
+      "offset_s": 9.656266,
+      "duration_s": 0.064011
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 35/100)",
+      "offset_s": 9.720277,
+      "duration_s": 0.056874
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 36/100)",
+      "offset_s": 9.777151,
+      "duration_s": 0.032604
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 37/100)",
+      "offset_s": 9.809755,
+      "duration_s": 0.06359
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 38/100)",
+      "offset_s": 9.873345,
+      "duration_s": 0.046026
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 39/100)",
+      "offset_s": 9.919371,
+      "duration_s": 0.071827
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 40/100)",
+      "offset_s": 9.991198,
+      "duration_s": 1.030634
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 41/100)",
+      "offset_s": 11.021832,
+      "duration_s": 1.080129
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 42/100)",
+      "offset_s": 12.101961,
+      "duration_s": 0.018969
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 43/100)",
+      "offset_s": 12.12093,
+      "duration_s": 0.03434
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 44/100)",
+      "offset_s": 12.15527,
+      "duration_s": 0.017621
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 45/100)",
+      "offset_s": 12.172891,
+      "duration_s": 0.022287
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 46/100)",
+      "offset_s": 12.195178,
+      "duration_s": 0.072683
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 47/100)",
+      "offset_s": 12.267861,
+      "duration_s": 0.061845
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 48/100)",
+      "offset_s": 12.329706,
+      "duration_s": 0.042107
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 49/100)",
+      "offset_s": 12.371813,
+      "duration_s": 0.028338
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 50/100)",
+      "offset_s": 12.400151,
+      "duration_s": 0.838304
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 51/100)",
+      "offset_s": 13.238455,
+      "duration_s": 1.294694
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 52/100)",
+      "offset_s": 14.533149,
+      "duration_s": 0.027316
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 53/100)",
+      "offset_s": 14.560465,
+      "duration_s": 0.066537
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 54/100)",
+      "offset_s": 14.627002,
+      "duration_s": 0.012566
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 55/100)",
+      "offset_s": 14.639568,
+      "duration_s": 0.022298
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 56/100)",
+      "offset_s": 14.661866,
+      "duration_s": 0.014278
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 57/100)",
+      "offset_s": 14.676144,
+      "duration_s": 0.120317
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 58/100)",
+      "offset_s": 14.796461,
+      "duration_s": 0.041573
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 59/100)",
+      "offset_s": 14.838034,
+      "duration_s": 0.017312
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 60/100)",
+      "offset_s": 14.855346,
+      "duration_s": 0.677444
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 61/100)",
+      "offset_s": 15.53279,
+      "duration_s": 1.44744
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 62/100)",
+      "offset_s": 16.98023,
+      "duration_s": 0.0239
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 63/100)",
+      "offset_s": 17.00413,
+      "duration_s": 0.074901
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 64/100)",
+      "offset_s": 17.079031,
+      "duration_s": 0.008505
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 65/100)",
+      "offset_s": 17.087536,
+      "duration_s": 0.09338
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 66/100)",
+      "offset_s": 17.180916,
+      "duration_s": 0.02146
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 67/100)",
+      "offset_s": 17.202376,
+      "duration_s": 0.055067
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 68/100)",
+      "offset_s": 17.257443,
+      "duration_s": 0.069157
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 69/100)",
+      "offset_s": 17.3266,
+      "duration_s": 0.045009
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 70/100)",
+      "offset_s": 17.371609,
+      "duration_s": 0.388013
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 71/100)",
+      "offset_s": 17.759622,
+      "duration_s": 1.736188
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 72/100)",
+      "offset_s": 19.49581,
+      "duration_s": 0.055224
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 73/100)",
+      "offset_s": 19.551034,
+      "duration_s": 0.016909
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 74/100)",
+      "offset_s": 19.567943,
+      "duration_s": 0.00611
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 75/100)",
+      "offset_s": 19.574053,
+      "duration_s": 0.042547
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 76/100)",
+      "offset_s": 19.6166,
+      "duration_s": 0.120643
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 77/100)",
+      "offset_s": 19.737243,
+      "duration_s": 0.028063
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 78/100)",
+      "offset_s": 19.765306,
+      "duration_s": 0.042672
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 79/100)",
+      "offset_s": 19.807978,
+      "duration_s": 0.047618
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 80/100)",
+      "offset_s": 19.855596,
+      "duration_s": 0.061361
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 81/100)",
+      "offset_s": 19.916957,
+      "duration_s": 1.940537
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 82/100)",
+      "offset_s": 21.857494,
+      "duration_s": 0.16738
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 83/100)",
+      "offset_s": 22.024874,
+      "duration_s": 0.014118
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 84/100)",
+      "offset_s": 22.038992,
+      "duration_s": 0.013678
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 85/100)",
+      "offset_s": 22.05267,
+      "duration_s": 0.001865
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 86/100)",
+      "offset_s": 22.054535,
+      "duration_s": 0.047889
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 87/100)",
+      "offset_s": 22.102424,
+      "duration_s": 0.049449
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 88/100)",
+      "offset_s": 22.151873,
+      "duration_s": 0.138557
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 89/100)",
+      "offset_s": 22.29043,
+      "duration_s": 0.011729
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 90/100)",
+      "offset_s": 22.302159,
+      "duration_s": 0.001836
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 91/100)",
+      "offset_s": 22.303995,
+      "duration_s": 1.565806
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 92/100)",
+      "offset_s": 23.869801,
+      "duration_s": 0.100881
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 93/100)",
+      "offset_s": 23.970682,
+      "duration_s": 0.024498
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 94/100)",
+      "offset_s": 23.99518,
+      "duration_s": 0.010547
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 95/100)",
+      "offset_s": 24.005727,
+      "duration_s": 0.018902
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 96/100)",
+      "offset_s": 24.024629,
+      "duration_s": 0.007977
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 97/100)",
+      "offset_s": 24.032606,
+      "duration_s": 0.009672
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 98/100)",
+      "offset_s": 24.042278,
+      "duration_s": 0.000635
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 99/100)",
+      "offset_s": 24.042913,
+      "duration_s": 0.014796
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection (tile 100/100)",
+      "offset_s": 24.057709,
+      "duration_s": 0.000567
+    },
+    {
+      "progress": 10,
+      "message": "Initial bead detection - finalizing",
+      "offset_s": 24.058276,
+      "duration_s": 5.278887
     },
     {
       "progress": 30,
       "message": "Getting activation regions from cycles",
-      "offset_s": 119.843656,
-      "duration_s": 47.348002
+      "offset_s": 29.337163,
+      "duration_s": 0.419242
     },
     {
       "progress": 30,
-      "message": "Getting activation regions from cycles - Running NMS",
-      "offset_s": 167.191658,
-      "duration_s": 141.300488
+      "message": "Processing fluorescence channels (1/8)",
+      "offset_s": 29.756405,
+      "duration_s": 21.828054
     },
     {
       "progress": 30,
-      "message": "Getting activation regions from cycles - Running NMS",
-      "offset_s": 308.492146,
-      "duration_s": 133.137696
+      "message": "Processing fluorescence channels (2/8)",
+      "offset_s": 51.584459,
+      "duration_s": 14.762999
     },
     {
       "progress": 30,
-      "message": "Getting activation regions from cycles - Running NMS",
-      "offset_s": 441.629842,
-      "duration_s": 251.807188
+      "message": "Processing fluorescence channels (3/8)",
+      "offset_s": 66.347458,
+      "duration_s": 15.457854
     },
     {
       "progress": 30,
-      "message": "Getting activation regions from cycles - Running NMS",
-      "offset_s": 693.43703,
-      "duration_s": 277.644598
+      "message": "Processing fluorescence channels (4/8)",
+      "offset_s": 81.805312,
+      "duration_s": 15.813676
     },
     {
       "progress": 30,
-      "message": "Getting activation regions from cycles - Running NMS",
-      "offset_s": 971.081628,
-      "duration_s": 291.795366
+      "message": "Processing fluorescence channels (5/8)",
+      "offset_s": 97.618988,
+      "duration_s": 14.947843
     },
     {
       "progress": 30,
-      "message": "Getting activation regions from cycles - Running NMS",
-      "offset_s": 1262.876994,
-      "duration_s": 121.934978
+      "message": "Processing fluorescence channels (6/8)",
+      "offset_s": 112.566831,
+      "duration_s": 59.549885
     },
     {
       "progress": 30,
-      "message": "Getting activation regions from cycles - Running NMS",
-      "offset_s": 1384.811972,
-      "duration_s": 130.715843
+      "message": "Processing fluorescence channels (7/8)",
+      "offset_s": 172.116716,
+      "duration_s": 15.891731
     },
     {
       "progress": 30,
-      "message": "Getting activation regions from cycles - Running NMS",
-      "offset_s": 1515.527815,
-      "duration_s": 74.675537
+      "message": "Processing fluorescence channels (8/8)",
+      "offset_s": 188.008447,
+      "duration_s": 15.654368
     },
     {
       "progress": 60,
       "message": "Assigning beads labels",
-      "offset_s": 1590.203352,
-      "duration_s": 14.381713
+      "offset_s": 203.662815,
+      "duration_s": 3.014335
     },
     {
       "progress": 72,
       "message": "Running Voronoi ensemble analysis",
-      "offset_s": 1604.585065,
-      "duration_s": 0.00014
+      "offset_s": 206.67715,
+      "duration_s": 8.8e-05
     },
     {
       "progress": 76,
       "message": "Voronoi median: building ensemble cache",
-      "offset_s": 1604.585205,
-      "duration_s": 269.312699
+      "offset_s": 206.677238,
+      "duration_s": 40.6154
     },
     {
       "progress": 84,
       "message": "Voronoi median: sweeping ensemble ratios",
-      "offset_s": 1873.897904,
-      "duration_s": 49.919261
+      "offset_s": 247.292638,
+      "duration_s": 1.497204
     },
     {
       "progress": 90,
       "message": "Voronoi median: applying selected ratio",
-      "offset_s": 1923.817165,
-      "duration_s": 4.010472
+      "offset_s": 248.789842,
+      "duration_s": 0.105819
     },
     {
       "progress": 95,
       "message": "Bead generation complete.",
-      "offset_s": 1927.827637,
-      "duration_s": 0.000645
+      "offset_s": 248.895661,
+      "duration_s": 9.5e-05
     }
   ],
   "step_durations": [
     {
       "message": "Preprocessing brightfield image...",
-      "duration_s": 1.080846
+      "duration_s": 0.579227
     },
     {
       "message": "Initial bead detection...",
-      "duration_s": 118.762607
+      "duration_s": 1.81938
+    },
+    {
+      "message": "Initial bead detection (tile 1/100)",
+      "duration_s": 0.049179
+    },
+    {
+      "message": "Initial bead detection (tile 2/100)",
+      "duration_s": 0.170136
+    },
+    {
+      "message": "Initial bead detection (tile 3/100)",
+      "duration_s": 0.001851
+    },
+    {
+      "message": "Initial bead detection (tile 4/100)",
+      "duration_s": 0.040814
+    },
+    {
+      "message": "Initial bead detection (tile 5/100)",
+      "duration_s": 0.006603
+    },
+    {
+      "message": "Initial bead detection (tile 6/100)",
+      "duration_s": 0.009132
+    },
+    {
+      "message": "Initial bead detection (tile 7/100)",
+      "duration_s": 0.022089
+    },
+    {
+      "message": "Initial bead detection (tile 8/100)",
+      "duration_s": 0.011121
+    },
+    {
+      "message": "Initial bead detection (tile 9/100)",
+      "duration_s": 0.033653
+    },
+    {
+      "message": "Initial bead detection (tile 10/100)",
+      "duration_s": 1.695387
+    },
+    {
+      "message": "Initial bead detection (tile 11/100)",
+      "duration_s": 0.30629
+    },
+    {
+      "message": "Initial bead detection (tile 12/100)",
+      "duration_s": 0.028909
+    },
+    {
+      "message": "Initial bead detection (tile 13/100)",
+      "duration_s": 0.145147
+    },
+    {
+      "message": "Initial bead detection (tile 14/100)",
+      "duration_s": 0.001895
+    },
+    {
+      "message": "Initial bead detection (tile 15/100)",
+      "duration_s": 0.047629
+    },
+    {
+      "message": "Initial bead detection (tile 16/100)",
+      "duration_s": 0.049707
+    },
+    {
+      "message": "Initial bead detection (tile 17/100)",
+      "duration_s": 0.008527
+    },
+    {
+      "message": "Initial bead detection (tile 18/100)",
+      "duration_s": 0.033167
+    },
+    {
+      "message": "Initial bead detection (tile 19/100)",
+      "duration_s": 0.027807
+    },
+    {
+      "message": "Initial bead detection (tile 20/100)",
+      "duration_s": 1.496438
+    },
+    {
+      "message": "Initial bead detection (tile 21/100)",
+      "duration_s": 0.555878
+    },
+    {
+      "message": "Initial bead detection (tile 22/100)",
+      "duration_s": 0.041028
+    },
+    {
+      "message": "Initial bead detection (tile 23/100)",
+      "duration_s": 0.034282
+    },
+    {
+      "message": "Initial bead detection (tile 24/100)",
+      "duration_s": 0.093036
+    },
+    {
+      "message": "Initial bead detection (tile 25/100)",
+      "duration_s": 0.044528
+    },
+    {
+      "message": "Initial bead detection (tile 26/100)",
+      "duration_s": 0.022567
+    },
+    {
+      "message": "Initial bead detection (tile 27/100)",
+      "duration_s": 0.020089
+    },
+    {
+      "message": "Initial bead detection (tile 28/100)",
+      "duration_s": 0.035344
+    },
+    {
+      "message": "Initial bead detection (tile 29/100)",
+      "duration_s": 0.040484
+    },
+    {
+      "message": "Initial bead detection (tile 30/100)",
+      "duration_s": 1.310617
+    },
+    {
+      "message": "Initial bead detection (tile 31/100)",
+      "duration_s": 0.84653
+    },
+    {
+      "message": "Initial bead detection (tile 32/100)",
+      "duration_s": 0.009849
+    },
+    {
+      "message": "Initial bead detection (tile 33/100)",
+      "duration_s": 0.017819
+    },
+    {
+      "message": "Initial bead detection (tile 34/100)",
+      "duration_s": 0.064011
+    },
+    {
+      "message": "Initial bead detection (tile 35/100)",
+      "duration_s": 0.056874
+    },
+    {
+      "message": "Initial bead detection (tile 36/100)",
+      "duration_s": 0.032604
+    },
+    {
+      "message": "Initial bead detection (tile 37/100)",
+      "duration_s": 0.06359
+    },
+    {
+      "message": "Initial bead detection (tile 38/100)",
+      "duration_s": 0.046026
+    },
+    {
+      "message": "Initial bead detection (tile 39/100)",
+      "duration_s": 0.071827
+    },
+    {
+      "message": "Initial bead detection (tile 40/100)",
+      "duration_s": 1.030634
+    },
+    {
+      "message": "Initial bead detection (tile 41/100)",
+      "duration_s": 1.080129
+    },
+    {
+      "message": "Initial bead detection (tile 42/100)",
+      "duration_s": 0.018969
+    },
+    {
+      "message": "Initial bead detection (tile 43/100)",
+      "duration_s": 0.03434
+    },
+    {
+      "message": "Initial bead detection (tile 44/100)",
+      "duration_s": 0.017621
+    },
+    {
+      "message": "Initial bead detection (tile 45/100)",
+      "duration_s": 0.022287
+    },
+    {
+      "message": "Initial bead detection (tile 46/100)",
+      "duration_s": 0.072683
+    },
+    {
+      "message": "Initial bead detection (tile 47/100)",
+      "duration_s": 0.061845
+    },
+    {
+      "message": "Initial bead detection (tile 48/100)",
+      "duration_s": 0.042107
+    },
+    {
+      "message": "Initial bead detection (tile 49/100)",
+      "duration_s": 0.028338
+    },
+    {
+      "message": "Initial bead detection (tile 50/100)",
+      "duration_s": 0.838304
+    },
+    {
+      "message": "Initial bead detection (tile 51/100)",
+      "duration_s": 1.294694
+    },
+    {
+      "message": "Initial bead detection (tile 52/100)",
+      "duration_s": 0.027316
+    },
+    {
+      "message": "Initial bead detection (tile 53/100)",
+      "duration_s": 0.066537
+    },
+    {
+      "message": "Initial bead detection (tile 54/100)",
+      "duration_s": 0.012566
+    },
+    {
+      "message": "Initial bead detection (tile 55/100)",
+      "duration_s": 0.022298
+    },
+    {
+      "message": "Initial bead detection (tile 56/100)",
+      "duration_s": 0.014278
+    },
+    {
+      "message": "Initial bead detection (tile 57/100)",
+      "duration_s": 0.120317
+    },
+    {
+      "message": "Initial bead detection (tile 58/100)",
+      "duration_s": 0.041573
+    },
+    {
+      "message": "Initial bead detection (tile 59/100)",
+      "duration_s": 0.017312
+    },
+    {
+      "message": "Initial bead detection (tile 60/100)",
+      "duration_s": 0.677444
+    },
+    {
+      "message": "Initial bead detection (tile 61/100)",
+      "duration_s": 1.44744
+    },
+    {
+      "message": "Initial bead detection (tile 62/100)",
+      "duration_s": 0.0239
+    },
+    {
+      "message": "Initial bead detection (tile 63/100)",
+      "duration_s": 0.074901
+    },
+    {
+      "message": "Initial bead detection (tile 64/100)",
+      "duration_s": 0.008505
+    },
+    {
+      "message": "Initial bead detection (tile 65/100)",
+      "duration_s": 0.09338
+    },
+    {
+      "message": "Initial bead detection (tile 66/100)",
+      "duration_s": 0.02146
+    },
+    {
+      "message": "Initial bead detection (tile 67/100)",
+      "duration_s": 0.055067
+    },
+    {
+      "message": "Initial bead detection (tile 68/100)",
+      "duration_s": 0.069157
+    },
+    {
+      "message": "Initial bead detection (tile 69/100)",
+      "duration_s": 0.045009
+    },
+    {
+      "message": "Initial bead detection (tile 70/100)",
+      "duration_s": 0.388013
+    },
+    {
+      "message": "Initial bead detection (tile 71/100)",
+      "duration_s": 1.736188
+    },
+    {
+      "message": "Initial bead detection (tile 72/100)",
+      "duration_s": 0.055224
+    },
+    {
+      "message": "Initial bead detection (tile 73/100)",
+      "duration_s": 0.016909
+    },
+    {
+      "message": "Initial bead detection (tile 74/100)",
+      "duration_s": 0.00611
+    },
+    {
+      "message": "Initial bead detection (tile 75/100)",
+      "duration_s": 0.042547
+    },
+    {
+      "message": "Initial bead detection (tile 76/100)",
+      "duration_s": 0.120643
+    },
+    {
+      "message": "Initial bead detection (tile 77/100)",
+      "duration_s": 0.028063
+    },
+    {
+      "message": "Initial bead detection (tile 78/100)",
+      "duration_s": 0.042672
+    },
+    {
+      "message": "Initial bead detection (tile 79/100)",
+      "duration_s": 0.047618
+    },
+    {
+      "message": "Initial bead detection (tile 80/100)",
+      "duration_s": 0.061361
+    },
+    {
+      "message": "Initial bead detection (tile 81/100)",
+      "duration_s": 1.940537
+    },
+    {
+      "message": "Initial bead detection (tile 82/100)",
+      "duration_s": 0.16738
+    },
+    {
+      "message": "Initial bead detection (tile 83/100)",
+      "duration_s": 0.014118
+    },
+    {
+      "message": "Initial bead detection (tile 84/100)",
+      "duration_s": 0.013678
+    },
+    {
+      "message": "Initial bead detection (tile 85/100)",
+      "duration_s": 0.001865
+    },
+    {
+      "message": "Initial bead detection (tile 86/100)",
+      "duration_s": 0.047889
+    },
+    {
+      "message": "Initial bead detection (tile 87/100)",
+      "duration_s": 0.049449
+    },
+    {
+      "message": "Initial bead detection (tile 88/100)",
+      "duration_s": 0.138557
+    },
+    {
+      "message": "Initial bead detection (tile 89/100)",
+      "duration_s": 0.011729
+    },
+    {
+      "message": "Initial bead detection (tile 90/100)",
+      "duration_s": 0.001836
+    },
+    {
+      "message": "Initial bead detection (tile 91/100)",
+      "duration_s": 1.565806
+    },
+    {
+      "message": "Initial bead detection (tile 92/100)",
+      "duration_s": 0.100881
+    },
+    {
+      "message": "Initial bead detection (tile 93/100)",
+      "duration_s": 0.024498
+    },
+    {
+      "message": "Initial bead detection (tile 94/100)",
+      "duration_s": 0.010547
+    },
+    {
+      "message": "Initial bead detection (tile 95/100)",
+      "duration_s": 0.018902
+    },
+    {
+      "message": "Initial bead detection (tile 96/100)",
+      "duration_s": 0.007977
+    },
+    {
+      "message": "Initial bead detection (tile 97/100)",
+      "duration_s": 0.009672
+    },
+    {
+      "message": "Initial bead detection (tile 98/100)",
+      "duration_s": 0.000635
+    },
+    {
+      "message": "Initial bead detection (tile 99/100)",
+      "duration_s": 0.014796
+    },
+    {
+      "message": "Initial bead detection (tile 100/100)",
+      "duration_s": 0.000567
+    },
+    {
+      "message": "Initial bead detection - finalizing",
+      "duration_s": 5.278887
     },
     {
       "message": "Getting activation regions from cycles",
-      "duration_s": 47.348002
+      "duration_s": 0.419242
     },
     {
-      "message": "Getting activation regions from cycles - Running NMS",
-      "duration_s": 1423.011694
+      "message": "Processing fluorescence channels (1/8)",
+      "duration_s": 21.828054
+    },
+    {
+      "message": "Processing fluorescence channels (2/8)",
+      "duration_s": 14.762999
+    },
+    {
+      "message": "Processing fluorescence channels (3/8)",
+      "duration_s": 15.457854
+    },
+    {
+      "message": "Processing fluorescence channels (4/8)",
+      "duration_s": 15.813676
+    },
+    {
+      "message": "Processing fluorescence channels (5/8)",
+      "duration_s": 14.947843
+    },
+    {
+      "message": "Processing fluorescence channels (6/8)",
+      "duration_s": 59.549885
+    },
+    {
+      "message": "Processing fluorescence channels (7/8)",
+      "duration_s": 15.891731
+    },
+    {
+      "message": "Processing fluorescence channels (8/8)",
+      "duration_s": 15.654368
     },
     {
       "message": "Assigning beads labels",
-      "duration_s": 14.381713
+      "duration_s": 3.014335
     },
     {
       "message": "Running Voronoi ensemble analysis",
-      "duration_s": 0.00014
+      "duration_s": 8.8e-05
     },
     {
       "message": "Voronoi median: building ensemble cache",
-      "duration_s": 269.312699
+      "duration_s": 40.6154
     },
     {
       "message": "Voronoi median: sweeping ensemble ratios",
-      "duration_s": 49.919261
+      "duration_s": 1.497204
     },
     {
       "message": "Voronoi median: applying selected ratio",
-      "duration_s": 4.010472
+      "duration_s": 0.105819
     },
     {
       "message": "Bead generation complete.",
-      "duration_s": 0.000645
+      "duration_s": 9.5e-05
     }
   ]
 }

@@ -188,3 +188,31 @@ def test_get_labels_from_cycles_with_prob_extracts_probabilities():
     assert np.allclose(out[0][0]["prob_lut"], np.array([0.0, 0.9, 0.6], dtype=np.float32))
     assert np.allclose(out[0][1]["prob_lut"], np.array([0.0, 0.8], dtype=np.float32))
     assert progress_events[-1] == ("activation_regions", 2, 2)
+
+
+def test_get_labels_from_cycles_with_prob_emits_channel_messages_without_nms_text():
+    lbl = np.array([[0, 1], [1, 0]], dtype=np.int32)
+    model = FakeStarDistModel(
+        instances_outputs=[
+            (lbl, {"prob": np.array([0.7], dtype=np.float32)}),
+            (lbl, {"prob": np.array([0.8], dtype=np.float32)}),
+        ]
+    )
+    cycle = np.zeros((3, 6, 6), dtype=np.uint16)
+    metadata = MetaData(max_size=6, reference_channel=0)
+    metadata.flors_layers = [1, 2]
+    messages = []
+
+    image_processing.get_labels_from_cycles_with_prob(
+        cycles=[cycle],
+        metadata_list=[metadata],
+        max_size=6,
+        model=model,
+        n_tiles=1,
+        progress_callback=messages.append,
+    )
+
+    assert messages == [
+        "Processing fluorescence channels (1/2)",
+        "Processing fluorescence channels (2/2)",
+    ]

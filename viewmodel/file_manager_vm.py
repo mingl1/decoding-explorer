@@ -20,8 +20,7 @@ import utils
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from view.alignment_preview_dialog import AlignmentPreviewDialog
-from viewmodel.bead_progress_estimator import BeadProgressEstimator
-from viewmodel.stardist_runtime_eta import StarDistRuntimeEtaTracker
+from viewmodel.bead_eta_estimator import BeadEtaEstimator, EtaRange, RateInfo
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -87,9 +86,9 @@ class BeadGenerationThread(QThread):
         self._last_progress_emit_second = -1
         self._last_progress_emit_message = ""
         if self.use_stardist:
-            self._estimator = StarDistRuntimeEtaTracker()
+            self._estimator = BeadEtaEstimator(mode="stardist")
         else:
-            self._estimator = BeadProgressEstimator(mode="legacy")
+            self._estimator = BeadEtaEstimator(mode="legacy")
         success = False
         try:
             ref_bf_channel = int(self.ref_file.metadata.reference_channel)
@@ -124,19 +123,19 @@ class BeadGenerationThread(QThread):
                 (
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
-                ) = self._estimator.update_stage_units_with_eta_details(
+                    eta_range,
+                    rate_info,
+                ) = self._estimator.update_stage_units(
                     stage="load_images",
                     done=i + 1,
                     total=total_files,
-                    message=f"Loading images ({i + 1}/{total_files})",
+                    message="Loading images",
                 )
                 self._emit_estimated_progress(
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
+                    eta_range,
+                    rate_info,
                 )
 
                 my_f = self.files.get(f.path)
@@ -149,8 +148,30 @@ class BeadGenerationThread(QThread):
             if not self._is_running:
                 return
 
+            if self.use_stardist and self._estimator is not None:
+                total_channels = 0
+                for img, file_item in tifs:
+                    metadata = getattr(file_item, "metadata", None)
+                    reference_channel = int(
+                        getattr(metadata, "reference_channel", 0) if metadata else 0
+                    )
+                    flors_layers = getattr(metadata, "flors_layers", None)
+                    if flors_layers is not None:
+                        channel_count = len(flors_layers)
+                    else:
+                        channel_dim = (
+                            int(img.shape[0]) if getattr(img, "ndim", 0) == 3 else 1
+                        )
+                        channel_count = sum(
+                            1 for j in range(channel_dim) if j > reference_channel
+                        )
+                    total_channels += max(int(channel_count), 0)
+                self._estimator.set_workload(
+                    total_channels=total_channels,
+                    max_size_pixels=ref_max_size,
+                )
+
             self._start_heartbeat()
-            stardist_bootstrap_stages: set[str] = set()
 
             def estimated_progress(p, m):
                 if not self._is_running:
@@ -161,53 +182,41 @@ class BeadGenerationThread(QThread):
                 (
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
-                ) = self._estimator.update_from_message_with_eta_details(m)
+                    eta_range,
+                    rate_info,
+                ) = self._estimator.update_from_message(m)
                 self._emit_estimated_progress(
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
+                    eta_range,
+                    rate_info,
                 )
-                if self.use_stardist and self._estimator:
-                    stage = self._estimator.map_message_to_stage(m)
-                    if (
-                        stage == "initial_detection"
-                        and stage not in stardist_bootstrap_stages
-                    ):
-                        stardist_bootstrap_stages.add(stage)
-                        (
-                            hb_progress_value,
-                            hb_progress_message,
-                            hb_total_eta_seconds,
-                            hb_step_eta_seconds,
-                        ) = self._estimator.heartbeat_with_eta_details()
-                        self._emit_estimated_progress(
-                            hb_progress_value,
-                            hb_progress_message,
-                            hb_total_eta_seconds,
-                            hb_step_eta_seconds,
-                        )
 
             def estimated_progress_units(stage, done, total):
                 if not self._is_running:
                     return
+                stage_message = None
+                if self.use_stardist:
+                    if stage == "init_det_tiles":
+                        stage_message = "Initial bead detection"
+                    elif stage == "activation_regions":
+                        stage_message = "Processing fluorescence channels"
                 (
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
-                ) = self._estimator.update_stage_units_with_eta_details(
+                    eta_range,
+                    rate_info,
+                ) = self._estimator.update_stage_units(
                     stage=stage,
                     done=done,
                     total=total,
+                    message=stage_message,
                 )
                 self._emit_estimated_progress(
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
+                    eta_range,
+                    rate_info,
                 )
 
             results = image_processing.process_beads(
@@ -259,22 +268,28 @@ class BeadGenerationThread(QThread):
             (
                 progress_value,
                 progress_message,
-                total_eta_seconds,
-                step_eta_seconds,
-            ) = self._estimator.heartbeat_with_eta_details()
+                eta_range,
+                rate_info,
+            ) = self._estimator.heartbeat()
             self._emit_estimated_progress(
                 progress_value,
                 progress_message,
-                total_eta_seconds,
-                step_eta_seconds,
+                eta_range,
+                rate_info,
             )
+
+    _STAGE_UNIT_LABELS = {
+        "load_images": "imgs",
+        "init_det_tiles": "tiles",
+        "activation_regions": "ch",
+    }
 
     def _emit_estimated_progress(
         self,
         progress_value: int,
         progress_message: str,
-        total_eta_seconds: Optional[float],
-        step_eta_seconds: Optional[float],
+        eta_range: Optional[EtaRange] = None,
+        rate_info: Optional[RateInfo] = None,
     ):
         elapsed_seconds = 0.0
         if self._run_started_at is not None:
@@ -290,19 +305,23 @@ class BeadGenerationThread(QThread):
                 return
             self._last_progress_emit_second = elapsed_second_bucket
             self._last_progress_emit_message = message
-        if 0 <= progress_int < 100:
-            status_parts = [
-                f"Elapsed {BeadProgressEstimator.format_eta(elapsed_seconds)}"
-            ]
-            if step_eta_seconds is not None and step_eta_seconds > 0:
-                status_parts.append(
-                    f"Step ETA {BeadProgressEstimator.format_eta(step_eta_seconds)}"
-                )
-            if total_eta_seconds is not None and total_eta_seconds > 0:
-                status_parts.append(
-                    f"Total ETA {BeadProgressEstimator.format_eta(total_eta_seconds)}"
-                )
-            message = f"{message} ({', '.join(status_parts)})"
+        if 0 < progress_int < 100:
+            status_parts = []
+            # if (
+            #     rate_info is not None
+            #     and not rate_info.is_progress_pct
+            #     and rate_info.units_total is not None
+            #     and rate_info.units_done is not None
+            # ):
+            #     label = self._STAGE_UNIT_LABELS.get(rate_info.stage or "", "")
+            #     label_suffix = f" {label}" if label else ""
+            #     status_parts.append(
+            #         f"{rate_info.units_done}/{rate_info.units_total}{label_suffix}"
+            #     )
+            if eta_range is not None:
+                status_parts.append(BeadEtaEstimator.format_eta_range(eta_range))
+            if status_parts:
+                message = f"{message} ({' · '.join(status_parts)})"
         self.progress.emit(progress_int, message)
 
     def cancel(self):
@@ -1015,19 +1034,23 @@ class FileManagerVM(QObject):
         )
 
     def _extract_brightfield_image(
-        self, file_item: FileItem, materialize=False
+        self,
+        file_item: FileItem,
+        materialize=False,
+        use_original=False,
     ) -> tuple[Optional[np.ndarray], Optional[str]]:
         latest_file = self.files.get(file_item.path, file_item)
-        max_size = int(latest_file.metadata.max_size)
+        # None slice == full dimension; used when caller wants the untruncated image
+        sz = None if use_original else int(latest_file.metadata.max_size)
         bf_channel = int(latest_file.metadata.reference_channel)
 
-        if latest_file.working_image is not None:
+        if latest_file.working_image is not None and not use_original:
             working = latest_file.working_image
             if len(working.shape) == 2:
-                brightfield = working[:max_size, :max_size]
+                brightfield = working[:sz, :sz]
             elif len(working.shape) > 2:
                 if bf_channel < working.shape[0]:
-                    brightfield = working[bf_channel, :max_size, :max_size]
+                    brightfield = working[bf_channel, :sz, :sz]
                 else:
                     return (
                         None,
@@ -1045,14 +1068,14 @@ class FileManagerVM(QObject):
         image = load_image(latest_file)
         if len(image.shape) > 2:
             if bf_channel < image.shape[0]:
-                brightfield = image[bf_channel, :max_size, :max_size]
+                brightfield = image[bf_channel, :sz, :sz]
             else:
                 return (
                     None,
                     f"Brightfield channel {bf_channel} exceeds number of channels in original image for file {os.path.basename(latest_file.path)}.",
                 )
         elif len(image.shape) == 2:
-            brightfield = image[:max_size, :max_size]
+            brightfield = image[:sz, :sz]
         else:
             return (
                 None,
@@ -1063,8 +1086,14 @@ class FileManagerVM(QObject):
             return np.array(brightfield), None
         return brightfield, None
 
-    def _get_brightfield_image(self, file_item: FileItem) -> Optional[np.ndarray]:
-        image, error_msg = self._extract_brightfield_image(file_item, materialize=False)
+    def _get_brightfield_image(
+        self, file_item: FileItem, use_original=False
+    ) -> Optional[np.ndarray]:
+        image, error_msg = self._extract_brightfield_image(
+            file_item,
+            materialize=False,
+            use_original=use_original,
+        )
         if error_msg:
             self.align_error.emit(error_msg)
             return None
@@ -1196,11 +1225,7 @@ class FileManagerVM(QObject):
             if not my_f:
                 continue
 
-            # Get full image (use working_image if available, otherwise load original)
-            if my_f.working_image is not None:
-                full_image = my_f.working_image
-            else:
-                full_image = np.array(load_image(my_f))
+            full_image = np.array(load_image(my_f))
 
             # Validate bounds
             if len(full_image.shape) == 3:
@@ -1224,6 +1249,11 @@ class FileManagerVM(QObject):
             my_f.working_image = cropped
             my_f.shape = cropped.shape
 
+            # Cap max_size to the new (smaller) cropped dimensions
+            cropped_min_side = min(cropped.shape[-2], cropped.shape[-1])
+            if int(my_f.metadata.max_size) > cropped_min_side:
+                my_f.metadata.max_size = cropped_min_side
+
             # Update metadata crop_bounds for reference
             my_f.metadata.crop_bounds = (x1, y1, x2, y2)
 
@@ -1240,10 +1270,7 @@ class FileManagerVM(QObject):
         # min of width and height for all files selected
         max_viable_size = reduce(
             lambda x, y: min(x, y),
-            [
-                min(int(f.original_shape[-2]), int(f.original_shape[-1]))
-                for f in selected_files
-            ],
+            [min(int(f.shape[-2]), int(f.shape[-1])) for f in selected_files],
             int(metadata_changes.get("max_size", float("inf"))),
         )
         corrected_values = {}

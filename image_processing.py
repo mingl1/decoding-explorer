@@ -220,6 +220,8 @@ def beadfinding(
     workers: int = 10,
     area_multiplier: float = 1.8,
     is_running_callback=None,
+    progress_units_callback=None,
+    progress_callback=None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Finds beads in a brightfield image using a tiled, parallel approach.
@@ -270,8 +272,10 @@ def beadfinding(
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process_tile, tb) for tb in tileset]
+        total_tiles = len(futures)
+        done_tiles = 0
         progress_bar = tqdm(
-            as_completed(futures), total=len(futures), desc="Processing tiles"
+            as_completed(futures), total=total_tiles, desc="Processing tiles"
         )
 
         for future in progress_bar:
@@ -280,9 +284,19 @@ def beadfinding(
                 return None, None  # Indicate cancellation
 
             result = future.result()
+            done_tiles += 1
+            if progress_units_callback:
+                progress_units_callback("init_det_tiles", done_tiles, total_tiles)
+            if progress_callback:
+                progress_callback(
+                    f"Initial bead detection (tile {done_tiles}/{total_tiles})"
+                )
             if result:
                 mask_chunk, dest_slice = result
                 stitched_mask[dest_slice] |= mask_chunk
+
+    if progress_callback:
+        progress_callback("Initial bead detection - finalizing")
 
     # # --- 2. Correct Morphological Operations ---
     # # Morphological operations should run on boolean masks, not intensity images.
@@ -2106,7 +2120,6 @@ def get_labels_from_cycles_with_prob(
     base_prob_thresh = float(prob_thresh)
     cycle_labels = []
     tile_plan: list[list[Tuple[int, ...]]] = []
-    total_units = 0
     for i, cycle in enumerate(cycles):
         flors_layers = metadata_list[i].flors_layers
         if flors_layers is None:
@@ -2116,33 +2129,39 @@ def get_labels_from_cycles_with_prob(
             tile_img = cycle[layer_idx].astype(np.float32)[:max_size, :max_size]
             tiles = _resolve_stardist_n_tiles(model, tile_img, n_tiles)
             cycle_tiles.append(tiles)
-            total_units += _count_total_tiles(tiles)
         tile_plan.append(cycle_tiles)
 
-    done_units = 0
+    total_channels = sum(
+        len(md.flors_layers) for md in metadata_list if md.flors_layers is not None
+    )
+    total_channels = max(int(total_channels), 1)
+    channels_done = 0
     for i, cycle in enumerate(tqdm(cycles, desc="Processing cycles")):
         layers_out = []
         flors_layers = metadata_list[i].flors_layers
         if flors_layers is None:
             raise ValueError("Fluorescence layers are not initialized.")
         for layer_pos, layer_idx in enumerate(flors_layers):
+            channels_done += 1
+            if progress_units_callback:
+                progress_units_callback(
+                    "activation_regions", channels_done, total_channels
+                )
+            if progress_callback:
+                progress_callback(
+                    f"Processing fluorescence channels ({channels_done}/{total_channels})"
+                )
             img = cycle[layer_idx].astype(np.float32)[:max_size, :max_size]
             img = (img - img.min()) / (img.max() - img.min() + 1e-8)
             img = normalize(img, 1, 99.8)
             effective_prob_thresh = base_prob_thresh
             try:
-                lbl, det, completed_tiles, _ = _predict_instances_with_generator(
+                lbl, det, _, _ = _predict_instances_with_generator(
                     model=model,
                     img=img,
                     prob_thresh=effective_prob_thresh,
                     nms_thresh=nms_thresh,
                     n_tiles=tile_plan[i][layer_pos],
-                    progress_units_callback=progress_units_callback,
-                    progress_stage="activation_regions",
-                    progress_done_offset=done_units,
-                    progress_total_units=total_units,
-                    progress_message_callback=progress_callback,
-                    nms_message="Getting activation regions from cycles - Running NMS",
                 )
             except MemoryError:
                 retry_prob_thresh = max(effective_prob_thresh, 0.4)
@@ -2152,18 +2171,12 @@ def get_labels_from_cycles_with_prob(
                     progress_callback(
                         "Activation NMS memory pressure; retrying with stricter threshold"
                     )
-                lbl, det, completed_tiles, _ = _predict_instances_with_generator(
+                lbl, det, _, _ = _predict_instances_with_generator(
                     model=model,
                     img=img,
                     prob_thresh=retry_prob_thresh,
                     nms_thresh=nms_thresh,
                     n_tiles=tile_plan[i][layer_pos],
-                    progress_units_callback=progress_units_callback,
-                    progress_stage="activation_regions",
-                    progress_done_offset=done_units,
-                    progress_total_units=total_units,
-                    progress_message_callback=progress_callback,
-                    nms_message="Getting activation regions from cycles - Running NMS",
                 )
             if not isinstance(det, dict):
                 raise RuntimeError(
@@ -2177,7 +2190,6 @@ def get_labels_from_cycles_with_prob(
                 m = min(n_obj, probs.shape[0])
                 prob_lut[1 : m + 1] = probs[:m]
             layers_out.append({"lbl": lbl.astype(np.int32), "prob_lut": prob_lut})
-            done_units += completed_tiles
         cycle_labels.append(layers_out)
     return cycle_labels
 
@@ -2743,7 +2755,7 @@ def _detect_bead_centers_with_stardist(
         img=normalized,
         n_tiles=n_tiles,
         progress_units_callback=progress_units_callback,
-        progress_stage="initial_detection",
+        progress_stage="init_det_tiles",
         progress_message_callback=lambda msg: update_progress(10, msg),
         nms_message="Initial bead detection... Running NMS",
     )
@@ -2800,6 +2812,8 @@ def _process_beads_notebook_stardist(
             bf,
             area_multiplier=area_multiplier,
             is_running_callback=is_running,
+            progress_units_callback=progress_units_callback,
+            progress_callback=lambda message: update_progress(10, message),
         )
     if beads is None:
         return None

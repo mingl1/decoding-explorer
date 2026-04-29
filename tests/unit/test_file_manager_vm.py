@@ -837,9 +837,77 @@ class TestFileManagerVM:
         pre_values = [v for v, m in emitted if "Preprocessing brightfield image..." in m]
         assert pre_values
         assert pre_values[0] < 30
-        assert any("ETA" in m for v, m in emitted if v >= 0 and v < 100)
-        assert any("Elapsed" in m for v, m in emitted if v >= 0 and v < 100)
+        assert any(
+            "Processing fluorescence channels" in m
+            for _, m in emitted
+        )
+        assert any(
+            ("/s" in m or "(~" in m or " · ~" in m)
+            for v, m in emitted
+            if v > 0 and v < 100
+        )
+        assert not any("Elapsed" in m for v, m in emitted)
         assert max(v for v, _ in emitted if v >= 0) <= 99
+
+    def test_bead_generation_thread_stardist_sets_workload_before_processing(
+        self, qapp, tmp_tiff_path
+    ):
+        ref_path = tmp_tiff_path("ref_workload.tif")
+        cy1_path = tmp_tiff_path("cy_workload.tif")
+        ref_item = FileItem(path=ref_path, status=FileStatus.RAW)
+        ref_item.metadata.max_size = 32
+        ref_item.metadata.reference_channel = 0
+        cy1_item = FileItem(path=cy1_path, status=FileStatus.RAW)
+        cy1_item.metadata.max_size = 32
+        cy1_item.metadata.reference_channel = 0
+
+        ref_saved = FileItem(path=ref_path, status=FileStatus.RAW)
+        ref_saved.metadata.max_size = 32
+        ref_saved.metadata.reference_channel = 0
+        ref_saved.working_image = np.zeros((3, 32, 32), dtype=np.uint16)
+        cy1_saved = FileItem(path=cy1_path, status=FileStatus.RAW)
+        cy1_saved.metadata.max_size = 32
+        cy1_saved.metadata.reference_channel = 0
+        cy1_saved.working_image = np.zeros((3, 32, 32), dtype=np.uint16)
+
+        files = {
+            ref_path: ref_saved,
+            cy1_path: cy1_saved,
+        }
+        observed = {}
+
+        def fake_process_beads(*args, **kwargs):
+            observed["set_workload_channels"] = getattr(
+                thread._estimator, "_total_channels", None
+            )
+            observed["set_workload_max_size"] = getattr(
+                thread._estimator, "_max_size", None
+            )
+            return {
+                "beads": pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [0], "cy1": [1]}),
+                "post_resolution_beads": pd.DataFrame(
+                    {"x": [1.0], "y": [1.0], "cy0": [0], "cy1": [1]}
+                ),
+                "cycles": {"cy0": np.zeros((3, 32, 32), dtype=np.uint16)},
+                "labeled_image": np.zeros((32, 32), dtype=np.uint16),
+            }
+
+        thread = BeadGenerationThread(
+            ref_item,
+            [ref_item, cy1_item],
+            files,
+            signal_to_noise_cutoff=0.1,
+            use_stardist=True,
+        )
+
+        with patch(
+            "viewmodel.file_manager_vm.load_and_constrain_image",
+            return_value=np.zeros((3, 32, 32), dtype=np.uint16),
+        ), patch("image_processing.process_beads", side_effect=fake_process_beads):
+            thread.run()
+
+        assert observed["set_workload_channels"] == 4
+        assert observed["set_workload_max_size"] == 32
 
     def test_bead_generation_thread_heartbeat_emits_between_sparse_callbacks(self, qapp, tmp_tiff_path):
         ref_path = tmp_tiff_path("ref2.tif")
@@ -902,5 +970,5 @@ class TestFileManagerVM:
             thread.run()
 
         detection_updates = [x for x in emitted if "Initial bead detection..." in x[1]]
-        assert len(detection_updates) >= 2
+        assert len(detection_updates) >= 1
         assert len(detection_updates) <= 3
