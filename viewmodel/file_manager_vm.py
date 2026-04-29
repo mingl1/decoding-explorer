@@ -20,8 +20,7 @@ import utils
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from view.alignment_preview_dialog import AlignmentPreviewDialog
-from viewmodel.bead_eta_estimator import BeadEtaEstimator
-from viewmodel.stardist_runtime_eta import StarDistRuntimeEtaTracker
+from viewmodel.bead_eta_estimator import BeadEtaEstimator, EtaRange, RateInfo
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -87,7 +86,7 @@ class BeadGenerationThread(QThread):
         self._last_progress_emit_second = -1
         self._last_progress_emit_message = ""
         if self.use_stardist:
-            self._estimator = StarDistRuntimeEtaTracker()
+            self._estimator = BeadEtaEstimator(mode="stardist")
         else:
             self._estimator = BeadEtaEstimator(mode="legacy")
         success = False
@@ -124,19 +123,19 @@ class BeadGenerationThread(QThread):
                 (
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
-                ) = self._estimator.update_stage_units_with_eta_details(
+                    eta_range,
+                    rate_info,
+                ) = self._estimator.update_stage_units(
                     stage="load_images",
                     done=i + 1,
                     total=total_files,
-                    message=f"Loading images ({i + 1}/{total_files})",
+                    message="Loading images",
                 )
                 self._emit_estimated_progress(
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
+                    eta_range,
+                    rate_info,
                 )
 
                 my_f = self.files.get(f.path)
@@ -149,8 +148,30 @@ class BeadGenerationThread(QThread):
             if not self._is_running:
                 return
 
+            if self.use_stardist and self._estimator is not None:
+                total_channels = 0
+                for img, file_item in tifs:
+                    metadata = getattr(file_item, "metadata", None)
+                    reference_channel = int(
+                        getattr(metadata, "reference_channel", 0) if metadata else 0
+                    )
+                    flors_layers = getattr(metadata, "flors_layers", None)
+                    if flors_layers is not None:
+                        channel_count = len(flors_layers)
+                    else:
+                        channel_dim = (
+                            int(img.shape[0]) if getattr(img, "ndim", 0) == 3 else 1
+                        )
+                        channel_count = sum(
+                            1 for j in range(channel_dim) if j > reference_channel
+                        )
+                    total_channels += max(int(channel_count), 0)
+                self._estimator.set_workload(
+                    total_channels=total_channels,
+                    max_size_pixels=ref_max_size,
+                )
+
             self._start_heartbeat()
-            stardist_bootstrap_stages: set[str] = set()
 
             def estimated_progress(p, m):
                 if not self._is_running:
@@ -161,53 +182,41 @@ class BeadGenerationThread(QThread):
                 (
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
-                ) = self._estimator.update_from_message_with_eta_details(m)
+                    eta_range,
+                    rate_info,
+                ) = self._estimator.update_from_message(m)
                 self._emit_estimated_progress(
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
+                    eta_range,
+                    rate_info,
                 )
-                if self.use_stardist and self._estimator:
-                    stage = self._estimator.map_message_to_stage(m)
-                    if (
-                        stage == "initial_detection"
-                        and stage not in stardist_bootstrap_stages
-                    ):
-                        stardist_bootstrap_stages.add(stage)
-                        (
-                            hb_progress_value,
-                            hb_progress_message,
-                            hb_total_eta_seconds,
-                            hb_step_eta_seconds,
-                        ) = self._estimator.heartbeat_with_eta_details()
-                        self._emit_estimated_progress(
-                            hb_progress_value,
-                            hb_progress_message,
-                            hb_total_eta_seconds,
-                            hb_step_eta_seconds,
-                        )
 
             def estimated_progress_units(stage, done, total):
                 if not self._is_running:
                     return
+                stage_message = None
+                if self.use_stardist:
+                    if stage == "init_det_tiles":
+                        stage_message = "Initial bead detection"
+                    elif stage == "activation_regions":
+                        stage_message = "Processing fluorescence channels"
                 (
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
-                ) = self._estimator.update_stage_units_with_eta_details(
+                    eta_range,
+                    rate_info,
+                ) = self._estimator.update_stage_units(
                     stage=stage,
                     done=done,
                     total=total,
+                    message=stage_message,
                 )
                 self._emit_estimated_progress(
                     progress_value,
                     progress_message,
-                    total_eta_seconds,
-                    step_eta_seconds,
+                    eta_range,
+                    rate_info,
                 )
 
             results = image_processing.process_beads(
@@ -259,22 +268,28 @@ class BeadGenerationThread(QThread):
             (
                 progress_value,
                 progress_message,
-                total_eta_seconds,
-                step_eta_seconds,
-            ) = self._estimator.heartbeat_with_eta_details()
+                eta_range,
+                rate_info,
+            ) = self._estimator.heartbeat()
             self._emit_estimated_progress(
                 progress_value,
                 progress_message,
-                total_eta_seconds,
-                step_eta_seconds,
+                eta_range,
+                rate_info,
             )
+
+    _STAGE_UNIT_LABELS = {
+        "load_images": "imgs",
+        "init_det_tiles": "tiles",
+        "activation_regions": "ch",
+    }
 
     def _emit_estimated_progress(
         self,
         progress_value: int,
         progress_message: str,
-        total_eta_seconds: Optional[float],
-        step_eta_seconds: Optional[float],
+        eta_range: Optional[EtaRange] = None,
+        rate_info: Optional[RateInfo] = None,
     ):
         elapsed_seconds = 0.0
         if self._run_started_at is not None:
@@ -291,19 +306,22 @@ class BeadGenerationThread(QThread):
             self._last_progress_emit_second = elapsed_second_bucket
             self._last_progress_emit_message = message
         if 0 < progress_int < 100:
-            step_overrun = bool(getattr(self._estimator, "step_overrun", False))
             status_parts = []
-            if step_eta_seconds is not None and step_eta_seconds > 0:
-                prefix = "~" if step_overrun else ""
-                status_parts.append(
-                    f"Step ETA {prefix}{BeadEtaEstimator.format_eta(step_eta_seconds)}"
-                )
-            if total_eta_seconds is not None and total_eta_seconds > 0:
-                status_parts.append(
-                    f"Total ETA {BeadEtaEstimator.format_eta(total_eta_seconds)}"
-                )
+            # if (
+            #     rate_info is not None
+            #     and not rate_info.is_progress_pct
+            #     and rate_info.units_total is not None
+            #     and rate_info.units_done is not None
+            # ):
+            #     label = self._STAGE_UNIT_LABELS.get(rate_info.stage or "", "")
+            #     label_suffix = f" {label}" if label else ""
+            #     status_parts.append(
+            #         f"{rate_info.units_done}/{rate_info.units_total}{label_suffix}"
+            #     )
+            if eta_range is not None:
+                status_parts.append(BeadEtaEstimator.format_eta_range(eta_range))
             if status_parts:
-                message = f"{message} ({', '.join(status_parts)})"
+                message = f"{message} ({' · '.join(status_parts)})"
         self.progress.emit(progress_int, message)
 
     def cancel(self):

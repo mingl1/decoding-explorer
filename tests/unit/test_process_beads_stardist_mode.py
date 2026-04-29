@@ -31,6 +31,8 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
         workers=10,
         area_multiplier=1.8,
         is_running_callback=None,
+        progress_units_callback=None,
+        progress_callback=None,
     ):
         calls["beadfinding"] = {
             "num_tiles": num_tiles,
@@ -38,6 +40,8 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
             "workers": workers,
             "area_multiplier": area_multiplier,
             "has_running_callback": is_running_callback is not None,
+            "has_progress_units_callback": progress_units_callback is not None,
+            "has_progress_callback": progress_callback is not None,
         }
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
@@ -205,6 +209,8 @@ def test_process_beads_uses_notebook_stardist_path(monkeypatch):
     assert calls["beadfinding"]["workers"] == 10
     assert calls["beadfinding"]["area_multiplier"] == 2.4
     assert calls["beadfinding"]["has_running_callback"] is True
+    assert calls["beadfinding"]["has_progress_units_callback"] is False
+    assert calls["beadfinding"]["has_progress_callback"] is True
     assert calls["labels"]["prob_thresh"] == 0.1
     assert calls["labels"]["nms_thresh"] == 0.1
     assert calls["labels"]["n_tiles"] == 0
@@ -227,6 +233,8 @@ def test_process_beads_off_mode_delegates_to_legacy_get_excel(monkeypatch):
         workers=10,
         area_multiplier=1.8,
         is_running_callback=None,
+        progress_units_callback=None,
+        progress_callback=None,
     ):
         calls["area_multiplier"] = area_multiplier
         return np.array([[12, 13]], dtype=np.uint16)
@@ -510,6 +518,8 @@ def test_process_beads_stardist_forwards_progress_units_callback(monkeypatch):
         workers=10,
         area_multiplier=1.8,
         is_running_callback=None,
+        progress_units_callback=None,
+        progress_callback=None,
     ):
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
@@ -669,6 +679,8 @@ def test_process_beads_stardist_uses_stricter_prob_thresh_for_large_images(monke
         workers=10,
         area_multiplier=1.8,
         is_running_callback=None,
+        progress_units_callback=None,
+        progress_callback=None,
     ):
         return np.array([[20, 20], [30, 30]], dtype=np.float32)
 
@@ -814,6 +826,8 @@ def test_process_beads_legacy_forwards_progress_units_callback(monkeypatch):
         workers=10,
         area_multiplier=1.8,
         is_running_callback=None,
+        progress_units_callback=None,
+        progress_callback=None,
     ):
         return np.array([[12, 13]], dtype=np.uint16)
 

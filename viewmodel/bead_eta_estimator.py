@@ -1,9 +1,22 @@
 import re
 import time
 from threading import Lock
-from typing import Dict, Optional, Tuple
+from typing import Dict, NamedTuple, Optional, Tuple
 
 from viewmodel.eta_profile_store import EtaProfileStore
+
+
+class RateInfo(NamedTuple):
+    rate: float
+    is_progress_pct: bool
+    units_done: Optional[int]
+    units_total: Optional[int]
+    stage: Optional[str]
+
+
+class EtaRange(NamedTuple):
+    lo: float
+    hi: float
 
 
 ETA_SUFFIX_RE = re.compile(r"\s+\((?:[^()]*)ETA[^()]*\)\s*$")
@@ -99,7 +112,13 @@ SCALE_MIN = 0.5
 SCALE_MAX = 3.0
 SCALE_GATE_SECONDS = 5.0
 TOTAL_ETA_ALPHA = 0.25
-STEP_ETA_HIDE_THRESHOLD = 2.0
+
+RATE_ALPHA = 0.3
+RATE_MIN_ELAPSED_SECONDS = 0.5
+ETA_RANGE_ALPHA = 0.1
+ETA_RANGE_LOW_FACTOR = 0.8
+ETA_RANGE_HIGH_FACTOR = 1.3
+WARMUP_PROGRESS_GATE = 5
 
 
 class BeadEtaEstimator:
@@ -126,8 +145,11 @@ class BeadEtaEstimator:
                     self._priors[stage] = float(value)
         self._max_size: Optional[int] = None
         self._total_channels: Optional[int] = None
+        self._workload_ready = self.mode != "stardist"
         self._expected_seconds: Dict[str, float] = self._compute_expected_seconds(
-            DEFAULT_MAX_SIZE, 1
+            DEFAULT_MAX_SIZE,
+            1,
+            include_activation=self._workload_ready,
         )
         self._current_stage: Optional[str] = None
         self._current_stage_started_at: Optional[float] = None
@@ -139,23 +161,16 @@ class BeadEtaEstimator:
         self._success = False
         self._last_progress = 0
         self._smoothed_total_eta: Optional[float] = None
-        self._step_overrun = False
-        self._total_eta_floor: Optional[float] = None
-
-    @staticmethod
-    def format_eta(eta_seconds: float) -> str:
-        seconds = max(0, int(round(float(eta_seconds))))
-        minutes = seconds // 60
-        seconds_part = seconds % 60
-        return f"{minutes:02d}:{seconds_part:02d}"
+        self._smoothed_rate: Optional[float] = None
+        self._rate_is_pct: Optional[bool] = None
+        self._smoothed_eta_lo: Optional[float] = None
+        self._smoothed_eta_hi: Optional[float] = None
+        self._eta_hi_ceiling: Optional[float] = None
+        self._progress_at_stage_start: int = 0
 
     @staticmethod
     def strip_eta_suffix(message: str) -> str:
         return ETA_SUFFIX_RE.sub("", str(message or "")).strip()
-
-    @property
-    def step_overrun(self) -> bool:
-        return self._step_overrun
 
     def map_message_to_stage(self, message: str) -> Optional[str]:
         normalized = self.strip_eta_suffix(message)
@@ -176,85 +191,31 @@ class BeadEtaEstimator:
                 max_size = DEFAULT_MAX_SIZE
             self._total_channels = channels
             self._max_size = max_size
-            self._expected_seconds = self._compute_expected_seconds(max_size, channels)
+            self._workload_ready = True
+            self._expected_seconds = self._compute_expected_seconds(
+                max_size,
+                channels,
+                include_activation=True,
+            )
 
     def _compute_expected_seconds(
-        self, max_size: int, total_channels: int
+        self,
+        max_size: int,
+        total_channels: int,
+        include_activation: bool = True,
     ) -> Dict[str, float]:
         pixels_sq = float(max_size) * float(max_size)
         out: Dict[str, float] = {}
         for stage in self._stage_order:
             prior = self._priors.get(stage, 0.0)
             if stage == "activation_regions" and self.mode == "stardist":
+                if not include_activation:
+                    out[stage] = 0.0
+                    continue
                 out[stage] = prior * pixels_sq * float(total_channels)
             else:
                 out[stage] = prior * pixels_sq
         return out
-
-    def update_from_message_with_eta_details(
-        self,
-        message: str,
-        now: Optional[float] = None,
-    ) -> Tuple[int, str, Optional[float], Optional[float]]:
-        with self._lock:
-            ts = now if now is not None else time.monotonic()
-            normalized = self.strip_eta_suffix(message)
-            self._current_message = normalized
-            stage = self._map_message_to_stage_unlocked(normalized)
-            if stage:
-                self._transition_to_stage(stage, ts)
-            return self._snapshot_unlocked(ts)
-
-    def update_stage_units_with_eta_details(
-        self,
-        stage: str,
-        done: float,
-        total: float,
-        message: Optional[str] = None,
-        now: Optional[float] = None,
-    ) -> Tuple[int, str, Optional[float], Optional[float]]:
-        with self._lock:
-            ts = now if now is not None else time.monotonic()
-            if message:
-                self._current_message = self.strip_eta_suffix(message)
-            if stage in self._stage_index:
-                self._transition_to_stage(stage, ts)
-                self._stage_units_total = max(float(total), 1.0)
-                self._stage_units_done = min(
-                    max(float(done), 0.0), self._stage_units_total
-                )
-            return self._snapshot_unlocked(ts)
-
-    def heartbeat_with_eta_details(
-        self,
-        now: Optional[float] = None,
-    ) -> Tuple[int, str, Optional[float], Optional[float]]:
-        with self._lock:
-            ts = now if now is not None else time.monotonic()
-            return self._snapshot_unlocked(ts)
-
-    def update_from_message(self, message: str, now: Optional[float] = None):
-        progress, msg, total_eta, _ = self.update_from_message_with_eta_details(
-            message, now=now
-        )
-        return progress, msg, total_eta
-
-    def update_stage_units(
-        self,
-        stage: str,
-        done: float,
-        total: float,
-        message: Optional[str] = None,
-        now: Optional[float] = None,
-    ):
-        progress, msg, total_eta, _ = self.update_stage_units_with_eta_details(
-            stage=stage, done=done, total=total, message=message, now=now
-        )
-        return progress, msg, total_eta
-
-    def heartbeat(self, now: Optional[float] = None):
-        progress, msg, total_eta, _ = self.heartbeat_with_eta_details(now=now)
-        return progress, msg, total_eta
 
     def finish(self, success: bool = True, now: Optional[float] = None):
         with self._lock:
@@ -304,8 +265,12 @@ class BeadEtaEstimator:
         self._current_stage_started_at = now
         self._stage_units_done = None
         self._stage_units_total = None
-        self._step_overrun = False
-        self._total_eta_floor = None
+        self._smoothed_rate = None
+        self._rate_is_pct = None
+        self._smoothed_eta_lo = None
+        self._smoothed_eta_hi = None
+        self._eta_hi_ceiling = None
+        self._progress_at_stage_start = self._last_progress
 
     def _close_current_stage(self, now: float):
         closed_stage = self._current_stage
@@ -319,8 +284,6 @@ class BeadEtaEstimator:
         self._current_stage_started_at = None
         self._stage_units_done = None
         self._stage_units_total = None
-        self._step_overrun = False
-        self._total_eta_floor = None
 
     def _whole_run_scale(self) -> float:
         sum_expected = 0.0
@@ -370,9 +333,9 @@ class BeadEtaEstimator:
         self._last_progress = raw_progress
         return raw_progress
 
-    def _compute_step_eta(self, scale: float, now: float) -> Optional[float]:
+    def _compute_current_stage_remaining(self, scale: float, now: float) -> float:
         if self._current_stage is None or self._current_stage_started_at is None:
-            return None
+            return 0.0
         expected_current = self._expected_seconds.get(self._current_stage, 0.0) * scale
         elapsed = max(0.0, now - self._current_stage_started_at)
         if (
@@ -382,33 +345,18 @@ class BeadEtaEstimator:
             and self._stage_units_done > 0
         ):
             per_unit_observed = elapsed / self._stage_units_done
-            per_unit_prior = (
-                expected_current / self._stage_units_total
-                if self._stage_units_total > 0
-                else per_unit_observed
-            )
-            per_unit = (
-                per_unit_observed if per_unit_observed > 0 else max(per_unit_prior, 0.01)
-            )
             remaining_units = max(self._stage_units_total - self._stage_units_done, 0.0)
-            self._step_overrun = False
-            return max(remaining_units * per_unit, 0.0)
+            return max(remaining_units * per_unit_observed, 0.0)
         if (
             self._stage_units_total is not None
             and self._stage_units_total > 0
-            and (self._stage_units_done is None or self._stage_units_done <= 0)
         ):
-            self._step_overrun = False
             return max(expected_current, 0.0)
         if expected_current > 0 and elapsed > expected_current:
-            self._step_overrun = True
             return OVERRUN_FLOOR_SECONDS
-        self._step_overrun = False
         return max(expected_current - elapsed, 0.0)
 
-    def _compute_total_eta(
-        self, scale: float, step_eta: Optional[float]
-    ) -> Optional[float]:
+    def _compute_total_eta(self, scale: float, now: float) -> Optional[float]:
         if self._current_stage is None:
             return None
         idx = self._stage_index[self._current_stage]
@@ -416,15 +364,8 @@ class BeadEtaEstimator:
             self._expected_seconds.get(stage, 0.0) * scale
             for stage in self._stage_order[idx + 1 :]
         )
-        step_component = step_eta if step_eta is not None else 0.0
-        raw_total = max(step_component + future, 0.0)
-        if self._step_overrun:
-            floor = OVERRUN_FLOOR_SECONDS + future
-            if self._total_eta_floor is None or floor < self._total_eta_floor:
-                self._total_eta_floor = floor
-            raw_total = max(raw_total, self._total_eta_floor)
-        else:
-            self._total_eta_floor = None
+        current_remaining = self._compute_current_stage_remaining(scale, now)
+        raw_total = max(current_remaining + future, 0.0)
         if raw_total <= 0:
             self._smoothed_total_eta = 0.0
             return 0.0
@@ -435,27 +376,165 @@ class BeadEtaEstimator:
                 TOTAL_ETA_ALPHA * raw_total
                 + (1.0 - TOTAL_ETA_ALPHA) * self._smoothed_total_eta
             )
-        if self._step_overrun and self._smoothed_total_eta < raw_total:
-            self._smoothed_total_eta = raw_total
         return self._smoothed_total_eta
 
     def _snapshot_unlocked(
         self, now: float
-    ) -> Tuple[int, str, Optional[float], Optional[float]]:
+    ) -> Tuple[int, str, Optional[float]]:
         if self._finished:
-            self._step_overrun = False
             if self._success:
-                return 100, self._current_message, 0.0, 0.0
-            return self._last_progress, self._current_message, None, None
+                return 100, self._current_message, 0.0
+            return self._last_progress, self._current_message, None
         scale = self._whole_run_scale()
         progress = self._compute_progress(scale, now)
-        step_eta = self._compute_step_eta(scale, now)
-        total_eta = self._compute_total_eta(scale, step_eta)
-        if self._current_stage is not None:
-            expected_current = self._expected_seconds.get(self._current_stage, 0.0) * scale
-            if expected_current < STEP_ETA_HIDE_THRESHOLD and not self._step_overrun:
-                step_eta = None
+        total_eta = self._compute_total_eta(scale, now)
         if progress <= 0 or progress >= 100:
-            step_eta = None
             total_eta = None
-        return progress, self._current_message, total_eta, step_eta
+        return progress, self._current_message, total_eta
+
+    def _compute_rate_info(self, now: float) -> Optional[RateInfo]:
+        if self._current_stage is None or self._current_stage_started_at is None:
+            return None
+        elapsed = max(0.0, now - self._current_stage_started_at)
+        if elapsed < RATE_MIN_ELAPSED_SECONDS:
+            return None
+        units_done_int: Optional[int] = None
+        units_total_int: Optional[int] = None
+        if (
+            self._stage_units_total is not None
+            and self._stage_units_total > 0
+            and self._stage_units_done is not None
+            and self._stage_units_done > 0
+        ):
+            raw_rate = self._stage_units_done / elapsed
+            is_pct = False
+            units_done_int = int(self._stage_units_done)
+            units_total_int = int(self._stage_units_total)
+        else:
+            progress_delta = self._last_progress - self._progress_at_stage_start
+            if progress_delta <= 0:
+                return None
+            raw_rate = progress_delta / elapsed
+            is_pct = True
+        if raw_rate <= 0:
+            return None
+        if self._smoothed_rate is None or self._rate_is_pct != is_pct:
+            self._smoothed_rate = raw_rate
+            self._rate_is_pct = is_pct
+        else:
+            self._smoothed_rate = (
+                RATE_ALPHA * raw_rate + (1.0 - RATE_ALPHA) * self._smoothed_rate
+            )
+        return RateInfo(
+            rate=self._smoothed_rate,
+            is_progress_pct=is_pct,
+            units_done=units_done_int,
+            units_total=units_total_int,
+            stage=self._current_stage,
+        )
+
+    def _compute_eta_range(
+        self, total_eta: Optional[float], progress: int
+    ) -> Optional[EtaRange]:
+        if total_eta is None or total_eta <= 0:
+            return None
+        if progress < WARMUP_PROGRESS_GATE:
+            return None
+        raw_lo = float(total_eta) * ETA_RANGE_LOW_FACTOR
+        raw_hi = float(total_eta) * ETA_RANGE_HIGH_FACTOR
+        if self._smoothed_eta_lo is None:
+            self._smoothed_eta_lo = raw_lo
+        else:
+            self._smoothed_eta_lo = (
+                ETA_RANGE_ALPHA * raw_lo
+                + (1.0 - ETA_RANGE_ALPHA) * self._smoothed_eta_lo
+            )
+        if self._smoothed_eta_hi is None:
+            self._smoothed_eta_hi = raw_hi
+        else:
+            self._smoothed_eta_hi = (
+                ETA_RANGE_ALPHA * raw_hi
+                + (1.0 - ETA_RANGE_ALPHA) * self._smoothed_eta_hi
+            )
+        if self._eta_hi_ceiling is not None:
+            self._smoothed_eta_hi = min(self._smoothed_eta_hi, self._eta_hi_ceiling)
+        self._eta_hi_ceiling = self._smoothed_eta_hi
+        lo = max(self._smoothed_eta_lo, 0.0)
+        hi = max(self._smoothed_eta_hi, lo)
+        return EtaRange(lo=lo, hi=hi)
+
+    def _snapshot_full_unlocked(
+        self, now: float
+    ) -> Tuple[int, str, Optional[EtaRange], Optional[RateInfo]]:
+        progress, message, total_eta = self._snapshot_unlocked(now)
+        if self._finished:
+            return progress, message, None, None
+        rate_info = self._compute_rate_info(now)
+        eta_range = self._compute_eta_range(total_eta, progress)
+        return progress, message, eta_range, rate_info
+
+    def update_from_message(
+        self,
+        message: str,
+        now: Optional[float] = None,
+    ) -> Tuple[int, str, Optional[EtaRange], Optional[RateInfo]]:
+        with self._lock:
+            ts = now if now is not None else time.monotonic()
+            normalized = self.strip_eta_suffix(message)
+            self._current_message = normalized
+            stage = self._map_message_to_stage_unlocked(normalized)
+            if stage:
+                self._transition_to_stage(stage, ts)
+            return self._snapshot_full_unlocked(ts)
+
+    def update_stage_units(
+        self,
+        stage: str,
+        done: float,
+        total: float,
+        message: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> Tuple[int, str, Optional[EtaRange], Optional[RateInfo]]:
+        with self._lock:
+            ts = now if now is not None else time.monotonic()
+            if message:
+                self._current_message = self.strip_eta_suffix(message)
+            if stage in self._stage_index:
+                self._transition_to_stage(stage, ts)
+                self._stage_units_total = max(float(total), 1.0)
+                self._stage_units_done = min(
+                    max(float(done), 0.0), self._stage_units_total
+                )
+            return self._snapshot_full_unlocked(ts)
+
+    def heartbeat(
+        self,
+        now: Optional[float] = None,
+    ) -> Tuple[int, str, Optional[EtaRange], Optional[RateInfo]]:
+        with self._lock:
+            ts = now if now is not None else time.monotonic()
+            return self._snapshot_full_unlocked(ts)
+
+    @staticmethod
+    def format_eta_range(eta_range: EtaRange) -> str:
+        lo_seconds = max(0, int(round(float(eta_range.lo))))
+        hi_seconds = max(lo_seconds, int(round(float(eta_range.hi))))
+        lo_label = _format_duration_label(lo_seconds)
+        hi_label = _format_duration_label(hi_seconds)
+        if lo_label == hi_label:
+            return f"~{lo_label}"
+        return f"~{lo_label}–{hi_label}"
+
+
+def _format_duration_label(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    rem_min = minutes % 60
+    if rem_min == 0:
+        return f"{hours}h"
+    return f"{hours}h{rem_min:02d}"
