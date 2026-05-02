@@ -12,10 +12,12 @@ class WorkerThread(QThread):
     The task is a generator that yields (int, str) progress tuples and
     returns its result via `return value` (caught as StopIteration.value).
     Cancellation is signalled by setting the stop_event passed to the task.
+    Unhandled exceptions emit `failed(str(e))` instead of crashing the thread.
     """
 
     progress = pyqtSignal(int, str)
     completed = pyqtSignal(object)
+    failed = pyqtSignal(str)
 
     def __init__(self, task, stop_event: threading.Event):
         super().__init__()
@@ -34,7 +36,7 @@ class WorkerThread(QThread):
             self.completed.emit(result)
         except Exception as e:
             logger.error(f"WorkerThread error: {e}", exc_info=True)
-            self.progress.emit(-1, f"Error: {str(e)}")
+            self.failed.emit(str(e))
 
     def cancel(self):
         self._stop.set()

@@ -1,25 +1,25 @@
 import logging
 import os
 import threading
-import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from functools import reduce
 from typing import List, Optional
 
 import numpy as np
 import pandas as pd
-import tifffile
 from pandas import DataFrame, Series
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QDialog
 
 import image_processing
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from view.alignment_preview_dialog import AlignmentPreviewDialog
-from viewmodel.bead_eta_estimator import BeadEtaEstimator, EtaRange, RateInfo
 from viewmodel.file_io import load_and_constrain_image, load_image
 from viewmodel.tasks import (
+    bead_generation_task,
+    bead_upload_task,
+    brightfield_batch_loading_task,
+    export_task,
     file_loading_task,
     folder_loading_task,
     shading_correction_task,
@@ -33,569 +33,6 @@ NOT_SENT = "..."
 # Bead CSV validation constants
 REQUIRED_BEAD_COLUMNS = ["x", "y"]
 CYCLE_COLUMN_PREFIX = "cy"
-
-
-class BeadGenerationThread(QThread):
-    progress = pyqtSignal(int, str)
-    bead_generated = pyqtSignal(dict)
-
-    def __init__(
-        self,
-        ref_file,
-        file_items: list,
-        files: dict,
-        signal_to_noise_cutoff,
-        use_stardist=False,
-        model_name="model_5_400epoch",
-        stardist_use_guess_tiles=True,
-        stardist_n_tiles=1,
-        use_stardist_bead_centers=False,
-        area_multiplier=1.8,
-        ensemble_ratio_start=image_processing.DEFAULT_ENSEMBLE_RATIO_START,
-        ensemble_ratio_end=image_processing.DEFAULT_ENSEMBLE_RATIO_END,
-        ensemble_ratio_step=image_processing.DEFAULT_ENSEMBLE_RATIO_STEP,
-    ):
-        super().__init__()
-        self.ref_file = ref_file
-        self.file_items = file_items
-        self.files = files
-        self.signal_to_noise_cutoff = signal_to_noise_cutoff
-        self.use_stardist = use_stardist
-        self.model_name = model_name
-        self.stardist_use_guess_tiles = bool(stardist_use_guess_tiles)
-        self.stardist_n_tiles = max(int(stardist_n_tiles), 1)
-        self.use_stardist_bead_centers = bool(use_stardist_bead_centers)
-        try:
-            parsed_area_multiplier = float(area_multiplier)
-            if parsed_area_multiplier <= 0:
-                raise ValueError("area_multiplier must be > 0")
-            self.area_multiplier = parsed_area_multiplier
-        except (TypeError, ValueError):
-            self.area_multiplier = 1.8
-        self.ensemble_ratio_start = float(ensemble_ratio_start)
-        self.ensemble_ratio_end = float(ensemble_ratio_end)
-        self.ensemble_ratio_step = float(ensemble_ratio_step)
-        self._is_running = True
-        self._heartbeat_stop = threading.Event()
-        self._heartbeat_thread: Optional[threading.Thread] = None
-        self._estimator = None
-        self._run_started_at: Optional[float] = None
-        self._last_progress_emit_second: int = -1
-        self._last_progress_emit_message = ""
-
-    def run(self):
-        self._is_running = True
-        self._heartbeat_stop.clear()
-        self._run_started_at = time.monotonic()
-        self._last_progress_emit_second = -1
-        self._last_progress_emit_message = ""
-        if self.use_stardist:
-            self._estimator = BeadEtaEstimator(mode="stardist")
-        else:
-            self._estimator = BeadEtaEstimator(mode="legacy")
-        success = False
-        try:
-            ref_bf_channel = int(self.ref_file.metadata.reference_channel)
-            ref_max_size = int(self.ref_file.metadata.max_size)
-            ref_img = self.files[self.ref_file.path].working_image
-            ref_bf = None
-            if ref_img is not None:
-                if len(ref_img.shape) == 2:
-                    ref_bf = ref_img
-                elif len(ref_img.shape) == 3:
-                    ref_bf = np.array(ref_img)
-            else:
-                ref_img = load_image(self.files[self.ref_file.path])
-                if len(ref_img.shape) == 3:
-                    ref_bf = np.array(ref_img)[
-                        ref_bf_channel, :ref_max_size, :ref_max_size
-                    ]
-                elif len(ref_img.shape) == 2:
-                    ref_bf = np.array(ref_img)[:ref_max_size, :ref_max_size]
-
-            if ref_bf is None:
-                logger.error(
-                    "Reference image does not have a valid brightfield channel for bead generation."
-                )
-                return
-
-            tifs = []
-            total_files = len(self.file_items)
-            for i, f in enumerate(self.file_items):
-                if not self._is_running:
-                    break
-                (
-                    progress_value,
-                    progress_message,
-                    eta_range,
-                    rate_info,
-                ) = self._estimator.update_stage_units(
-                    stage="load_images",
-                    done=i + 1,
-                    total=total_files,
-                    message="Loading images",
-                )
-                self._emit_estimated_progress(
-                    progress_value,
-                    progress_message,
-                    eta_range,
-                    rate_info,
-                )
-
-                my_f = self.files.get(f.path)
-                if not my_f:
-                    continue
-                max_size = int(f.metadata.max_size)
-                img = load_and_constrain_image(my_f, max_size)
-                tifs.append((img, f))
-
-            if not self._is_running:
-                return
-
-            if self.use_stardist and self._estimator is not None:
-                total_channels = 0
-                for img, file_item in tifs:
-                    metadata = getattr(file_item, "metadata", None)
-                    reference_channel = int(
-                        getattr(metadata, "reference_channel", 0) if metadata else 0
-                    )
-                    flors_layers = getattr(metadata, "flors_layers", None)
-                    if flors_layers is not None:
-                        channel_count = len(flors_layers)
-                    else:
-                        channel_dim = (
-                            int(img.shape[0]) if getattr(img, "ndim", 0) == 3 else 1
-                        )
-                        channel_count = sum(
-                            1 for j in range(channel_dim) if j > reference_channel
-                        )
-                    total_channels += max(int(channel_count), 0)
-                self._estimator.set_workload(
-                    total_channels=total_channels,
-                    max_size_pixels=ref_max_size,
-                )
-
-            self._start_heartbeat()
-
-            def estimated_progress(p, m):
-                if not self._is_running:
-                    return
-                if p < 0:
-                    self.progress.emit(-1, m)
-                    return
-                (
-                    progress_value,
-                    progress_message,
-                    eta_range,
-                    rate_info,
-                ) = self._estimator.update_from_message(m)
-                self._emit_estimated_progress(
-                    progress_value,
-                    progress_message,
-                    eta_range,
-                    rate_info,
-                )
-
-            def estimated_progress_units(stage, done, total):
-                if not self._is_running:
-                    return
-                stage_message = None
-                if self.use_stardist:
-                    if stage == "init_det_tiles":
-                        stage_message = "Initial bead detection"
-                    elif stage == "activation_regions":
-                        stage_message = "Processing fluorescence channels"
-                (
-                    progress_value,
-                    progress_message,
-                    eta_range,
-                    rate_info,
-                ) = self._estimator.update_stage_units(
-                    stage=stage,
-                    done=done,
-                    total=total,
-                    message=stage_message,
-                )
-                self._emit_estimated_progress(
-                    progress_value,
-                    progress_message,
-                    eta_range,
-                    rate_info,
-                )
-
-            results = image_processing.process_beads(
-                ref_bf,
-                tifs,
-                max_size=ref_max_size,
-                signal_to_noise_cutoff=self.signal_to_noise_cutoff,
-                progress_callback=estimated_progress,
-                progress_units_callback=estimated_progress_units,
-                is_running_callback=self.is_running,
-                use_stardist=self.use_stardist,
-                model_name=self.model_name,
-                stardist_use_guess_tiles=self.stardist_use_guess_tiles,
-                stardist_n_tiles=self.stardist_n_tiles,
-                use_stardist_bead_centers=self.use_stardist_bead_centers,
-                area_multiplier=self.area_multiplier,
-                ensemble_ratio_start=self.ensemble_ratio_start,
-                ensemble_ratio_end=self.ensemble_ratio_end,
-                ensemble_ratio_step=self.ensemble_ratio_step,
-            )
-            if self._is_running and results is not None:
-                self.bead_generated.emit(results)
-                success = True
-        except Exception as e:
-            logger.error(f"Error in BeadGenerationThread: {e}", exc_info=True)
-        finally:
-            self._stop_heartbeat()
-            if self._estimator:
-                self._estimator.finish(success=success)
-        return None
-
-    def _start_heartbeat(self):
-        self._heartbeat_thread = threading.Thread(
-            target=self._heartbeat_loop,
-            daemon=True,
-        )
-        self._heartbeat_thread.start()
-
-    def _stop_heartbeat(self):
-        self._heartbeat_stop.set()
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            self._heartbeat_thread.join(timeout=1.0)
-        self._heartbeat_thread = None
-
-    def _heartbeat_loop(self):
-        while not self._heartbeat_stop.wait(0.5):
-            if not self._is_running or not self._estimator:
-                return
-            (
-                progress_value,
-                progress_message,
-                eta_range,
-                rate_info,
-            ) = self._estimator.heartbeat()
-            self._emit_estimated_progress(
-                progress_value,
-                progress_message,
-                eta_range,
-                rate_info,
-            )
-
-    _STAGE_UNIT_LABELS = {
-        "load_images": "imgs",
-        "init_det_tiles": "tiles",
-        "activation_regions": "ch",
-    }
-
-    def _emit_estimated_progress(
-        self,
-        progress_value: int,
-        progress_message: str,
-        eta_range: Optional[EtaRange] = None,
-        rate_info: Optional[RateInfo] = None,
-    ):
-        elapsed_seconds = 0.0
-        if self._run_started_at is not None:
-            elapsed_seconds = max(0.0, time.monotonic() - self._run_started_at)
-        elapsed_second_bucket = int(elapsed_seconds)
-        progress_int = int(progress_value)
-        message = str(progress_message or "Processing beads...")
-        if 0 <= progress_int < 100 and not self.use_stardist:
-            if (
-                elapsed_second_bucket == self._last_progress_emit_second
-                and message == self._last_progress_emit_message
-            ):
-                return
-            self._last_progress_emit_second = elapsed_second_bucket
-            self._last_progress_emit_message = message
-        if 0 < progress_int < 100:
-            status_parts = []
-            # if (
-            #     rate_info is not None
-            #     and not rate_info.is_progress_pct
-            #     and rate_info.units_total is not None
-            #     and rate_info.units_done is not None
-            # ):
-            #     label = self._STAGE_UNIT_LABELS.get(rate_info.stage or "", "")
-            #     label_suffix = f" {label}" if label else ""
-            #     status_parts.append(
-            #         f"{rate_info.units_done}/{rate_info.units_total}{label_suffix}"
-            #     )
-            if eta_range is not None:
-                status_parts.append(BeadEtaEstimator.format_eta_range(eta_range))
-            if status_parts:
-                message = f"{message} ({' · '.join(status_parts)})"
-        self.progress.emit(progress_int, message)
-
-    def cancel(self):
-        self._is_running = False
-        self._heartbeat_stop.set()
-
-    def is_running(self):
-        return self._is_running
-
-
-class BrightfieldBatchLoadingThread(QThread):
-    progress = pyqtSignal(int, str)
-    loaded = pyqtSignal(object)
-    error = pyqtSignal(str)
-
-    def __init__(
-        self,
-        file_items: list[FileItem],
-        files: dict,
-        brightfield_loader,
-        materialize=True,
-    ):
-        super().__init__()
-        self.file_items = file_items
-        self.files = files
-        self.brightfield_loader = brightfield_loader
-        self.materialize = bool(materialize)
-        self._is_running = True
-
-    def run(self):
-        self._is_running = True
-        total_files = len(self.file_items)
-        if total_files == 0:
-            self.error.emit("No images selected for manual alignment preview.")
-            return
-
-        loaded_images: list[Optional[np.ndarray]] = [None] * total_files
-
-        def _load_one(index: int, item: FileItem):
-            latest_file = self.files.get(item.path, item)
-            image, error_msg = self.brightfield_loader(
-                latest_file, materialize=self.materialize
-            )
-            return index, latest_file.path, image, error_msg
-
-        max_workers = max(1, min(total_files, 8))
-        self.progress.emit(0, f"Loading manual alignment image 0/{total_files}")
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            pending = {
-                executor.submit(_load_one, i, file_item): i
-                for i, file_item in enumerate(self.file_items)
-            }
-            completed_count = 0
-
-            while pending:
-                if not self._is_running:
-                    for future in pending:
-                        future.cancel()
-                    return
-
-                done, not_done = wait(
-                    pending.keys(), timeout=0.1, return_when=FIRST_COMPLETED
-                )
-                if not done:
-                    continue
-                pending = {future: pending[future] for future in not_done}
-
-                for future in done:
-                    try:
-                        idx, path, image, error_msg = future.result()
-                    except Exception as e:
-                        self.error.emit(f"Error loading manual alignment image: {e}")
-                        for pending_future in pending:
-                            pending_future.cancel()
-                        return
-                    if error_msg:
-                        self.error.emit(error_msg)
-                        for pending_future in pending:
-                            pending_future.cancel()
-                        return
-                    if image is None:
-                        self.error.emit(
-                            f"Could not load image for {os.path.basename(path)}."
-                        )
-                        for pending_future in pending:
-                            pending_future.cancel()
-                        return
-                    loaded_images[idx] = image
-                    completed_count += 1
-                    progress_pct = int((completed_count / total_files) * 100)
-                    self.progress.emit(
-                        progress_pct,
-                        f"Loading manual alignment image {completed_count}/{total_files}",
-                    )
-
-        if not self._is_running:
-            return
-        if any(image is None for image in loaded_images):
-            self.error.emit("Could not load all images for manual alignment preview.")
-            return
-        self.progress.emit(100, "Manual alignment preview ready")
-        self.loaded.emit(loaded_images)
-
-    def cancel(self):
-        self._is_running = False
-
-
-class ExportThread(QThread):
-    progress = pyqtSignal(int, str)
-    export_complete = pyqtSignal()
-    export_error = pyqtSignal(str)
-
-    def __init__(
-        self,
-        folder_path: str,
-        files: dict,
-        selected_files: list,
-        metadata_changes: dict | None = None,
-    ):
-        super().__init__()
-        self.folder_path = folder_path
-        self.files = files
-        self.selected_files = selected_files
-        self.metadata_changes = metadata_changes or {}
-        self._is_running = True
-
-    def run(self):
-        self._is_running = True
-        try:
-            total_files = len(self.selected_files)
-            for i, f in enumerate(self.selected_files):
-                if not self._is_running:
-                    break
-                self.progress.emit(
-                    int(i / total_files * 100) if total_files else 0,
-                    f"Exporting {i + 1}/{total_files}",
-                )
-
-                file_item = self.files.get(f.path)
-                if not file_item:
-                    continue
-
-                export_image = load_image(file_item)
-                if file_item.working_image is not None:
-                    if len(file_item.working_image.shape) == 2:
-                        export_image = np.array(export_image)[
-                            :,
-                            : file_item.metadata.max_size,
-                            : file_item.metadata.max_size,
-                        ]
-                        bf_channel = int(file_item.metadata.reference_channel)
-                        export_image[bf_channel] = file_item.working_image.squeeze()
-                    elif len(file_item.working_image.shape) == 3:
-                        export_image = np.array(file_item.working_image)
-
-                meta_metadata = {
-                    "axes": file_item.metadata.axes,
-                    "unit": file_item.metadata.unit,
-                    "PhysicalSizeX": file_item.metadata.PhysicalSizeX,
-                    "PhysicalSizeY": file_item.metadata.PhysicalSizeY,
-                }
-
-                if len(export_image.shape) > 2:
-                    export_image = export_image[
-                        :,
-                        : int(file_item.metadata.max_size),
-                        : int(file_item.metadata.max_size),
-                    ]
-                elif len(export_image.shape) == 2:
-                    export_image = export_image[
-                        : int(file_item.metadata.max_size),
-                        : int(file_item.metadata.max_size),
-                    ]
-                file_name = os.path.basename(file_item.path)
-
-                for status in FileStatus:
-                    if status.name.startswith("_"):
-                        continue
-                    prefix_to_check = status.value.lower() + "_"
-                    if file_name.lower().startswith(prefix_to_check):
-                        file_name = file_name[len(prefix_to_check) :]
-                        break
-
-                if file_item.metadata.prefix:
-                    file_name = f"{file_item.metadata.prefix}_{file_name}"
-
-                export_path = os.path.join(self.folder_path, file_name)
-                tifffile.imwrite(export_path, export_image, metadata=meta_metadata)
-
-            if self._is_running:
-                self.progress.emit(100, "Export complete")
-                self.export_complete.emit()
-        except Exception as e:
-            logger.error(f"Error in ExportThread: {e}", exc_info=True)
-            self.export_error.emit(str(e))
-
-    def cancel(self):
-        self._is_running = False
-
-
-class BeadUploadThread(QThread):
-    progress = pyqtSignal(int, str)
-    upload_complete = pyqtSignal(FileItem)
-
-    def __init__(
-        self,
-        csv_path: str,
-        reference_file: FileItem,
-        cycle_assignments: dict,
-        files: dict,
-    ):
-        super().__init__()
-        self.csv_path = csv_path
-        self.reference_file = reference_file
-        self.cycle_assignments = cycle_assignments
-        self.files = files
-        self._is_running = True
-
-    def run(self):
-        self._is_running = True
-        try:
-            print(
-                f"BeadUploadThread.run started, reference_file path: {self.reference_file.path}"
-            )
-            self.progress.emit(0, "Loading beads data...")
-            beads_df = pd.read_csv(self.csv_path)
-            print(f"Loaded CSV with {len(beads_df)} rows")
-
-            cycles = {}
-            total_cycles = len(self.cycle_assignments)
-            for cycle_idx, (idx, file_item) in enumerate(
-                self.cycle_assignments.items()
-            ):
-                if not self._is_running:
-                    break
-                progress_pct = int((idx / total_cycles) * 100)
-                self.progress.emit(progress_pct, f"Loading cycle {idx}...")
-
-                cycle_name = f"{CYCLE_COLUMN_PREFIX}{idx}"
-                max_size = int(self.reference_file.metadata.max_size)
-                img = load_and_constrain_image(file_item, max_size)
-                cycles[cycle_name] = img
-
-            if not self._is_running:
-                return
-
-            self.reference_file.beads = beads_df
-            self.reference_file.pre_ensemble_beads = None
-            self.reference_file.ensemble_cache = None
-            self.reference_file.ensemble_sweep_stats = None
-            self.reference_file.ensemble_ratio_selected = None
-            self.reference_file.ensemble_ratio_applied = None
-            self.reference_file.cycles = cycles
-            self.reference_file.cycle_files = self.cycle_assignments
-            self.reference_file.status = FileStatus.BEADS_GENERATED
-            self.reference_file.metadata.prefix = (
-                FileStatus.BEADS_GENERATED.name.lower()
-            )
-
-            print(
-                f"BeadUploadThread done, beads attached: {self.reference_file.beads is not None}"
-            )
-            self.progress.emit(100, "Beads loaded")
-            self.upload_complete.emit(self.reference_file)
-        except Exception as e:
-            logger.error(f"Error in BeadUploadThread: {e}", exc_info=True)
-            self.progress.emit(-1, f"Error: {str(e)}")
-
-    def cancel(self):
-        self._is_running = False
 
 
 class FileManagerVM(QObject):
@@ -987,19 +424,21 @@ class FileManagerVM(QObject):
             return
 
         self.cancel_manual_align_preview_loading()
-        self.manual_align_preview_thread = BrightfieldBatchLoadingThread(
-            ordered_files,
-            self.files,
-            self._extract_brightfield_image,
-            materialize=True,
+        stop = threading.Event()
+        self.manual_align_preview_thread = WorkerThread(
+            brightfield_batch_loading_task(
+                ordered_files, self.files, self._extract_brightfield_image,
+                materialize=True, stop=stop,
+            ),
+            stop,
         )
         self.manual_align_preview_thread.progress.connect(
             self.manual_align_preview_progress.emit
         )
-        self.manual_align_preview_thread.loaded.connect(
+        self.manual_align_preview_thread.completed.connect(
             self.manual_align_preview_loaded.emit
         )
-        self.manual_align_preview_thread.error.connect(
+        self.manual_align_preview_thread.failed.connect(
             self.manual_align_preview_error.emit
         )
         self.manual_align_preview_thread.finished.connect(
@@ -1283,10 +722,13 @@ class FileManagerVM(QObject):
             self.file_information_update.emit([old_ref])
 
     def export_files(self, folder_path: str, selected_files: list[FileItem]):
-        self.export_thread = ExportThread(folder_path, self.files, selected_files)
+        stop = threading.Event()
+        self.export_thread = WorkerThread(
+            export_task(folder_path, self.files, selected_files, stop), stop
+        )
         self.export_thread.progress.connect(self.export_progress.emit)
-        self.export_thread.export_complete.connect(self._on_export_complete)
-        self.export_thread.export_error.connect(self.export_error.emit)
+        self.export_thread.completed.connect(lambda _: self._on_export_complete())
+        self.export_thread.failed.connect(self.export_error.emit)
         self.export_thread.start()
 
     def _on_export_complete(self):
@@ -1324,22 +766,27 @@ class FileManagerVM(QObject):
         )
         curr_ref_path = self.reference_item.path
 
-        self.bead_thread = BeadGenerationThread(
-            self.reference_item,
-            ordered_files,
-            self.files,
-            signal_to_noise_cutoff=0.1,
-            use_stardist=use_stardist,
-            model_name=model_name,
-            stardist_use_guess_tiles=stardist_use_guess_tiles,
-            stardist_n_tiles=stardist_n_tiles,
-            use_stardist_bead_centers=use_stardist_bead_centers,
-            area_multiplier=area_multiplier,
-            ensemble_ratio_start=ensemble_ratio_start,
-            ensemble_ratio_end=ensemble_ratio_end,
-            ensemble_ratio_step=ensemble_ratio_step,
+        stop = threading.Event()
+        self.bead_thread = WorkerThread(
+            bead_generation_task(
+                self.reference_item,
+                ordered_files,
+                self.files,
+                signal_to_noise_cutoff=0.1,
+                stop=stop,
+                use_stardist=use_stardist,
+                model_name=model_name,
+                stardist_use_guess_tiles=stardist_use_guess_tiles,
+                stardist_n_tiles=stardist_n_tiles,
+                use_stardist_bead_centers=use_stardist_bead_centers,
+                area_multiplier=area_multiplier,
+                ensemble_ratio_start=ensemble_ratio_start,
+                ensemble_ratio_end=ensemble_ratio_end,
+                ensemble_ratio_step=ensemble_ratio_step,
+            ),
+            stop,
         )
-        self.bead_thread.bead_generated.connect(
+        self.bead_thread.completed.connect(
             lambda res: self._on_beads_generated(
                 res, curr_ref_path, normalized_assignments
             )
@@ -1502,15 +949,13 @@ class FileManagerVM(QObject):
         reference_file: FileItem,
         cycle_assignments: dict[int, FileItem],
     ):
-        print(
-            f"store_uploaded_beads called, reference_file path: {reference_file.path}"
-        )
-        print(f"files dict keys before: {list(self.files.keys())[:5]}...")
-        self.upload_thread = BeadUploadThread(
-            csv_path, reference_file, cycle_assignments, self.files
+        stop = threading.Event()
+        self.upload_thread = WorkerThread(
+            bead_upload_task(csv_path, reference_file, cycle_assignments, self.files, stop),
+            stop,
         )
         self.upload_thread.progress.connect(self.bead_upload_progress.emit)
-        self.upload_thread.upload_complete.connect(self._on_beads_uploaded)
+        self.upload_thread.completed.connect(self._on_beads_uploaded)
         self.upload_thread.start()
 
     def _on_beads_uploaded(self, reference_file: FileItem):

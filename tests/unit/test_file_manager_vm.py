@@ -10,11 +10,8 @@ import tifffile
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from PyQt6.QtWidgets import QDialog
-from viewmodel.file_manager_vm import (
-    BeadGenerationThread,
-    BrightfieldBatchLoadingThread,
-    ExportThread,
-)
+from viewmodel.bead_eta_estimator import BeadEtaEstimator
+from viewmodel.tasks import bead_generation_task, brightfield_batch_loading_task, export_task
 
 
 class TestFileManagerVM:
@@ -303,7 +300,7 @@ class TestFileManagerVM:
             except KeyError:
                 pass  # Expected if file not found
 
-    def test_brightfield_batch_loading_thread_returns_ordered_materialized_images(
+    def test_brightfield_batch_loading_task_returns_ordered_materialized_images(
         self, mock_file_manager_vm, tmp_path
     ):
         vm = mock_file_manager_vm
@@ -331,22 +328,18 @@ class TestFileManagerVM:
         vm.files[ref_item.path] = ref_item
         vm.files[moving_item.path] = moving_item
 
-        loaded_results = []
-        errors = []
-        thread = BrightfieldBatchLoadingThread(
-            [ref_item, moving_item],
-            vm.files,
-            vm._extract_brightfield_image,
-            materialize=True,
+        stop = threading.Event()
+        gen = brightfield_batch_loading_task(
+            [ref_item, moving_item], vm.files, vm._extract_brightfield_image,
+            True, stop,
         )
-        thread.loaded.connect(lambda images: loaded_results.append(images))
-        thread.error.connect(lambda msg: errors.append(msg))
+        try:
+            while True:
+                next(gen)
+        except StopIteration as e:
+            loaded_images = e.value
 
-        thread.run()
-
-        assert errors == []
-        assert len(loaded_results) == 1
-        loaded_images = loaded_results[0]
+        assert loaded_images is not None
         assert len(loaded_images) == 2
         np.testing.assert_array_equal(loaded_images[0], ref_array[1, :6, :6])
         np.testing.assert_array_equal(
@@ -357,7 +350,7 @@ class TestFileManagerVM:
         assert not isinstance(loaded_images[0], np.memmap)
         assert not isinstance(loaded_images[1], np.memmap)
 
-    def test_brightfield_batch_loading_thread_emits_error_for_invalid_channel(
+    def test_brightfield_batch_loading_task_raises_for_invalid_channel(
         self, mock_file_manager_vm, tmp_path
     ):
         vm = mock_file_manager_vm
@@ -373,24 +366,16 @@ class TestFileManagerVM:
         bad_item.metadata.max_size = 8
         vm.files[bad_item.path] = bad_item
 
-        errors = []
-        loaded_results = []
-        thread = BrightfieldBatchLoadingThread(
-            [bad_item],
-            vm.files,
-            vm._extract_brightfield_image,
-            materialize=True,
+        stop = threading.Event()
+        gen = brightfield_batch_loading_task(
+            [bad_item], vm.files, vm._extract_brightfield_image, True, stop,
         )
-        thread.error.connect(lambda msg: errors.append(msg))
-        thread.loaded.connect(lambda images: loaded_results.append(images))
+        with pytest.raises(RuntimeError) as exc_info:
+            for _ in gen:
+                pass
+        assert "exceeds number of channels" in str(exc_info.value)
 
-        thread.run()
-
-        assert loaded_results == []
-        assert len(errors) == 1
-        assert "exceeds number of channels" in errors[0]
-
-    def test_brightfield_batch_loading_thread_loads_images_concurrently(self):
+    def test_brightfield_batch_loading_task_loads_images_concurrently(self):
         active = 0
         max_active = 0
         lock = threading.Lock()
@@ -411,19 +396,16 @@ class TestFileManagerVM:
             FileItem(path=f"/tmp/manual_align_{i}.tif", status=FileStatus.RAW)
             for i in range(4)
         ]
-        thread = BrightfieldBatchLoadingThread(
-            file_items, {}, fake_loader, materialize=True
-        )
+        stop = threading.Event()
+        gen = brightfield_batch_loading_task(file_items, {}, fake_loader, True, stop)
+        try:
+            while True:
+                next(gen)
+        except StopIteration as e:
+            loaded_images = e.value
 
-        loaded_results = []
-        errors = []
-        thread.loaded.connect(lambda images: loaded_results.append(images))
-        thread.error.connect(lambda msg: errors.append(msg))
-        thread.run()
-
-        assert errors == []
-        assert len(loaded_results) == 1
-        assert len(loaded_results[0]) == 4
+        assert loaded_images is not None
+        assert len(loaded_images) == 4
         assert max_active > 1
 
     def test_align_channels_no_reference(self, mock_file_manager_vm, mock_file_items, mocker):
@@ -512,7 +494,7 @@ class TestFileManagerVM:
             # Should run without error
             vm.export_files(str(export_folder), [item])
 
-    def test_export_thread_exports_aligned_two_cycles_and_protein(
+    def test_export_task_exports_aligned_two_cycles_and_protein(
         self, tmp_path
     ):
         export_folder = tmp_path / "export"
@@ -539,8 +521,9 @@ class TestFileManagerVM:
         }
         selected = [cy1_item, cy2_item, protein_item]
 
-        thread = ExportThread(str(export_folder), files, selected)
-        thread.run()
+        stop = threading.Event()
+        for _ in export_task(str(export_folder), files, selected, stop):
+            pass
 
         exported = sorted(f.name for f in export_folder.glob("*.tif"))
         assert exported == [
@@ -763,7 +746,17 @@ class TestFileManagerVM:
         assert vm.files[mock_file_item.path].ensemble_ratio_applied is None
         assert vm.files[mock_file_item.path].ensemble_ratio_selected == 1.0
 
-    def test_bead_generation_thread_uses_time_calibrated_progress(self, qapp, tmp_tiff_path):
+    def _run_bead_task(self, gen):
+        emitted = []
+        result = None
+        try:
+            while True:
+                emitted.append(next(gen))
+        except StopIteration as e:
+            result = e.value
+        return emitted, result
+
+    def test_bead_generation_task_uses_time_calibrated_progress(self, qapp, tmp_tiff_path):
         ref_path = tmp_tiff_path("ref.tif")
         cy1_path = tmp_tiff_path("cy1.tif")
         ref_item = FileItem(path=ref_path, status=FileStatus.RAW)
@@ -782,22 +775,11 @@ class TestFileManagerVM:
         cy1_saved.metadata.reference_channel = 0
         cy1_saved.working_image = np.zeros((32, 32), dtype=np.uint16)
 
-        files = {
-            ref_path: ref_saved,
-            cy1_path: cy1_saved,
-        }
-
-        emitted = []
-        generated = []
+        files = {ref_path: ref_saved, cy1_path: cy1_saved}
 
         def fake_process_beads(
-            brightfield,
-            tifs,
-            max_size,
-            signal_to_noise_cutoff,
-            progress_callback=None,
-            progress_units_callback=None,
-            **kwargs,
+            brightfield, tifs, max_size, signal_to_noise_cutoff,
+            progress_callback=None, progress_units_callback=None, **kwargs,
         ):
             if progress_callback:
                 progress_callback(0, "Preprocessing brightfield image...")
@@ -818,38 +800,29 @@ class TestFileManagerVM:
                 "labeled_image": np.zeros((32, 32), dtype=np.uint16),
             }
 
-        thread = BeadGenerationThread(
-            ref_item,
-            [ref_item, cy1_item],
-            files,
-            signal_to_noise_cutoff=0.1,
-            use_stardist=True,
+        stop = threading.Event()
+        gen = bead_generation_task(
+            ref_item, [ref_item, cy1_item], files, 0.1, stop, use_stardist=True
         )
-        thread.progress.connect(lambda v, m: emitted.append((v, m)))
-        thread.bead_generated.connect(lambda res: generated.append(res))
 
-        with patch("viewmodel.file_manager_vm.load_and_constrain_image", return_value=np.zeros((2, 32, 32), dtype=np.uint16)), \
+        with patch("viewmodel.tasks.load_and_constrain_image", return_value=np.zeros((2, 32, 32), dtype=np.uint16)), \
              patch("image_processing.process_beads", side_effect=fake_process_beads):
-            thread.run()
+            emitted, result = self._run_bead_task(gen)
 
-        assert generated
+        assert result is not None
         assert emitted
         pre_values = [v for v, m in emitted if "Preprocessing brightfield image..." in m]
         assert pre_values
         assert pre_values[0] < 30
-        assert any(
-            "Processing fluorescence channels" in m
-            for _, m in emitted
-        )
+        assert any("Processing fluorescence channels" in m for _, m in emitted)
         assert any(
             ("/s" in m or "(~" in m or " · ~" in m)
-            for v, m in emitted
-            if v > 0 and v < 100
+            for v, m in emitted if v > 0 and v < 100
         )
         assert not any("Elapsed" in m for v, m in emitted)
         assert max(v for v, _ in emitted if v >= 0) <= 99
 
-    def test_bead_generation_thread_stardist_sets_workload_before_processing(
+    def test_bead_generation_task_stardist_sets_workload_before_processing(
         self, qapp, tmp_tiff_path
     ):
         ref_path = tmp_tiff_path("ref_workload.tif")
@@ -870,46 +843,38 @@ class TestFileManagerVM:
         cy1_saved.metadata.reference_channel = 0
         cy1_saved.working_image = np.zeros((3, 32, 32), dtype=np.uint16)
 
-        files = {
-            ref_path: ref_saved,
-            cy1_path: cy1_saved,
-        }
-        observed = {}
+        files = {ref_path: ref_saved, cy1_path: cy1_saved}
+        set_workload_calls = []
+
+        original_set_workload = BeadEtaEstimator.set_workload
+
+        def capturing_set_workload(self, total_channels, max_size_pixels):
+            set_workload_calls.append({"total_channels": total_channels, "max_size_pixels": max_size_pixels})
+            return original_set_workload(self, total_channels, max_size_pixels)
 
         def fake_process_beads(*args, **kwargs):
-            observed["set_workload_channels"] = getattr(
-                thread._estimator, "_total_channels", None
-            )
-            observed["set_workload_max_size"] = getattr(
-                thread._estimator, "_max_size", None
-            )
             return {
                 "beads": pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [0], "cy1": [1]}),
-                "post_resolution_beads": pd.DataFrame(
-                    {"x": [1.0], "y": [1.0], "cy0": [0], "cy1": [1]}
-                ),
+                "post_resolution_beads": pd.DataFrame({"x": [1.0], "y": [1.0], "cy0": [0], "cy1": [1]}),
                 "cycles": {"cy0": np.zeros((3, 32, 32), dtype=np.uint16)},
                 "labeled_image": np.zeros((32, 32), dtype=np.uint16),
             }
 
-        thread = BeadGenerationThread(
-            ref_item,
-            [ref_item, cy1_item],
-            files,
-            signal_to_noise_cutoff=0.1,
-            use_stardist=True,
+        stop = threading.Event()
+        gen = bead_generation_task(
+            ref_item, [ref_item, cy1_item], files, 0.1, stop, use_stardist=True
         )
 
-        with patch(
-            "viewmodel.file_manager_vm.load_and_constrain_image",
-            return_value=np.zeros((3, 32, 32), dtype=np.uint16),
-        ), patch("image_processing.process_beads", side_effect=fake_process_beads):
-            thread.run()
+        with patch.object(BeadEtaEstimator, "set_workload", capturing_set_workload), \
+             patch("viewmodel.tasks.load_and_constrain_image", return_value=np.zeros((3, 32, 32), dtype=np.uint16)), \
+             patch("image_processing.process_beads", side_effect=fake_process_beads):
+            self._run_bead_task(gen)
 
-        assert observed["set_workload_channels"] == 4
-        assert observed["set_workload_max_size"] == 32
+        assert len(set_workload_calls) == 1
+        assert set_workload_calls[0]["total_channels"] == 4
+        assert set_workload_calls[0]["max_size_pixels"] == 32
 
-    def test_bead_generation_thread_heartbeat_emits_between_sparse_callbacks(self, qapp, tmp_tiff_path):
+    def test_bead_generation_task_heartbeat_emits_between_sparse_callbacks(self, qapp, tmp_tiff_path):
         ref_path = tmp_tiff_path("ref2.tif")
         cy1_path = tmp_tiff_path("cy2.tif")
         ref_item = FileItem(path=ref_path, status=FileStatus.RAW)
@@ -928,21 +893,11 @@ class TestFileManagerVM:
         cy1_saved.metadata.reference_channel = 0
         cy1_saved.working_image = np.zeros((32, 32), dtype=np.uint16)
 
-        files = {
-            ref_path: ref_saved,
-            cy1_path: cy1_saved,
-        }
-
-        emitted = []
+        files = {ref_path: ref_saved, cy1_path: cy1_saved}
 
         def fake_process_beads(
-            brightfield,
-            tifs,
-            max_size,
-            signal_to_noise_cutoff,
-            progress_callback=None,
-            progress_units_callback=None,
-            **kwargs,
+            brightfield, tifs, max_size, signal_to_noise_cutoff,
+            progress_callback=None, progress_units_callback=None, **kwargs,
         ):
             if progress_callback:
                 progress_callback(10, "Initial bead detection...")
@@ -956,18 +911,14 @@ class TestFileManagerVM:
                 "labeled_image": np.zeros((32, 32), dtype=np.uint16),
             }
 
-        thread = BeadGenerationThread(
-            ref_item,
-            [ref_item, cy1_item],
-            files,
-            signal_to_noise_cutoff=0.1,
-            use_stardist=True,
+        stop = threading.Event()
+        gen = bead_generation_task(
+            ref_item, [ref_item, cy1_item], files, 0.1, stop, use_stardist=True
         )
-        thread.progress.connect(lambda v, m: emitted.append((v, m)))
 
-        with patch("viewmodel.file_manager_vm.load_and_constrain_image", return_value=np.zeros((2, 32, 32), dtype=np.uint16)), \
+        with patch("viewmodel.tasks.load_and_constrain_image", return_value=np.zeros((2, 32, 32), dtype=np.uint16)), \
              patch("image_processing.process_beads", side_effect=fake_process_beads):
-            thread.run()
+            emitted, _ = self._run_bead_task(gen)
 
         detection_updates = [x for x in emitted if "Initial bead detection..." in x[1]]
         assert len(detection_updates) >= 1
