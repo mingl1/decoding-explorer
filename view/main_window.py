@@ -1091,11 +1091,11 @@ class MainWindow(QMainWindow):
         self.cancel_button.setVisible(False)
         self.cancel_button.setEnabled(True)
 
-    def update_export_progress(self, value, total):
+    def update_export_progress(self, value: int, msg: str):
         self.export_progress_bar.setVisible(True)
-        self.export_progress_bar.setMaximum(total)
+        self.export_progress_bar.setMaximum(100)
         self.export_progress_bar.setValue(value)
-        if value == total:
+        if value >= 100:
             self.export_progress_bar.setVisible(False)
 
     def on_export_complete(self):

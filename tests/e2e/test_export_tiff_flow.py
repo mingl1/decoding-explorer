@@ -144,13 +144,12 @@ class TestExportAsTiffE2E:
         file_item = window.vm.files[source_path]
 
         progress_calls = []
-        window.vm.export_progress.connect(lambda cur, total: progress_calls.append((cur, total)))
+        window.vm.export_progress.connect(lambda pct, msg: progress_calls.append((pct, msg)))
 
         window.vm.export_files(str(export_folder), [file_item])
 
-        assert len(progress_calls) >= 2
-        assert progress_calls[0] == (0, 1)
-        assert progress_calls[-1] == (1, 1)
+        assert len(progress_calls) >= 1
+        assert progress_calls[-1][0] == 100
 
     def test_export_respects_max_size(
         self, mock_main_window, tmp_path, qtbot
