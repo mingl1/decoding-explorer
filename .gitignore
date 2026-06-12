@@ -1,2 +1,12 @@
 */__*
 __*
+*.csv
+*.png
+*.ipynb
+dist/
+.claude/
+*.xlsx
+*.xls
+*.log
+test_outputs/
+build/
