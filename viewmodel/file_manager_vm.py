@@ -642,8 +642,8 @@ class FileManagerVM(QObject):
                 if not my_f:
                     continue
                 my_f.working_image = aligned_tifs[i]
-                my_f.status = FileStatus.ALIGNED
-                my_f.metadata.prefix = FileStatus.ALIGNED.name.lower()
+                my_f.status = FileStatus.AUTO_ALIGNED
+                my_f.metadata.prefix = FileStatus.AUTO_ALIGNED.name.lower()
                 to_be_updated.append(my_f)
             self.file_information_update.emit(to_be_updated)
 

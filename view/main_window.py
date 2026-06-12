@@ -856,8 +856,8 @@ class MainWindow(QMainWindow):
 
                 my_f.working_image = transformed_full
 
-            my_f.status = FileStatus.ALIGNED
-            my_f.metadata.prefix = FileStatus.ALIGNED.name.lower()
+            my_f.status = FileStatus.MANUALLY_ALIGNED
+            my_f.metadata.prefix = FileStatus.MANUALLY_ALIGNED.name.lower()
             to_be_updated.append(my_f)
 
         if to_be_updated:

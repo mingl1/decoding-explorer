@@ -5,6 +5,8 @@ class FileStatus(Enum):
     RAW = "Raw"
     SHADE_CORRECTED = "Corrected"
     ALIGNED = "Aligned"
+    MANUALLY_ALIGNED = "Manually Aligned"
+    AUTO_ALIGNED = "Auto Aligned"
     BEADS_GENERATED = "Generated"
 
     def __str__(self):
@@ -16,5 +18,7 @@ class FileStatus(Enum):
             FileStatus.RAW: "#A0A0A0",
             FileStatus.SHADE_CORRECTED: "#FFD700",
             FileStatus.ALIGNED: "#FF8C00",
+            FileStatus.MANUALLY_ALIGNED: "#FF8C00",
+            FileStatus.AUTO_ALIGNED: "#FF8C00",
             FileStatus.BEADS_GENERATED: "#32CD32",
         }[self]
