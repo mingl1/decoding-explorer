@@ -4,8 +4,14 @@ from typing import List
 from PyQt6.QtCore import QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QFont, QPainter
 from PyQt6.QtSvg import QSvgRenderer  # For rendering SVGs
-from PyQt6.QtWidgets import (QFileDialog, QHeaderView, QMenu, QPushButton,
-                             QTableWidget, QTableWidgetItem)
+from PyQt6.QtWidgets import (
+    QFileDialog,
+    QHeaderView,
+    QMenu,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+)
 
 from model.file_item import FileItem
 from model.status_enum import FileStatus
@@ -45,12 +51,24 @@ class FileTableWidget(QTableWidget):
     table_emptied = pyqtSignal()
 
     def __init__(self, file_dropped_callback, vm: FileManagerVM):
-        super().__init__(0, 7)  # columns: filename, status, shape, dtype, physical_size_x, physical_size_y, alignment_channel
+        super().__init__(
+            0, 7
+        )  # columns: filename, status, shape, dtype, physical_size_x, physical_size_y, alignment_channel
         self.setAcceptDrops(True)
         self.setSortingEnabled(True)
         self.file_dropped_callback = file_dropped_callback
         self.vm = vm
-        self.setHorizontalHeaderLabels(["Filename", "Status", "Shape", "Dtype", "PhysicalSizeX", "PhysicalSizeY", "AlignmentChannel"])
+        self.setHorizontalHeaderLabels(
+            [
+                "Filename",
+                "Status",
+                "Shape",
+                "Dtype",
+                "PhysicalSizeX",
+                "PhysicalSizeY",
+                "AlignmentChannel",
+            ]
+        )
         header = self.horizontalHeader()
         assert header is not None
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -183,7 +201,9 @@ class FileTableWidget(QTableWidget):
         dtype_item = QTableWidgetItem(str(file_item.dtype))
         physical_size_x_item = QTableWidgetItem(str(file_item.metadata.PhysicalSizeX))
         physical_size_y_item = QTableWidgetItem(str(file_item.metadata.PhysicalSizeY))
-        alignment_channel_item = QTableWidgetItem(str(file_item.metadata.reference_channel))
+        alignment_channel_item = QTableWidgetItem(
+            str(file_item.metadata.reference_channel)
+        )
 
         status_text = file_item.status.value
         status_item = QTableWidgetItem(status_text)
@@ -321,12 +341,16 @@ class FileTableWidget(QTableWidget):
                     status_item.setBackground(QColor(file_item.status.color))
 
                     filename_item.setData(Qt.ItemDataRole.UserRole, file_item)
-                    shape_text = format_shape_by_axes(file_item.shape, file_item.metadata.axes)
+                    shape_text = format_shape_by_axes(
+                        file_item.shape, file_item.metadata.axes
+                    )
                     shape_item.setText(shape_text)
                     dtype_item.setText(str(file_item.dtype))
                     physical_size_x_item.setText(str(file_item.metadata.PhysicalSizeX))
                     physical_size_y_item.setText(str(file_item.metadata.PhysicalSizeY))
-                    alignment_channel_item.setText(str(file_item.metadata.reference_channel))
+                    alignment_channel_item.setText(
+                        str(file_item.metadata.reference_channel)
+                    )
                     print(f"Updated FileItem Information for {file_path}")
 
     def get_selected_files(self) -> List[FileItem]:
@@ -397,10 +421,10 @@ class FileTableWidget(QTableWidget):
         my_model = self.model()
         assert my_model is not None
         selected_files = self.get_selected_files()
-        
+
         # delete from vm:
         self.vm.delete_files(selected_files)
-        
+
         for row in rows:
             my_model.removeRow(row)
 

@@ -9,12 +9,20 @@ import traceback
 try:
     import pyi_splash
 except ImportError:
+
     class DummySplash:
         def close(self):
             pass
+
     pyi_splash = DummySplash()
-from PyQt6.QtWidgets import (QApplication, QDialog, QLabel, QPushButton,
-                             QTextEdit, QVBoxLayout)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QLabel,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+)
 
 if sys.stdout is None:
     sys.stdout = io.StringIO()

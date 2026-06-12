@@ -1,8 +1,9 @@
-import numpy as np
 from unittest.mock import patch
 
-from view.alignment_preview_dialog import AlignmentPreviewDialog
+import numpy as np
 from PyQt6.QtWidgets import QMessageBox
+
+from view.alignment_preview_dialog import AlignmentPreviewDialog
 
 
 class TestAlignmentPreviewDialog:
@@ -54,7 +55,9 @@ class TestAlignmentPreviewDialog:
             initial_preview_size=64,
         )
         received = []
-        dialog.transformation_matrices.connect(lambda matrices: received.append(matrices))
+        dialog.transformation_matrices.connect(
+            lambda matrices: received.append(matrices)
+        )
 
         dialog.visibility_checkboxes[1].setChecked(False)
         dialog.accept_alignment()
@@ -142,7 +145,9 @@ class TestAlignmentPreviewDialog:
             initial_preview_size=64,
         )
         emitted = []
-        dialog.transformation_matrices.connect(lambda matrices: emitted.append(matrices))
+        dialog.transformation_matrices.connect(
+            lambda matrices: emitted.append(matrices)
+        )
 
         dialog.dx_input.setText("1")
         dialog.dy_input.setText("0")

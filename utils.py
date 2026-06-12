@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import psutil
 from numpy.typing import NDArray
+from PyQt6.QtGui import QImage
 
 
 def to_uint16(arr):
@@ -348,3 +349,40 @@ def adjust_contrast(
     img_adjusted = (img_adjusted - minval) / (maxval - minval)
 
     return img_adjusted  # stays float64, values in [0.0, 1.0]
+
+
+def numpy_to_qimage(array: np.ndarray) -> QImage:
+    if not array.data.contiguous:
+        array = np.ascontiguousarray(array)
+
+    qimage = None
+    if len(array.shape) == 2:
+        height, width = array.shape
+        format = (
+            QImage.Format.Format_Grayscale16
+            if array.dtype == np.uint16
+            else QImage.Format.Format_Grayscale8
+        )
+        bytes_per_pixel = 2 if array.dtype == np.uint16 else 1
+        bytes_per_line = width * bytes_per_pixel
+        qimage = QImage(array.data, width, height, bytes_per_line, format)
+    elif len(array.shape) == 3:
+        height, width, channels = array.shape
+        if channels == 3:
+            qimage = QImage(
+                array.data, width, height, width * channels, QImage.Format.Format_RGB888
+            )
+        elif channels == 4:
+            qimage = QImage(
+                array.data,
+                width,
+                height,
+                width * channels,
+                QImage.Format.Format_RGBA8888,
+            )
+    else:
+        raise ValueError(f"Unsupported array shape: {array.shape}")
+    if qimage is None:
+        raise ValueError("Failed to create QImage from numpy array")
+    qimage.ndarray = array
+    return qimage

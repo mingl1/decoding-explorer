@@ -205,7 +205,9 @@ class AlignmentPreviewDialog(QDialog):
         self.can_edit = can_edit
         self.can_emit = can_emit
         self.initial_checked_indices = (
-            set(initial_checked_indices) if initial_checked_indices is not None else None
+            set(initial_checked_indices)
+            if initial_checked_indices is not None
+            else None
         )
         if layer_labels is not None and len(layer_labels) == len(self.moving_images):
             self.layer_labels = list(layer_labels)
@@ -352,7 +354,9 @@ class AlignmentPreviewDialog(QDialog):
 
     def _get_editable_indices(self) -> list[int]:
         return [
-            i for i, checkbox in enumerate(self.visibility_checkboxes) if checkbox.isChecked()
+            i
+            for i, checkbox in enumerate(self.visibility_checkboxes)
+            if checkbox.isChecked()
         ]
 
     def _has_identity_transform(self, transform: QTransform) -> bool:
@@ -471,7 +475,9 @@ class AlignmentPreviewDialog(QDialog):
             return
 
         saved_transforms = [item.transform() for item in self.image_view.moving_items]
-        saved_visibility = [checkbox.isChecked() for checkbox in self.visibility_checkboxes]
+        saved_visibility = [
+            checkbox.isChecked() for checkbox in self.visibility_checkboxes
+        ]
         self._apply_preview_size(clamped_size)
         self.create_direct_overlay()
 

@@ -17,7 +17,6 @@ This test verifies the core behavior:
 """
 
 import pandas as pd
-import pytest
 
 from model.file_item import FileItem
 from model.status_enum import FileStatus
@@ -26,9 +25,7 @@ from model.status_enum import FileStatus
 class TestUploadBeadCSV:
     """Integration test for uploading pre-generated bead CSV files."""
 
-    def test_validate_bead_csv_with_valid_format(
-        self, mock_file_manager_vm, tmp_path
-    ):
+    def test_validate_bead_csv_with_valid_format(self, mock_file_manager_vm, tmp_path):
         """Validate that a correctly formatted CSV passes validation.
 
         This test verifies:
@@ -41,11 +38,11 @@ class TestUploadBeadCSV:
         # Create a valid bead CSV file
         csv_path = tmp_path / "beads.csv"
         beads_data = {
-            'x': [10.5, 20.3, 30.7, 40.2],
-            'y': [15.2, 25.8, 35.1, 45.9],
-            'cy0': [1.0, 2.0, 0.0, 1.0],
-            'cy1': [0.0, 1.0, 2.0, 0.0],
-            'cy2': [2.0, 0.0, 1.0, 255.0],  # 255.0 = unassigned
+            "x": [10.5, 20.3, 30.7, 40.2],
+            "y": [15.2, 25.8, 35.1, 45.9],
+            "cy0": [1.0, 2.0, 0.0, 1.0],
+            "cy1": [0.0, 1.0, 2.0, 0.0],
+            "cy2": [2.0, 0.0, 1.0, 255.0],  # 255.0 = unassigned
         }
         df = pd.DataFrame(beads_data)
         df.to_csv(csv_path, index=False)
@@ -53,7 +50,7 @@ class TestUploadBeadCSV:
         # ----------------------------------------------------------------
         # ASSERTION 1: validate_bead_csv method must exist
         # ----------------------------------------------------------------
-        assert hasattr(vm, 'validate_bead_csv'), (
+        assert hasattr(vm, "validate_bead_csv"), (
             "FileManagerVM should have a 'validate_bead_csv' method"
         )
 
@@ -68,9 +65,7 @@ class TestUploadBeadCSV:
         assert error_msg is None or error_msg == "", (
             "Valid CSV should not return an error message"
         )
-        assert num_cycles == 3, (
-            "CSV with cy0, cy1, cy2 should detect 3 cycles"
-        )
+        assert num_cycles == 3, "CSV with cy0, cy1, cy2 should detect 3 cycles"
 
     def test_validate_bead_csv_rejects_missing_required_columns(
         self, mock_file_manager_vm, tmp_path
@@ -87,8 +82,8 @@ class TestUploadBeadCSV:
         # Create CSV without required columns
         csv_path = tmp_path / "invalid_beads.csv"
         invalid_data = {
-            'cy0': [1.0, 2.0, 0.0],
-            'cy1': [0.0, 1.0, 2.0],
+            "cy0": [1.0, 2.0, 0.0],
+            "cy1": [0.0, 1.0, 2.0],
             # Missing 'x' and 'y' columns
         }
         df = pd.DataFrame(invalid_data)
@@ -105,7 +100,7 @@ class TestUploadBeadCSV:
         assert error_msg is not None and len(error_msg) > 0, (
             "Failed validation should provide an error message"
         )
-        assert 'x' in error_msg.lower() or 'y' in error_msg.lower(), (
+        assert "x" in error_msg.lower() or "y" in error_msg.lower(), (
             "Error message should mention missing 'x' or 'y' columns"
         )
 
@@ -126,10 +121,10 @@ class TestUploadBeadCSV:
         # Create valid bead CSV
         csv_path = tmp_path / "beads.csv"
         beads_data = {
-            'x': [10.5, 20.3, 30.7],
-            'y': [15.2, 25.8, 35.1],
-            'cy0': [1.0, 2.0, 0.0],
-            'cy1': [0.0, 1.0, 2.0],
+            "x": [10.5, 20.3, 30.7],
+            "y": [15.2, 25.8, 35.1],
+            "cy0": [1.0, 2.0, 0.0],
+            "cy1": [0.0, 1.0, 2.0],
         }
         df = pd.DataFrame(beads_data)
         df.to_csv(csv_path, index=False)
@@ -169,18 +164,14 @@ class TestUploadBeadCSV:
         # ----------------------------------------------------------------
         # ASSERTION 1: store_uploaded_beads method must exist
         # ----------------------------------------------------------------
-        assert hasattr(vm, 'store_uploaded_beads'), (
+        assert hasattr(vm, "store_uploaded_beads"), (
             "FileManagerVM should have a 'store_uploaded_beads' method"
         )
 
         # ----------------------------------------------------------------
         # ACTION: Store uploaded beads
         # ----------------------------------------------------------------
-        vm.store_uploaded_beads(
-            str(csv_path),
-            reference_item,
-            cycle_assignments
-        )
+        vm.store_uploaded_beads(str(csv_path), reference_item, cycle_assignments)
 
         # ----------------------------------------------------------------
         # ASSERTION 2: Beads DataFrame should be stored
@@ -195,10 +186,10 @@ class TestUploadBeadCSV:
         assert len(stored_file.beads) == 3, (
             "FileItem.beads should contain all 3 bead rows from CSV"
         )
-        assert 'x' in stored_file.beads.columns, (
+        assert "x" in stored_file.beads.columns, (
             "Beads DataFrame should contain 'x' column"
         )
-        assert 'y' in stored_file.beads.columns, (
+        assert "y" in stored_file.beads.columns, (
             "Beads DataFrame should contain 'y' column"
         )
 
@@ -211,12 +202,8 @@ class TestUploadBeadCSV:
         assert isinstance(stored_file.cycles, dict), (
             "FileItem.cycles should be a dictionary"
         )
-        assert 'cy0' in stored_file.cycles, (
-            "Cycles dict should contain 'cy0' key"
-        )
-        assert 'cy1' in stored_file.cycles, (
-            "Cycles dict should contain 'cy1' key"
-        )
+        assert "cy0" in stored_file.cycles, "Cycles dict should contain 'cy0' key"
+        assert "cy1" in stored_file.cycles, "Cycles dict should contain 'cy1' key"
 
         # ----------------------------------------------------------------
         # ASSERTION 4: FileStatus should change to BEADS_GENERATED

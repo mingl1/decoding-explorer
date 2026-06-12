@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QLayout,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSlider,
     QTableWidget,
@@ -23,6 +24,7 @@ from PyQt6.QtWidgets import (
 )
 
 from model.file_item import FileItem
+from utils import is_dark_mode
 from viewmodel.metadata_vm import MetadataVM
 
 
@@ -39,6 +41,7 @@ class DecodingWorkflowPanel(QWidget):
     manually_align_sig = pyqtSignal()
     crop_selected_sig = pyqtSignal()
     crop_beads_sig = pyqtSignal()
+    find_crop_anchor_sig = pyqtSignal()
 
     def __init__(self, parent, vm: MetadataVM):
         super().__init__(parent)
@@ -211,6 +214,9 @@ class DecodingWorkflowPanel(QWidget):
         self.manually_align_btn = QPushButton("Manually Align Dataset")
         self.manually_align_btn.clicked.connect(self.manually_align_sig.emit)
 
+        self.find_anchor_btn = QPushButton("Find Crop Anchor")
+        self.find_anchor_btn.clicked.connect(self.find_crop_anchor_sig.emit)
+
         # StarDist controls
         self.use_stardist_checkbox = QCheckBox(
             "Use StarDist for fluorescent layers (Recommended)"
@@ -304,8 +310,6 @@ class DecodingWorkflowPanel(QWidget):
         self.unit_label = QLabel("Unit:")
         self.phys_size_x_label = QLabel("PhysSizeX:")
         self.phys_size_y_label = QLabel("PhysSizeY:")
-        self.align_ch_label = QLabel("Align Ch:")
-        self.max_size_label = QLabel("Max Size:")
 
         self.form_layout.addRow(self.prefix_label, self.prefix_input)
         self.form_layout.addRow(self.prefix_checkbox)
@@ -313,8 +317,6 @@ class DecodingWorkflowPanel(QWidget):
         self.form_layout.addRow(self.unit_label, self.unit_input)
         self.form_layout.addRow(self.phys_size_x_label, self.size_x_input)
         self.form_layout.addRow(self.phys_size_y_label, self.size_y_input)
-        self.form_layout.addRow(self.align_ch_label, self.channel_input)
-        self.form_layout.addRow(self.max_size_label, self.max_size_input)
         self._section_widgets["metadata"] = [
             self.prefix_label,
             self.prefix_input,
@@ -327,42 +329,83 @@ class DecodingWorkflowPanel(QWidget):
             self.size_x_input,
             self.phys_size_y_label,
             self.size_y_input,
-            self.align_ch_label,
-            self.channel_input,
-            self.max_size_label,
-            self.max_size_input,
         ]
 
         self.form_layout.addRow(align_arrays_title)
         self.form_layout.addRow(align_arrays_sep)
 
+        self.step1_title = QLabel("Step 1: Find Crop Anchor")
+        self.step1_title.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 5px;")
+        self.form_layout.addRow(self.step1_title)
+        self.form_layout.addRow(self.find_anchor_btn)
+
+        self.crop_btn = QPushButton("Manually Crop Whole Dataset")
+        self.crop_btn.clicked.connect(self.crop_selected_sig.emit)
+
+        self.manual_section_container = QWidget()
+        manual_section_layout = QVBoxLayout()
+        manual_section_layout.setContentsMargins(0, 0, 0, 0)
+        manual_section_layout.setSpacing(5)
+        self.manual_section_container.setLayout(manual_section_layout)
+
+        self.manual_toggle_btn = QPushButton("▸ Show Manual/Alternative Options")
+        self.manual_toggle_btn.setFlat(True)
+        toggle_color = "#aaa" if is_dark_mode() else "#555"
+        self.manual_toggle_btn.setStyleSheet(f"text-align: left; font-weight: bold; color: {toggle_color}; margin-top: 5px;")
+        self.manual_toggle_btn.clicked.connect(self._toggle_manual_options)
+        manual_section_layout.addWidget(self.manual_toggle_btn)
+
+        self.manual_options_widget = QWidget()
+        self.manual_options_widget.setVisible(False)
+        manual_options_layout = QVBoxLayout()
+        manual_options_layout.setContentsMargins(15, 0, 0, 0)
+        manual_options_layout.setSpacing(5)
+        self.manual_options_widget.setLayout(manual_options_layout)
+
+        manual_options_layout.addWidget(self.crop_btn)
+        manual_options_layout.addWidget(self.manually_align_btn)
+        manual_section_layout.addWidget(self.manual_options_widget)
+
+        self.form_layout.addRow(self.manual_section_container)
+
+        self.step2_title = QLabel("Step 2: Align to Reference")
+        self.step2_title.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 10px;")
+        self.form_layout.addRow(self.step2_title)
+
+        self.align_ch_label = QLabel("Align Ch:")
+        self.max_size_label = QLabel("Max Size:")
         self.num_tiles_label = QLabel("Num Tiles:")
         self.overlap_label = QLabel("Overlap:")
         self.ncc_thresh_label = QLabel("NCC Thresh:")
 
+        self.form_layout.addRow(self.align_ch_label, self.channel_input)
+        self.form_layout.addRow(self.max_size_label, self.max_size_input)
         self.form_layout.addRow(self.num_tiles_label, self.num_tiles_input)
         self.form_layout.addRow(self.overlap_label, self.overlap_input)
         self.form_layout.addRow(self.ncc_thresh_label, self.threshold_container)
-        self.crop_btn = QPushButton("Crop Dataset")
-        self.crop_btn.clicked.connect(self.crop_selected_sig.emit)
 
         self.apply_shading_checkbox = QCheckBox("Apply shading correction")
         self.apply_shading_checkbox.setChecked(True)
-        self.form_layout.addRow(self.crop_btn)
-        self.form_layout.addRow(self.manually_align_btn)
-        self.form_layout.addRow(self.align_channels_btn)
         self.form_layout.addRow(self.apply_shading_checkbox)
+        self.form_layout.addRow(self.align_channels_btn)
+
         self._section_widgets["align_arrays"] = [
+            self.step1_title,
+            self.find_anchor_btn,
+            self.manual_section_container,
+            self.step2_title,
+            self.align_ch_label,
+            self.channel_input,
+            self.max_size_label,
+            self.max_size_input,
             self.num_tiles_label,
             self.num_tiles_input,
             self.overlap_label,
             self.overlap_input,
             self.ncc_thresh_label,
             self.threshold_container,
-            self.align_channels_btn,
-            self.manually_align_btn,
-            self.crop_btn,
             self.apply_shading_checkbox,
+            self.align_channels_btn,
         ]
 
         self.form_layout.addRow(bead_generation_title)
@@ -463,8 +506,19 @@ class DecodingWorkflowPanel(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setWidget(self.content_widget)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+
         layout = QVBoxLayout()
-        layout.addWidget(self.content_widget)
+        layout.addWidget(self.scroll_area)
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(2)
         self.setLayout(layout)
@@ -472,6 +526,14 @@ class DecodingWorkflowPanel(QWidget):
         self.update_metadata([])
         self._sync_stardist_tiles_input_state()
         self.set_ensemble_sweep_stats(None)
+
+    def _toggle_manual_options(self):
+        is_visible = self.manual_options_widget.isVisible()
+        self.manual_options_widget.setVisible(not is_visible)
+        if not is_visible:
+            self.manual_toggle_btn.setText("▾ Hide Manual/Alternative Options")
+        else:
+            self.manual_toggle_btn.setText("▸ Show Manual/Alternative Options")
 
     def on_prefix_checkbox_changed(self, state):
         is_checked = state == Qt.CheckState.Checked
@@ -519,7 +581,9 @@ class DecodingWorkflowPanel(QWidget):
                     x1, y1, x2, y2 = f.metadata.crop_bounds
                     caps.append(min(y2 - y1, x2 - x1))
                 elif len(f.original_shape) >= 2:
-                    caps.append(min(int(f.original_shape[-2]), int(f.original_shape[-1])))
+                    caps.append(
+                        min(int(f.original_shape[-2]), int(f.original_shape[-1]))
+                    )
             if caps:
                 cap = min(caps)
                 if metadata_changes["max_size"] > cap:
@@ -527,6 +591,66 @@ class DecodingWorkflowPanel(QWidget):
                     self.max_size_input.setText(str(cap))
                     self.max_size_input.blockSignals(False)
                     metadata_changes["max_size"] = cap
+
+        max_size_changed_val = False
+        if "max_size" in metadata_changes:
+            new_max_size = metadata_changes["max_size"]
+            for f in self.vm.selected_files:
+                if f.metadata.max_size != new_max_size:
+                    max_size_changed_val = True
+                    break
+
+        num_tiles_changed_val = False
+        if "num_tiles" in metadata_changes:
+            new_num_tiles = metadata_changes["num_tiles"]
+            for f in self.vm.selected_files:
+                if f.metadata.num_tiles != new_num_tiles:
+                    num_tiles_changed_val = True
+                    break
+
+        if max_size_changed_val:
+            try:
+                max_size = metadata_changes["max_size"]
+                if max_size > 0:
+                    num_tiles = max(1, round(max_size / 1000))
+                    overlap = max(0, round(max_size / (4 * num_tiles)))
+
+                    self.num_tiles_input.blockSignals(True)
+                    self.num_tiles_input.setText(str(num_tiles))
+                    self.num_tiles_input.blockSignals(False)
+
+                    self.overlap_input.blockSignals(True)
+                    self.overlap_input.setText(str(overlap))
+                    self.overlap_input.blockSignals(False)
+
+                    metadata_changes["num_tiles"] = num_tiles
+                    metadata_changes["overlap"] = overlap
+            except ValueError:
+                pass
+        elif num_tiles_changed_val:
+            try:
+                num_tiles = metadata_changes["num_tiles"]
+                if num_tiles > 0:
+                    overlaps = []
+                    for file_item in self.vm.selected_files:
+                        max_size = file_item.metadata.max_size
+                        if max_size > 0:
+                            overlap = max(0, round(max_size / (4 * num_tiles)))
+                            file_item.metadata.overlap = overlap
+                            overlaps.append(overlap)
+
+                    if overlaps:
+                        unique_overlaps = set(overlaps)
+                        self.overlap_input.blockSignals(True)
+                        if len(unique_overlaps) == 1:
+                            self.overlap_input.setText(str(unique_overlaps.pop()))
+                        else:
+                            self.overlap_input.setText("...")
+                        self.overlap_input.blockSignals(False)
+
+                    metadata_changes.pop("overlap", None)
+            except ValueError:
+                pass
 
         max_size_changed = "max_size" in metadata_changes
         for file_item in self.vm.selected_files:
@@ -602,87 +726,105 @@ class DecodingWorkflowPanel(QWidget):
 
     def update_metadata(self, metadata_list: list[FileItem]):
         """Display metadata from selected items."""
+        widgets = [
+            self.prefix_input,
+            self.axes_input,
+            self.unit_input,
+            self.size_x_input,
+            self.size_y_input,
+            self.channel_input,
+            self.max_size_input,
+            self.num_tiles_input,
+            self.overlap_input,
+            self.threshold_slider,
+            self.prefix_checkbox,
+        ]
+        for w in widgets:
+            w.blockSignals(True)
+        try:
+            print(f"Setting metadata for {len(metadata_list)} items")
+            is_disabled = len(metadata_list) == 0
 
-        print(f"Setting metadata for {len(metadata_list)} items")
-        is_disabled = len(metadata_list) == 0
+            self._set_widget_states(not is_disabled)
 
-        self._set_widget_states(not is_disabled)
+            if is_disabled:
+                self.prefix_input.setText("")
+                self.axes_input.setText("")
+                self.unit_input.setText("")
+                self.size_x_input.setText("")
+                self.size_y_input.setText("")
+                self.channel_input.setText("")
+                self.max_size_input.setText("")
+                self.num_tiles_input.setText("")
+                self.overlap_input.setText("")
+                self.threshold_slider.setValue(70)
+                self.threshold_value_label.setText("0.70")
+                self.prefix_checkbox.setChecked(False)
+                return
 
-        if is_disabled:
-            self.prefix_input.setText("")
-            self.axes_input.setText("")
-            self.unit_input.setText("")
-            self.size_x_input.setText("")
-            self.size_y_input.setText("")
-            self.channel_input.setText("")
-            self.max_size_input.setText("")
-            self.num_tiles_input.setText("")
-            self.overlap_input.setText("")
-            self.threshold_slider.setValue(70)
-            self.threshold_value_label.setText("0.70")
-            self.prefix_checkbox.setChecked(False)
-            return
-
-        def set_field(widget, attribute_name, is_float=False):
-            all_values = [
-                getattr(item.metadata, attribute_name) for item in metadata_list
-            ]
-            if is_float:
-                # For floats, round to a certain precision before comparing
-                try:
-                    rounded_values = {round(float(val), 6) for val in all_values}
-                    if len(rounded_values) == 1:
-                        widget.setText(str(all_values[0]))  # show original value
+            def set_field(widget, attribute_name, is_float=False):
+                all_values = [
+                    getattr(item.metadata, attribute_name) for item in metadata_list
+                ]
+                if is_float:
+                    # For floats, round to a certain precision before comparing
+                    try:
+                        rounded_values = {round(float(val), 6) for val in all_values}
+                        if len(rounded_values) == 1:
+                            widget.setText(str(all_values[0]))  # show original value
+                        else:
+                            widget.setText("...")
+                    except (ValueError, TypeError):
+                        widget.setText("...")  # In case of non-float values
+                else:
+                    unique_values = set(all_values)
+                    if len(unique_values) == 1:
+                        widget.setText(str(unique_values.pop()))
                     else:
                         widget.setText("...")
+
+            set_field(self.prefix_input, "prefix")
+            set_field(self.axes_input, "axes")
+            set_field(self.unit_input, "unit")
+            set_field(self.size_x_input, "PhysicalSizeX", is_float=True)
+            set_field(self.size_y_input, "PhysicalSizeY", is_float=True)
+            set_field(self.channel_input, "reference_channel")
+            set_field(self.max_size_input, "max_size")
+            set_field(self.num_tiles_input, "num_tiles")
+            set_field(self.overlap_input, "overlap")
+
+            if metadata_list:
+                all_values = [item.threshold for item in metadata_list]
+                try:
+                    rounded_values = {round(float(val), 2) for val in all_values}
+                    if len(rounded_values) == 1:
+                        threshold = all_values[0]
+                        slider_value = int(threshold * 100)
+                        self.threshold_slider.setValue(slider_value)
+                        self.threshold_value_label.setText(f"{threshold:.2f}")
+                    else:
+                        self.threshold_slider.setValue(70)
+                        self.threshold_value_label.setText("...")
                 except (ValueError, TypeError):
-                    widget.setText("...")  # In case of non-float values
-            else:
-                unique_values = set(all_values)
-                if len(unique_values) == 1:
-                    widget.setText(str(unique_values.pop()))
-                else:
-                    widget.setText("...")
-
-        set_field(self.prefix_input, "prefix")
-        set_field(self.axes_input, "axes")
-        set_field(self.unit_input, "unit")
-        set_field(self.size_x_input, "PhysicalSizeX", is_float=True)
-        set_field(self.size_y_input, "PhysicalSizeY", is_float=True)
-        set_field(self.channel_input, "reference_channel")
-        set_field(self.max_size_input, "max_size")
-        set_field(self.num_tiles_input, "num_tiles")
-        set_field(self.overlap_input, "overlap")
-
-        if metadata_list:
-            all_values = [item.threshold for item in metadata_list]
-            try:
-                rounded_values = {round(float(val), 2) for val in all_values}
-                if len(rounded_values) == 1:
-                    threshold = all_values[0]
-                    slider_value = int(threshold * 100)
-                    self.threshold_slider.setValue(slider_value)
-                    self.threshold_value_label.setText(f"{threshold:.2f}")
-                else:
                     self.threshold_slider.setValue(70)
                     self.threshold_value_label.setText("...")
-            except (ValueError, TypeError):
-                self.threshold_slider.setValue(70)
-                self.threshold_value_label.setText("...")
 
-        # Handle checkbox state - use the persisted flag from metadata
-        if metadata_list:
-            use_status_values = {
-                item.metadata.use_status_as_prefix for item in metadata_list
-            }
-            if len(use_status_values) == 1:
-                self.prefix_checkbox.setChecked(use_status_values.pop())
+            # Handle checkbox state - use the persisted flag from metadata
+            if metadata_list:
+                use_status_values = {
+                    item.metadata.use_status_as_prefix for item in metadata_list
+                }
+                if len(use_status_values) == 1:
+                    self.prefix_checkbox.setChecked(use_status_values.pop())
+                else:
+                    self.prefix_checkbox.setChecked(False)
             else:
                 self.prefix_checkbox.setChecked(False)
-        else:
-            self.prefix_checkbox.setChecked(False)
 
-        self.on_prefix_checkbox_changed(self.prefix_checkbox.checkState())
+            self.on_prefix_checkbox_changed(self.prefix_checkbox.checkState())
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
 
     def get_metadata_changes(self):
         metadata_changes = {}
@@ -794,8 +936,13 @@ class DecodingWorkflowPanel(QWidget):
 
     def set_processing_visible(self, is_visible: bool):
         self._processing_visible = bool(is_visible)
+        if is_visible:
+            self.assign_cycles_btn.setText("Re-assign Cycles")
         for section_name in self._section_widgets.keys():
             self._update_section_visibility(section_name)
+
+    def reset_cycle_assignment_button(self):
+        self.assign_cycles_btn.setText("Assign Cycles")
 
     def _on_ensemble_slider_changed(self, value: int):
         if self._ensemble_sweep_stats.empty:

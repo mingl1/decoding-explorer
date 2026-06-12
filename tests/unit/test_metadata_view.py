@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+
 class TestMetadataView:
     """Unit tests for the MetadataView."""
 
@@ -106,14 +107,16 @@ class TestMetadataView:
         item.dtype = "uint16"
         vm.selected_files = [item]
 
-        with patch.object(vm, 'file_shape_update_sig') as mock_sig:
+        with patch.object(vm, "file_shape_update_sig") as mock_sig:
             view.max_size_input.setText("256")
 
             assert item.metadata.max_size == 256
             assert item.shape == (1, 256, 256)
             mock_sig.emit.assert_called_once_with([item])
 
-    def test_max_size_larger_than_original_uses_original(self, qapp, tmp_tiff_path, mocker):
+    def test_max_size_larger_than_original_uses_original(
+        self, qapp, tmp_tiff_path, mocker
+    ):
         """When max_size is larger than original, should use original dimensions."""
         from model.file_item import FileItem
         from model.status_enum import FileStatus
@@ -130,7 +133,7 @@ class TestMetadataView:
         item.dtype = "uint16"
         vm.selected_files = [item]
 
-        with patch.object(vm, 'file_shape_update_sig') as mock_sig:
+        with patch.object(vm, "file_shape_update_sig") as mock_sig:
             view.max_size_input.setText("10000")
 
             assert item.metadata.max_size == 512
@@ -283,9 +286,10 @@ class TestMetadataView:
         assert view.total_beads_label.isVisible()
 
     def test_set_ensemble_sweep_stats_updates_preview_labels(self, qapp):
+        import pandas as pd
+
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
-        import pandas as pd
 
         vm = MetadataVM()
         view = DecodingWorkflowPanel(None, vm=vm)
@@ -293,8 +297,18 @@ class TestMetadataView:
 
         stats_df = pd.DataFrame(
             [
-                {"ratio": 1.0, "valid_pct": 25.0, "invalid_pct": 10.0, "filtered_pct": 65.0},
-                {"ratio": 1.05, "valid_pct": 30.0, "invalid_pct": 8.0, "filtered_pct": 62.0},
+                {
+                    "ratio": 1.0,
+                    "valid_pct": 25.0,
+                    "invalid_pct": 10.0,
+                    "filtered_pct": 65.0,
+                },
+                {
+                    "ratio": 1.05,
+                    "valid_pct": 30.0,
+                    "invalid_pct": 8.0,
+                    "filtered_pct": 62.0,
+                },
             ]
         )
         view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=1.0)
@@ -316,15 +330,23 @@ class TestMetadataView:
         assert view.statistics_tabs.tabText(0) == "Summary"
 
     def test_lower_invalid_button_emits_signal(self, qapp):
+        import pandas as pd
+
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
-        import pandas as pd
 
         vm = MetadataVM()
         view = DecodingWorkflowPanel(None, vm=vm)
         view.set_ensemble_sweep_stats(
             pd.DataFrame(
-                [{"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0}]
+                [
+                    {
+                        "ratio": 1.0,
+                        "valid_pct": 10.0,
+                        "invalid_pct": 20.0,
+                        "filtered_pct": 70.0,
+                    }
+                ]
             )
         )
 
@@ -335,15 +357,23 @@ class TestMetadataView:
         assert emitted == [True]
 
     def test_lower_filter_button_emits_signal(self, qapp):
+        import pandas as pd
+
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
-        import pandas as pd
 
         vm = MetadataVM()
         view = DecodingWorkflowPanel(None, vm=vm)
         view.set_ensemble_sweep_stats(
             pd.DataFrame(
-                [{"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0}]
+                [
+                    {
+                        "ratio": 1.0,
+                        "valid_pct": 10.0,
+                        "invalid_pct": 20.0,
+                        "filtered_pct": 70.0,
+                    }
+                ]
             )
         )
 
@@ -397,7 +427,9 @@ class TestMetadataView:
         assert not view.use_stardist_bead_centers_checkbox.isEnabled()
         assert view.area_multiplier_input.isEnabled()
 
-    def test_get_stardist_settings_includes_bead_centers_and_area_multiplier(self, qapp):
+    def test_get_stardist_settings_includes_bead_centers_and_area_multiplier(
+        self, qapp
+    ):
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
 
@@ -426,9 +458,10 @@ class TestMetadataView:
         assert settings["area_multiplier"] == 1.8
 
     def test_remove_ensemble_button_emits_signal(self, qapp):
+        import pandas as pd
+
         from view.decoding_workflow_panel import DecodingWorkflowPanel
         from viewmodel.metadata_vm import MetadataVM
-        import pandas as pd
 
         vm = MetadataVM()
         view = DecodingWorkflowPanel(None, vm=vm)
@@ -436,8 +469,18 @@ class TestMetadataView:
 
         stats_df = pd.DataFrame(
             [
-                {"ratio": 1.0, "valid_pct": 25.0, "invalid_pct": 10.0, "filtered_pct": 65.0},
-                {"ratio": 1.05, "valid_pct": 30.0, "invalid_pct": 8.0, "filtered_pct": 62.0},
+                {
+                    "ratio": 1.0,
+                    "valid_pct": 25.0,
+                    "invalid_pct": 10.0,
+                    "filtered_pct": 65.0,
+                },
+                {
+                    "ratio": 1.05,
+                    "valid_pct": 30.0,
+                    "invalid_pct": 8.0,
+                    "filtered_pct": 62.0,
+                },
             ]
         )
         view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=1.0)
@@ -447,3 +490,53 @@ class TestMetadataView:
         view.remove_ensemble_btn.click()
 
         assert emitted == [True]
+
+    def test_max_size_change_auto_updates_num_tiles_and_overlap(
+        self, qapp, tmp_tiff_path
+    ):
+        from model.file_item import FileItem
+        from model.status_enum import FileStatus
+        from view.decoding_workflow_panel import DecodingWorkflowPanel
+        from viewmodel.metadata_vm import MetadataVM
+
+        vm = MetadataVM()
+        view = DecodingWorkflowPanel(None, vm=vm)
+
+        file_path = tmp_tiff_path()
+        item = FileItem(path=file_path, status=FileStatus.RAW)
+        item.shape = (1, 10000, 10000)
+        item.original_shape = (1, 10000, 10000)
+        item.dtype = "uint16"
+        vm.selected_files = [item]
+
+        view.max_size_input.setText("5000")
+
+        assert item.metadata.num_tiles == 5
+        assert item.metadata.overlap == 250
+        assert view.num_tiles_input.text() == "5"
+        assert view.overlap_input.text() == "250"
+
+    def test_num_tiles_manual_change_calculates_overlap(self, qapp, tmp_tiff_path):
+        from model.file_item import FileItem
+        from model.status_enum import FileStatus
+        from view.decoding_workflow_panel import DecodingWorkflowPanel
+        from viewmodel.metadata_vm import MetadataVM
+
+        vm = MetadataVM()
+        view = DecodingWorkflowPanel(None, vm=vm)
+
+        file_path = tmp_tiff_path()
+        item = FileItem(path=file_path, status=FileStatus.RAW)
+        item.shape = (1, 5000, 5000)
+        item.original_shape = (1, 5000, 5000)
+        item.dtype = "uint16"
+        vm.selected_files = [item]
+
+        view.max_size_input.setText("2000")
+        assert item.metadata.num_tiles == 2
+        assert item.metadata.overlap == 250
+
+        view.num_tiles_input.setText("5")
+        assert item.metadata.num_tiles == 5
+        assert item.metadata.overlap == 100
+        assert view.overlap_input.text() == "100"

@@ -8,6 +8,7 @@ class FileStatus(Enum):
     MANUALLY_ALIGNED = "Manually Aligned"
     AUTO_ALIGNED = "Auto Aligned"
     BEADS_GENERATED = "Generated"
+    CROPPED = "Cropped"
 
     def __str__(self):
         return f"{self.name}: {self.value}"
@@ -21,4 +22,5 @@ class FileStatus(Enum):
             FileStatus.MANUALLY_ALIGNED: "#FF8C00",
             FileStatus.AUTO_ALIGNED: "#FF8C00",
             FileStatus.BEADS_GENERATED: "#32CD32",
+            FileStatus.CROPPED: "#1E90FF",
         }[self]

@@ -185,7 +185,9 @@ def test_get_labels_from_cycles_with_prob_extracts_probabilities():
 
     assert len(out) == 1
     assert len(out[0]) == 2
-    assert np.allclose(out[0][0]["prob_lut"], np.array([0.0, 0.9, 0.6], dtype=np.float32))
+    assert np.allclose(
+        out[0][0]["prob_lut"], np.array([0.0, 0.9, 0.6], dtype=np.float32)
+    )
     assert np.allclose(out[0][1]["prob_lut"], np.array([0.0, 0.8], dtype=np.float32))
     assert progress_events[-1] == ("activation_regions", 2, 2)
 

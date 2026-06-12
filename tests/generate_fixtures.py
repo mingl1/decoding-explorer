@@ -7,7 +7,6 @@ that can be used for testing the Decoding Explorer application.
 """
 
 import argparse
-import os
 from pathlib import Path
 
 import numpy as np
@@ -52,7 +51,9 @@ def generate_tiff(
         arr = np.zeros(shape, dtype=dtype)
         for c in range(shape[0]):
             channel_pattern = pattern * (1 + 0.3 * np.sin(c * np.pi / shape[0]))
-            noise = np.random.randint(-100, 100, (h, w), dtype=dtype) if add_noise else 0
+            noise = (
+                np.random.randint(-100, 100, (h, w), dtype=dtype) if add_noise else 0
+            )
             arr[c] = np.clip(channel_pattern + noise, 0, 65535)
     else:
         # Simple random image
@@ -60,11 +61,11 @@ def generate_tiff(
 
     # Save the TIFF with metadata
     metadata = {
-        'axes': 'CYX',
-        'PhysicalSizeX': 0.1,
-        'PhysicalSizeY': 0.1,
-        'PhysicalSizeXUnit': 'um',
-        'PhysicalSizeYUnit': 'um',
+        "axes": "CYX",
+        "PhysicalSizeX": 0.1,
+        "PhysicalSizeY": 0.1,
+        "PhysicalSizeXUnit": "um",
+        "PhysicalSizeYUnit": "um",
     }
 
     tifffile.imwrite(output_path, arr, metadata=metadata)
@@ -130,7 +131,7 @@ def generate_test_suite(
     tifffile.imwrite(
         str(output_path / "aligned_sample_00.tif"),
         arr,
-        metadata={'axes': 'CYX'},
+        metadata={"axes": "CYX"},
     )
 
     print(f"\nTest suite generated in: {output_dir}")
@@ -161,10 +162,10 @@ def generate_bead_test_data(
     y = np.random.randint(50, image_size - 50, num_beads)
 
     # Generate intensity values for each cycle
-    cycles = ['cy0', 'cy1', 'cy2', 'cy3']
+    cycles = ["cy0", "cy1", "cy2", "cy3"]
     data = {
-        'x': x,
-        'y': y,
+        "x": x,
+        "y": y,
     }
     for cy in cycles:
         data[cy] = np.random.randint(100, 65535, num_beads)
@@ -184,26 +185,19 @@ def main():
         description="Generate sample TIFF files for testing"
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         default="tests/fixtures/tiffs",
-        help="Output directory for generated files"
+        help="Output directory for generated files",
     )
     parser.add_argument(
-        "--num-files", "-n",
-        type=int,
-        default=5,
-        help="Number of files to generate"
+        "--num-files", "-n", type=int, default=5, help="Number of files to generate"
     )
     parser.add_argument(
-        "--seed", "-s",
-        type=int,
-        default=42,
-        help="Random seed for reproducibility"
+        "--seed", "-s", type=int, default=42, help="Random seed for reproducibility"
     )
     parser.add_argument(
-        "--beads",
-        action="store_true",
-        help="Also generate bead test data"
+        "--beads", action="store_true", help="Also generate bead test data"
     )
 
     args = parser.parse_args()

@@ -1,24 +1,23 @@
-import os
-from unittest.mock import MagicMock
 
-import numpy as np
-import pytest
 from model.file_item import FileItem, MetaData
 from model.status_enum import FileStatus
-from PyQt6.QtWidgets import QTableWidgetItem
-from view.file_table_widget import FileTableWidget
 
 
 class TestMetadataTableDisplay:
     """Integration tests for metadata display in the FileTableWidget."""
 
-    def test_shape_column_header_is_simple_shape(self, mock_file_table_widget, mock_file_item):
+    def test_shape_column_header_is_simple_shape(
+        self, mock_file_table_widget, mock_file_item
+    ):
         """Shape column header should be 'Shape', not 'Shape (CYX)'."""
         widget = mock_file_table_widget
 
         widget.add_file_item(mock_file_item)
 
-        header_labels = [widget.horizontalHeaderItem(col).text() for col in range(widget.columnCount())]
+        header_labels = [
+            widget.horizontalHeaderItem(col).text()
+            for col in range(widget.columnCount())
+        ]
         assert "Shape" in header_labels
         assert "Shape (CYX)" not in header_labels
 
@@ -27,9 +26,7 @@ class TestMetadataTableDisplay:
         widget = mock_file_table_widget
 
         file_item = FileItem(
-            path="/test/image.tif",
-            status=FileStatus.RAW,
-            metadata=MetaData(axes="CYX")
+            path="/test/image.tif", status=FileStatus.RAW, metadata=MetaData(axes="CYX")
         )
         file_item.shape = (3, 10000, 10000)
         file_item.original_shape = (3, 10000, 10000)
@@ -45,9 +42,7 @@ class TestMetadataTableDisplay:
         widget = mock_file_table_widget
 
         file_item = FileItem(
-            path="/test/image.tif",
-            status=FileStatus.RAW,
-            metadata=MetaData(axes="YX")
+            path="/test/image.tif", status=FileStatus.RAW, metadata=MetaData(axes="YX")
         )
         file_item.shape = (2048, 2048)
         file_item.original_shape = (2048, 2048)
@@ -64,7 +59,10 @@ class TestMetadataTableDisplay:
 
         widget.add_file_item(mock_file_item)
 
-        header_labels = [widget.horizontalHeaderItem(col).text() for col in range(widget.columnCount())]
+        header_labels = [
+            widget.horizontalHeaderItem(col).text()
+            for col in range(widget.columnCount())
+        ]
         assert "PhysicalSizeX" in header_labels
         assert "PhysicalSizeY" in header_labels
         assert "AlignmentChannel" in header_labels
@@ -76,7 +74,7 @@ class TestMetadataTableDisplay:
         file_item = FileItem(
             path="/test/image.tif",
             status=FileStatus.RAW,
-            metadata=MetaData(PhysicalSizeX=0.5)
+            metadata=MetaData(PhysicalSizeX=0.5),
         )
         file_item.shape = (1, 512, 512)
         file_item.original_shape = (1, 512, 512)
@@ -100,7 +98,7 @@ class TestMetadataTableDisplay:
         file_item = FileItem(
             path="/test/image.tif",
             status=FileStatus.RAW,
-            metadata=MetaData(PhysicalSizeY=0.75)
+            metadata=MetaData(PhysicalSizeY=0.75),
         )
         file_item.shape = (1, 512, 512)
         file_item.original_shape = (1, 512, 512)
@@ -124,7 +122,7 @@ class TestMetadataTableDisplay:
         file_item = FileItem(
             path="/test/image.tif",
             status=FileStatus.RAW,
-            metadata=MetaData(reference_channel=2)
+            metadata=MetaData(reference_channel=2),
         )
         file_item.shape = (3, 512, 512)
         file_item.original_shape = (3, 512, 512)
@@ -153,11 +151,8 @@ class TestMetadataTableDisplay:
             path=mock_file_item.path,
             status=FileStatus.ALIGNED,
             metadata=MetaData(
-                axes="CYX",
-                PhysicalSizeX=0.5,
-                PhysicalSizeY=0.5,
-                reference_channel=1
-            )
+                axes="CYX", PhysicalSizeX=0.5, PhysicalSizeY=0.5, reference_channel=1
+            ),
         )
         updated_item.shape = (3, 1024, 1024)
         updated_item.original_shape = (3, 1024, 1024)

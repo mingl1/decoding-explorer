@@ -1,12 +1,10 @@
 import os
 from unittest.mock import MagicMock, patch
 
-import numpy as np
-import pytest
+from PyQt6.QtCore import Qt
+
 from model.file_item import FileItem
 from model.status_enum import FileStatus
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
 from view.file_table_widget import FileTableWidget
 
 
@@ -44,7 +42,7 @@ class TestFileTableWidget:
             path=mock_file_item.path,
             status=FileStatus.ALIGNED,
             shape=(1, 512, 512),
-            dtype="uint16"
+            dtype="uint16",
         )
 
         widget.update_file_display([updated_item])
@@ -102,8 +100,7 @@ class TestFileTableWidget:
         """Dropping files should trigger the callback."""
         callback_mock = mocker.Mock()
         widget = FileTableWidget(
-            file_dropped_callback=callback_mock,
-            vm=mock_file_manager_vm
+            file_dropped_callback=callback_mock, vm=mock_file_manager_vm
         )
 
         mock_mime = MagicMock()
@@ -172,7 +169,7 @@ class TestFileListWidgetContextMenu:
 
         widget.selectRow(0)
 
-        with patch.object(vm, 'delete_files'):
+        with patch.object(vm, "delete_files"):
             initial_count = widget.rowCount()
             widget.handle_delete_selected()
             assert widget.rowCount() == initial_count - 1
@@ -190,7 +187,7 @@ class TestFileListWidgetContextMenu:
 
         widget.selectRow(0)
 
-        with patch.object(vm, 'delete_files') as mock_delete:
+        with patch.object(vm, "delete_files") as mock_delete:
             widget.handle_delete_selected()
             mock_delete.assert_called_once()
 
@@ -222,7 +219,7 @@ class TestFileListWidgetShapeUpdate:
             path=mock_file_item.path,
             status=FileStatus.RAW,
             shape=(1, 256, 256),
-            dtype="uint16"
+            dtype="uint16",
         )
 
         widget.update_file_display([updated_item])
@@ -242,7 +239,7 @@ class TestFileListWidgetShapeUpdate:
             path=mock_file_item.path,
             status=FileStatus.RAW,
             shape=(5, 1024, 1024),
-            dtype="uint16"
+            dtype="uint16",
         )
 
         widget.update_file_display([updated_item])

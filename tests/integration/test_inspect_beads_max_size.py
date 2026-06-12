@@ -1,8 +1,8 @@
 """Integration test for inspect_beads respecting max_size metadata field."""
+
+
 import numpy as np
 import pandas as pd
-import pytest
-from unittest.mock import MagicMock, patch
 
 from model.file_item import FileItem
 from model.status_enum import FileStatus
@@ -16,7 +16,6 @@ class TestInspectBeadsMaxSize:
         self, qapp, mock_file_manager_vm, tmp_tiff_path
     ):
         """Verify that inspect_beads emits max_size in the signal."""
-        from PyQt6.QtCore import QCoreApplication
 
         file_path = tmp_tiff_path(shape=(1, 1024, 1024))
         file_item = FileItem(path=file_path, status=FileStatus.BEADS_GENERATED)
@@ -58,9 +57,7 @@ class TestInspectBeadsMaxSize:
             f"Expected max_size=512 in signal, but got {args[6] if len(args) > 6 else 'not present'}"
         )
 
-    def test_inspect_beads_respects_different_max_sizes(
-        self, qapp, tmp_tiff_path
-    ):
+    def test_inspect_beads_respects_different_max_sizes(self, qapp, tmp_tiff_path):
         """Verify that different max_size values are correctly passed through."""
 
         for max_size_val in [256, 512, 1024]:
@@ -94,10 +91,14 @@ class TestInspectBeadsMaxSize:
 
             mock_file_manager_vm.inspect_beads(file_item, protein_profile)
 
-            assert "args" in signal_args, f"Signal was not emitted for max_size={max_size_val}"
+            assert "args" in signal_args, (
+                f"Signal was not emitted for max_size={max_size_val}"
+            )
             args = signal_args["args"]
 
-            assert len(args) >= 7, f"Expected at least 7 signal arguments for max_size={max_size_val}"
+            assert len(args) >= 7, (
+                f"Expected at least 7 signal arguments for max_size={max_size_val}"
+            )
             assert args[6] == max_size_val, (
                 f"Expected max_size={max_size_val} in signal, got {args[6] if len(args) > 6 else 'not present'}"
             )

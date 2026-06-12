@@ -19,8 +19,8 @@ import itertools
 import json as json_mod
 import os
 import time
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -66,11 +66,21 @@ def _parse_margin_ratios(s: str) -> list[float]:
 # ---------------------------------------------------------------------------
 # Optimization cache
 # ---------------------------------------------------------------------------
-_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".benchmark_cache")
+_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".benchmark_cache"
+)
 
 
-def _cache_key(method: str, cycle1_path: str, cycle2_path: str, flors_layers: list, opt_crop_size: int) -> str:
-    raw = json_mod.dumps((method, cycle1_path, cycle2_path, flors_layers, opt_crop_size), sort_keys=True)
+def _cache_key(
+    method: str,
+    cycle1_path: str,
+    cycle2_path: str,
+    flors_layers: list,
+    opt_crop_size: int,
+) -> str:
+    raw = json_mod.dumps(
+        (method, cycle1_path, cycle2_path, flors_layers, opt_crop_size), sort_keys=True
+    )
     h = hashlib.md5(raw.encode()).hexdigest()[:12]
     return os.path.join(_CACHE_DIR, f"{method}_{h}.json")
 
@@ -184,15 +194,21 @@ def find_beads_stardist(bf_image: np.ndarray) -> pd.DataFrame:
     print(f"  Running StarDist segmentation (block_size={block_size})...")
     img_norm = normalize(img, 1, 75)
     labels_img, _ = model.predict_instances_big(
-        img_norm, axes="YX", block_size=block_size,
-        min_overlap=24, show_progress=True, n_tiles=(1, 1),
+        img_norm,
+        axes="YX",
+        block_size=block_size,
+        min_overlap=24,
+        show_progress=True,
+        n_tiles=(1, 1),
     )
     num_labels = int(labels_img.max())
     if num_labels == 0:
         return pd.DataFrame(columns=["x", "y"])
 
     centroids = ndi.center_of_mass(labels_img, labels_img, range(1, num_labels + 1))
-    centers = np.array([(c[1] / scale, c[0] / scale) for c in centroids if not np.isnan(c[0])])
+    centers = np.array(
+        [(c[1] / scale, c[0] / scale) for c in centroids if not np.isnan(c[0])]
+    )
     arr = np.rint(centers).astype(np.uint16)
     return pd.DataFrame(arr, columns=["x", "y"])
 
@@ -245,7 +261,9 @@ def _preprocess_equalize_median(img: np.ndarray) -> np.ndarray:
     # For uint16: normalize to full uint16 range, equalize via LUT
     lo, hi = img_u16.min(), img_u16.max()
     if hi > lo:
-        scaled = ((img_u16.astype(np.float32) - lo) / (hi - lo) * 65535).astype(np.uint16)
+        scaled = ((img_u16.astype(np.float32) - lo) / (hi - lo) * 65535).astype(
+            np.uint16
+        )
     else:
         scaled = img_u16
     # Build 16-bit histogram equalization
@@ -500,7 +518,9 @@ def grid_search_watershed(
         # Evaluate full pipeline (pre-merge stats to avoid double-counting)
         df = assign_labels_to_beads(bead_df, cycle_labels)
         num_layers = len(metadata_list[0].flors_layers)
-        df = enforce_single_layer(df, num_cycles, num_layers, min_prob=min_prob, min_prob_ratio=min_prob_ratio)
+        df = enforce_single_layer(
+            df, num_cycles, num_layers, min_prob=min_prob, min_prob_ratio=min_prob_ratio
+        )
         df = resolve_to_cycles(df, num_cycles, num_layers)
         stats = compute_stats(df, protein_df, num_cycles)
         score = stats["invalid_pct"]
@@ -694,10 +714,18 @@ def labels_watershed_optimized(
     else:
         print("\n[watershed_optimized] Grid searching...")
         # Filter beads to opt region for grid search evaluation
-        opt_bead_df = bead_df[(bead_df["x"] < opt_crop_size) & (bead_df["y"] < opt_crop_size)].copy()
+        opt_bead_df = bead_df[
+            (bead_df["x"] < opt_crop_size) & (bead_df["y"] < opt_crop_size)
+        ].copy()
         best_params = grid_search_watershed(
-            cycles, metadata_list, opt_bead_df, opt_crop_size, protein_df, tracer=tracer,
-            min_prob=min_prob, min_prob_ratio=min_prob_ratio,
+            cycles,
+            metadata_list,
+            opt_bead_df,
+            opt_crop_size,
+            protein_df,
+            tracer=tracer,
+            min_prob=min_prob,
+            min_prob_ratio=min_prob_ratio,
         )
         if cache_path:
             _save_cache(cache_path, best_params)
@@ -765,6 +793,7 @@ def labels_stardist_raw(
     tracer=None,
 ) -> list[list[dict]]:
     """Method 6: No preprocessing — only CSBDeep normalize (applied by runner)."""
+
     def _identity(img):
         return img.astype(np.float32)
 
@@ -916,8 +945,7 @@ def grid_search_equalize_median(
         }
 
     combos = [
-        dict(zip(param_grid.keys(), v))
-        for v in itertools.product(*param_grid.values())
+        dict(zip(param_grid.keys(), v)) for v in itertools.product(*param_grid.values())
     ]
 
     if tracer:
@@ -928,10 +956,14 @@ def grid_search_equalize_median(
     num_cycles = len(cycles)
 
     for params in tqdm(combos, desc="Equalize+median grid search"):
-        cycle_labels = _run_equalize_median_all(cycles, metadata_list, crop_size, params)
+        cycle_labels = _run_equalize_median_all(
+            cycles, metadata_list, crop_size, params
+        )
         df = assign_labels_to_beads(bead_df, cycle_labels)
         num_layers = len(metadata_list[0].flors_layers)
-        df = enforce_single_layer(df, num_cycles, num_layers, min_prob=min_prob, min_prob_ratio=min_prob_ratio)
+        df = enforce_single_layer(
+            df, num_cycles, num_layers, min_prob=min_prob, min_prob_ratio=min_prob_ratio
+        )
         df = resolve_to_cycles(df, num_cycles, num_layers)
         stats = compute_stats(df, protein_df, num_cycles)
         score = stats["invalid_pct"]
@@ -966,17 +998,34 @@ def labels_equalize_median(
     if cached is not None:
         best_params = cached
         if tracer:
-            tracer.record_pipeline_stage("params_source", {"source": "cache", "path": cache_path, **best_params})
+            tracer.record_pipeline_stage(
+                "params_source", {"source": "cache", "path": cache_path, **best_params}
+            )
     else:
-        opt_bead_df = bead_df[(bead_df["x"] < opt_crop_size) & (bead_df["y"] < opt_crop_size)].copy()
+        opt_bead_df = bead_df[
+            (bead_df["x"] < opt_crop_size) & (bead_df["y"] < opt_crop_size)
+        ].copy()
         best_params = grid_search_equalize_median(
-            cycles, metadata_list, opt_bead_df, opt_crop_size, protein_df, tracer=tracer,
-            min_prob=min_prob, min_prob_ratio=min_prob_ratio,
+            cycles,
+            metadata_list,
+            opt_bead_df,
+            opt_crop_size,
+            protein_df,
+            tracer=tracer,
+            min_prob=min_prob,
+            min_prob_ratio=min_prob_ratio,
         )
         if cache_path:
             _save_cache(cache_path, best_params)
         if tracer:
-            tracer.record_pipeline_stage("params_source", {"source": "grid_search", "opt_crop_size": opt_crop_size, **best_params})
+            tracer.record_pipeline_stage(
+                "params_source",
+                {
+                    "source": "grid_search",
+                    "opt_crop_size": opt_crop_size,
+                    **best_params,
+                },
+            )
     return _run_equalize_median_all(
         cycles, metadata_list, crop_size, best_params, tracer=tracer
     )
@@ -1104,7 +1153,9 @@ def enforce_single_layer(
                 ratio_ok = np.ones(len(df), dtype=bool)
                 amb_mask = valid_counts > 1
                 safe_second = np.where(second_prob > 0, second_prob, 1e-8)
-                ratio_ok[amb_mask] = (best_prob[amb_mask] / safe_second[amb_mask]) >= min_prob_ratio
+                ratio_ok[amb_mask] = (
+                    best_prob[amb_mask] / safe_second[amb_mask]
+                ) >= min_prob_ratio
                 # Invalidate ALL layers for ambiguous beads that fail ratio check
                 ratio_fail = amb_mask & ~ratio_ok
                 if ratio_fail.any():
@@ -1186,7 +1237,9 @@ def label_with_proteins(
 
 
 def compute_stats(
-    bead_df: pd.DataFrame, protein_df: pd.DataFrame, num_cycles: int,
+    bead_df: pd.DataFrame,
+    protein_df: pd.DataFrame,
+    num_cycles: int,
 ) -> dict:
     """Compute Valid/Invalid/Filtered counts from pre-merge bead df.
 
@@ -1196,8 +1249,15 @@ def compute_stats(
     cycle_cols = [f"cy{i}" for i in range(num_cycles)]
     total = len(bead_df)
     if total == 0:
-        return {"valid_pct": 0, "invalid_pct": 0, "filtered_pct": 0,
-                "n_valid": 0, "n_invalid": 0, "n_filtered": 0, "total": 0}
+        return {
+            "valid_pct": 0,
+            "invalid_pct": 0,
+            "filtered_pct": 0,
+            "n_valid": 0,
+            "n_invalid": 0,
+            "n_filtered": 0,
+            "total": 0,
+        }
 
     # Filtered: any cycle == 255
     filtered_mask = (bead_df[cycle_cols] >= 254).any(axis=1)
@@ -1207,9 +1267,13 @@ def compute_stats(
     protein_combos = protein_df[cycle_cols].drop_duplicates()
     num_proteins = len(protein_combos)
     not_filtered = bead_df.loc[~filtered_mask, cycle_cols].astype(int)
-    valid_mask_nf = not_filtered.merge(
-        protein_combos.assign(_match=1), on=cycle_cols, how="left"
-    )["_match"].fillna(0).astype(bool)
+    valid_mask_nf = (
+        not_filtered.merge(protein_combos.assign(_match=1), on=cycle_cols, how="left")[
+            "_match"
+        ]
+        .fillna(0)
+        .astype(bool)
+    )
     n_valid = int(valid_mask_nf.sum())
     n_invalid = total - n_filtered - n_valid
 
@@ -1237,7 +1301,9 @@ def print_stats(stats: dict) -> None:
     n_filtered = stats["n_filtered"]
     num_proteins = stats["num_proteins"]
     print(f"  Valid:    {stats['valid_pct']:.1f}%  ({n_valid}/{total})")
-    print(f"  Invalid:  {stats['invalid_pct']:.1f}%  ({n_invalid} / ({n_valid}/{num_proteins}))")
+    print(
+        f"  Invalid:  {stats['invalid_pct']:.1f}%  ({n_invalid} / ({n_valid}/{num_proteins}))"
+    )
     print(f"  Filtered: {stats['filtered_pct']:.1f}%  ({n_filtered}/{total})")
 
 
@@ -1302,7 +1368,9 @@ def benchmark(
                 n_detected = int(layer["lbl"].max())
                 col = f"cy{i}_{j}"
                 assigned_ids = df[col].to_numpy()
-                n_assigned = len(np.unique(assigned_ids[(assigned_ids > 0) & (assigned_ids != 255)]))
+                n_assigned = len(
+                    np.unique(assigned_ids[(assigned_ids > 0) & (assigned_ids != 255)])
+                )
                 layer_coverage[col] = {
                     "detected": n_detected,
                     "assigned_to_bead": n_assigned,
@@ -1330,12 +1398,16 @@ def benchmark(
                 if len(amb_valid):
                     cycle_diag["ambiguous_prob_min"] = round(float(amb_valid.min()), 4)
                     cycle_diag["ambiguous_prob_max"] = round(float(amb_valid.max()), 4)
-                    cycle_diag["ambiguous_prob_median"] = round(float(np.median(amb_valid)), 4)
+                    cycle_diag["ambiguous_prob_median"] = round(
+                        float(np.median(amb_valid)), 4
+                    )
             diag[f"cy{i}"] = cycle_diag
         tracer.record_pipeline_stage("pre_enforce_diagnostics", diag)
 
     if enforce_single_layer_on:
-        df = enforce_single_layer(df, num_cycles, num_layers, min_prob=min_prob, min_prob_ratio=min_prob_ratio)
+        df = enforce_single_layer(
+            df, num_cycles, num_layers, min_prob=min_prob, min_prob_ratio=min_prob_ratio
+        )
         if tracer:
             tracer.record_pipeline_stage("enforce_single_layer", {"rows": len(df)})
     else:
@@ -1389,8 +1461,12 @@ def benchmark(
 
 
 def _build_voronoi_resolved_df(
-    bead_df, assigned_layers, assigned_values, threshold,
-    assigned_margins=None, min_margin_ratio=1.0,
+    bead_df,
+    assigned_layers,
+    assigned_values,
+    threshold,
+    assigned_margins=None,
+    min_margin_ratio=1.0,
 ):
     """Build a resolved bead_df filtering beads below threshold and margin."""
     N = len(bead_df)
@@ -1438,12 +1514,15 @@ def benchmark_voronoi_median(
     run_tracer = tracer
     if run_tracer is None:
         from benchmark_tracer import BenchmarkTracer
+
         run_tracer = BenchmarkTracer()
         run_tracer.begin_method(name)
 
     resolved_df, assigned_layers, assigned_values, assigned_margins = (
         run_tracer.record_voronoi_median_analysis(
-            bead_df, cycles, metadata_list,
+            bead_df,
+            cycles,
+            metadata_list,
             shape=(crop_size, crop_size),
             min_assigned_value=min_assigned_value,
             border_erosion=border_erosion,
@@ -1464,16 +1543,25 @@ def benchmark_voronoi_median(
 
     display_ratios = sweep_ratios if auto_select else [1.0, 1.2, 1.5, 2.0, 3.0, 5.0]
 
-    print(f"\n  Margin ratio sweep (min_assigned_value={min_assigned_value}"
-          + (" — auto-selecting best" if auto_select else "") + "):")
-    print(f"  {'Ratio':>6}  {'Filt%':>7}  {'Valid%':>7}  {'Invld%':>7}  {'Score':>7}  {'Kept':>6}")
-    print(f"  {'-'*52}")
+    print(
+        f"\n  Margin ratio sweep (min_assigned_value={min_assigned_value}"
+        + (" — auto-selecting best" if auto_select else "")
+        + "):"
+    )
+    print(
+        f"  {'Ratio':>6}  {'Filt%':>7}  {'Valid%':>7}  {'Invld%':>7}  {'Score':>7}  {'Kept':>6}"
+    )
+    print(f"  {'-' * 52}")
 
     margin_sweep = {}
     for ratio in display_ratios:
         rdf = _build_voronoi_resolved_df(
-            bead_df, assigned_layers, assigned_values, min_assigned_value,
-            assigned_margins, ratio,
+            bead_df,
+            assigned_layers,
+            assigned_values,
+            min_assigned_value,
+            assigned_margins,
+            ratio,
         )
         s = compute_stats(rdf, protein_df, num_cycles)
         _inv = s["invalid_pct"]
@@ -1502,13 +1590,21 @@ def benchmark_voronoi_median(
         selected_margin_ratio = desc[0]  # fallback: most filtered
         for i in range(1, len(desc)):
             prev_r, curr_r = desc[i - 1], desc[i]
-            d_valid   = margin_sweep[f"r{curr_r}"]["valid_pct"]   - margin_sweep[f"r{prev_r}"]["valid_pct"]
-            d_invalid = margin_sweep[f"r{curr_r}"]["invalid_pct"] - margin_sweep[f"r{prev_r}"]["invalid_pct"]
+            d_valid = (
+                margin_sweep[f"r{curr_r}"]["valid_pct"]
+                - margin_sweep[f"r{prev_r}"]["valid_pct"]
+            )
+            d_invalid = (
+                margin_sweep[f"r{curr_r}"]["invalid_pct"]
+                - margin_sweep[f"r{prev_r}"]["invalid_pct"]
+            )
             if 0.9 * d_invalid > d_valid:
                 break  # this step costs more than it gains — keep prev
             selected_margin_ratio = curr_r  # gain still worth it, keep going
-        print(f"\n  Auto-selected min_margin_ratio={selected_margin_ratio} "
-              f"(next step: Δvalid={d_valid:.1f}% Δinvalid={d_invalid:.1f}%)")
+        print(
+            f"\n  Auto-selected min_margin_ratio={selected_margin_ratio} "
+            f"(next step: Δvalid={d_valid:.1f}% Δinvalid={d_invalid:.1f}%)"
+        )
     else:
         selected_margin_ratio = sweep_ratios[0]
 
@@ -1520,13 +1616,17 @@ def benchmark_voronoi_median(
     percentiles = [0, 5, 10, 25, 50, 75, 90]
     thresholds = {p: float(np.percentile(all_vals, p)) for p in percentiles}
 
-    print(f"\n  Threshold sweep (no margin filter):")
-    print(f"  {'Pctl':>5}  {'Thresh':>7}  {'Filt%':>7}  {'Valid%':>7}  {'Invld%':>7}  {'Kept':>6}")
-    print(f"  {'-'*47}")
+    print("\n  Threshold sweep (no margin filter):")
+    print(
+        f"  {'Pctl':>5}  {'Thresh':>7}  {'Filt%':>7}  {'Valid%':>7}  {'Invld%':>7}  {'Kept':>6}"
+    )
+    print(f"  {'-' * 47}")
 
     percentile_sweep = {}
     for p, thresh in thresholds.items():
-        rdf = _build_voronoi_resolved_df(bead_df, assigned_layers, assigned_values, thresh)
+        rdf = _build_voronoi_resolved_df(
+            bead_df, assigned_layers, assigned_values, thresh
+        )
         s = compute_stats(rdf, protein_df, num_cycles)
         percentile_sweep[f"p{p}"] = {
             "threshold": round(thresh, 4),
@@ -1548,10 +1648,16 @@ def benchmark_voronoi_median(
 
     # --- Primary stats (using selected ratio) ---
     resolved_df = _build_voronoi_resolved_df(
-        bead_df, assigned_layers, assigned_values, min_assigned_value,
-        assigned_margins, selected_margin_ratio,
+        bead_df,
+        assigned_layers,
+        assigned_values,
+        min_assigned_value,
+        assigned_margins,
+        selected_margin_ratio,
     )
-    print(f"\n  Using min_assigned_value={min_assigned_value}, min_margin_ratio={selected_margin_ratio}:")
+    print(
+        f"\n  Using min_assigned_value={min_assigned_value}, min_margin_ratio={selected_margin_ratio}:"
+    )
     stats = compute_stats(resolved_df, protein_df, num_cycles)
     print_stats(stats)
     stats["elapsed_s"] = elapsed
@@ -1566,10 +1672,14 @@ def benchmark_voronoi_median(
         if auto_select:
             sweep_path = os.path.join(output_folder, "margin_sweep.json")
             with open(sweep_path, "w") as _sf:
-                json_mod.dump({
-                    "selected_margin_ratio": selected_margin_ratio,
-                    "sweep": margin_sweep,
-                }, _sf, indent=2)
+                json_mod.dump(
+                    {
+                        "selected_margin_ratio": selected_margin_ratio,
+                        "sweep": margin_sweep,
+                    },
+                    _sf,
+                    indent=2,
+                )
             print(f"  Saved margin sweep → {sweep_path}")
 
     if tracer:
@@ -1607,8 +1717,10 @@ def main():
         "--protein-csvs", nargs="+", required=True, help="Protein profile CSV(s)"
     )
     parser.add_argument(
-        "--crop-size", type=int, default=None,
-        help="Crop size (default: min of image width and height)"
+        "--crop-size",
+        type=int,
+        default=None,
+        help="Crop size (default: min of image width and height)",
     )
     parser.add_argument(
         "--stardist-model", default=None, help="Path to StarDist model dir"
@@ -1687,7 +1799,7 @@ def main():
     if args.crop_size is None:
         args.crop_size = min(cy1.shape[-2], cy1.shape[-1])
         print(f"Auto crop-size: {args.crop_size} (min of image dims)")
-    cy1 = cy1[:, :args.crop_size, :args.crop_size]
+    cy1 = cy1[:, : args.crop_size, : args.crop_size]
     cy2 = load_tiff(args.cycle2, args.crop_size)
     cycles = [cy1, cy2]
 
@@ -1712,7 +1824,9 @@ def main():
         # Normalize column names to lowercase
         bead_df.columns = [c.lower() for c in bead_df.columns]
         if "x" not in bead_df.columns or "y" not in bead_df.columns:
-            raise ValueError(f"Bead CSV must have x,y columns. Found: {list(bead_df.columns)}")
+            raise ValueError(
+                f"Bead CSV must have x,y columns. Found: {list(bead_df.columns)}"
+            )
         bead_df = bead_df[["x", "y"]].astype(np.float32)
     else:
         bf = cy1[0, : args.crop_size, : args.crop_size]
@@ -1798,39 +1912,74 @@ def main():
 
     # Cache key helper
     flors_all = [metadata_list[i].flors_layers for i in range(len(metadata_list))]
+
     def _mk_cache(method):
         return (_cache_key(method, args.cycle1, args.cycle2, flors_all, opt_crop_size),)
 
     # Method registry
     method_fns = {
         "stardist_clahe": lambda: labels_stardist_clahe(
-            cycles, metadata_list, model, args.crop_size,
-            opt_crop_size=opt_crop_size, cache_paths=_mk_cache("stardist_clahe"), tracer=tracer,
+            cycles,
+            metadata_list,
+            model,
+            args.crop_size,
+            opt_crop_size=opt_crop_size,
+            cache_paths=_mk_cache("stardist_clahe"),
+            tracer=tracer,
         ),
         "stardist_denoise": lambda: labels_stardist_denoise(
-            cycles, metadata_list, model, args.crop_size,
-            opt_crop_size=opt_crop_size, cache_paths=_mk_cache("stardist_denoise"), tracer=tracer,
+            cycles,
+            metadata_list,
+            model,
+            args.crop_size,
+            opt_crop_size=opt_crop_size,
+            cache_paths=_mk_cache("stardist_denoise"),
+            tracer=tracer,
         ),
         "stardist_raw": lambda: labels_stardist_raw(
-            cycles, metadata_list, model, args.crop_size,
-            opt_crop_size=opt_crop_size, cache_paths=_mk_cache("stardist_raw"), tracer=tracer,
+            cycles,
+            metadata_list,
+            model,
+            args.crop_size,
+            opt_crop_size=opt_crop_size,
+            cache_paths=_mk_cache("stardist_raw"),
+            tracer=tracer,
         ),
         "watershed_optimized": lambda: labels_watershed_optimized(
-            cycles, metadata_list, args.crop_size, bead_df, protein_df,
-            opt_crop_size=opt_crop_size, cache_paths=_mk_cache("watershed_optimized"), tracer=tracer,
-            min_prob=args.min_prob, min_prob_ratio=args.min_prob_ratio,
+            cycles,
+            metadata_list,
+            args.crop_size,
+            bead_df,
+            protein_df,
+            opt_crop_size=opt_crop_size,
+            cache_paths=_mk_cache("watershed_optimized"),
+            tracer=tracer,
+            min_prob=args.min_prob,
+            min_prob_ratio=args.min_prob_ratio,
         ),
         "stardist_histmatch": lambda: labels_stardist_histmatch(
-            cycles, metadata_list, model, args.crop_size,
-            opt_crop_size=opt_crop_size, cache_paths=_mk_cache("stardist_histmatch"), tracer=tracer,
+            cycles,
+            metadata_list,
+            model,
+            args.crop_size,
+            opt_crop_size=opt_crop_size,
+            cache_paths=_mk_cache("stardist_histmatch"),
+            tracer=tracer,
         ),
         "threshold_connected": lambda: labels_threshold_connected(
             cycles, metadata_list, args.crop_size, tracer=tracer
         ),
         "equalize_median": lambda: labels_equalize_median(
-            cycles, metadata_list, args.crop_size, bead_df, protein_df,
-            opt_crop_size=opt_crop_size, cache_paths=_mk_cache("equalize_median"), tracer=tracer,
-            min_prob=args.min_prob, min_prob_ratio=args.min_prob_ratio,
+            cycles,
+            metadata_list,
+            args.crop_size,
+            bead_df,
+            protein_df,
+            opt_crop_size=opt_crop_size,
+            cache_paths=_mk_cache("equalize_median"),
+            tracer=tracer,
+            min_prob=args.min_prob,
+            min_prob_ratio=args.min_prob_ratio,
         ),
     }
 
@@ -1839,7 +1988,9 @@ def main():
     for method_name in methods:
         if method_name == "voronoi_median":
             cy1_stem = os.path.splitext(os.path.basename(args.cycle1))[0]
-            _vor_cache = os.path.join(_CACHE_DIR, f"voronoi_{cy1_stem}_{args.crop_size}.npy")
+            _vor_cache = os.path.join(
+                _CACHE_DIR, f"voronoi_{cy1_stem}_{args.crop_size}.npy"
+            )
             stats = benchmark_voronoi_median(
                 method_name,
                 bead_df,

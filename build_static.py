@@ -4,6 +4,7 @@ Run this locally to bundle data into data.json for static deployment.
 - latest:   read from KC_out_aggressive stats.json files
 Usage: python build_static.py
 """
+
 import glob
 import json
 
@@ -25,7 +26,12 @@ def parse_excel_previous(xlsx_path):
             continue
 
         # Header row: col2 is a float < 1 (filtered fraction), col1 is a large bead count
-        if isinstance(col2, float) and col2 < 1 and isinstance(col1, (int, float)) and col1 > 1000:
+        if (
+            isinstance(col2, float)
+            and col2 < 1
+            and isinstance(col1, (int, float))
+            and col1 > 1000
+        ):
             if current:
                 runs.append(current)
             filtered_pct = round(float(col2) * 100, 2)
@@ -33,9 +39,9 @@ def parse_excel_previous(xlsx_path):
             current = {
                 "name": str(col0),
                 "total_beads": int(col1),
-                "valid": None,          # raw count not in Excel
+                "valid": None,  # raw count not in Excel
                 "valid_pct": round(100 - filtered_pct, 1),
-                "invalid": None,        # raw count not in Excel
+                "invalid": None,  # raw count not in Excel
                 "invalid_pct": invalid_pct,
                 "filtered": None,
                 "filtered_pct": filtered_pct,

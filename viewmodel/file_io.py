@@ -35,19 +35,28 @@ def load_image(item: FileItem):
 
 def load_and_constrain_image(file_item: FileItem, max_size: int) -> np.ndarray:
     """Load image and apply max_size constraint."""
+    if file_item.working_image is not None and len(file_item.working_image.shape) == 3:
+        return np.array(file_item.working_image)[:, :max_size, :max_size]
+
     img = load_image(file_item)
     if len(img.shape) == 3:
         img = np.array(img)[:, :max_size, :max_size]
+        if (
+            file_item.working_image is not None
+            and len(file_item.working_image.shape) == 2
+        ):
+            img[int(file_item.metadata.reference_channel)] = file_item.working_image[
+                :max_size, :max_size
+            ]
+        return img
     else:
         img = np.array(img)[:max_size, :max_size]
-    if file_item.working_image is not None:
-        if len(file_item.working_image.shape) == 2:
-            img[int(file_item.metadata.reference_channel)] = np.expand_dims(
-                file_item.working_image, axis=0
-            )
-        elif len(file_item.working_image.shape) == 3:
-            img = np.array(file_item.working_image)
-    return img
+        if (
+            file_item.working_image is not None
+            and len(file_item.working_image.shape) == 2
+        ):
+            return file_item.working_image[:max_size, :max_size]
+        return img
 
 
 def status_from_filename(file_path: str) -> FileStatus:

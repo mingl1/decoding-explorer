@@ -41,9 +41,23 @@ class MetadataVM(QObject):
             sample = b""
 
         if sample.startswith((b"\xff\xfe", b"\xfe\xff")):
-            encodings = ["utf-16", "utf-16le", "utf-16be", "utf-8", "utf-8-sig", "latin1"]
+            encodings = [
+                "utf-16",
+                "utf-16le",
+                "utf-16be",
+                "utf-8",
+                "utf-8-sig",
+                "latin1",
+            ]
         elif b"\x00" in sample:
-            encodings = ["utf-16le", "utf-16be", "utf-16", "utf-8", "utf-8-sig", "latin1"]
+            encodings = [
+                "utf-16le",
+                "utf-16be",
+                "utf-16",
+                "utf-8",
+                "utf-8-sig",
+                "latin1",
+            ]
 
         last_error: Optional[Exception] = None
 
@@ -54,9 +68,7 @@ class MetadataVM(QObject):
                 last_error = exc
 
         try:
-            return pd.read_csv(
-                file_path, encoding="latin1", sep=None, engine="python"
-            )
+            return pd.read_csv(file_path, encoding="latin1", sep=None, engine="python")
         except Exception as exc:
             if last_error is None:
                 last_error = exc

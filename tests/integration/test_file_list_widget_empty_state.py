@@ -12,11 +12,8 @@ import inspect
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QPainter
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QPushButton
-
-from view.file_table_widget import FileTableWidget
 
 
 class TestFileTableWidgetEmptyState:
@@ -43,8 +40,9 @@ class TestFileTableWidgetEmptyState:
 
         # The current implementation uses svg_size = 64
         # After the fix, it should use svg_size = 96
-        assert "svg_size = 96" in source, \
+        assert "svg_size = 96" in source, (
             "paintEvent should use svg_size = 96. Current implementation uses 'svg_size = 64'."
+        )
 
     def test_empty_state_text_is_not_italic(self, mock_file_table_widget):
         """Empty state text font should NOT be italic.
@@ -63,8 +61,9 @@ class TestFileTableWidgetEmptyState:
         # After the fix, it should either use setItalic(False) or not set italic
         has_italic_true = "setItalic(True)" in source
 
-        assert not has_italic_true, \
+        assert not has_italic_true, (
             "paintEvent should NOT use font.setItalic(True). Font should be non-italic."
+        )
 
     def test_empty_state_text_font_size_is_14pt(self, mock_file_table_widget):
         """Empty state text font size should be 14pt, not 12pt.
@@ -81,8 +80,9 @@ class TestFileTableWidgetEmptyState:
 
         # The current implementation uses font.setPointSize(12)
         # After the fix, it should use font.setPointSize(14)
-        assert "setPointSize(14)" in source, \
+        assert "setPointSize(14)" in source, (
             "paintEvent should use font.setPointSize(14). Current implementation uses setPointSize(12)."
+        )
 
     def test_empty_state_text_color_is_888888(self, mock_file_table_widget):
         """Empty state text color should be #888888, not rgb(150,150,150).
@@ -102,9 +102,10 @@ class TestFileTableWidgetEmptyState:
         uses_new_hex_color = '"#888888"' in source or "'#888888'" in source
         uses_new_rgb_color = "QColor(136, 136, 136)" in source
 
-        assert uses_new_hex_color or uses_new_rgb_color, \
-            "paintEvent should use QColor('#888888') or QColor(136, 136, 136). " \
+        assert uses_new_hex_color or uses_new_rgb_color, (
+            "paintEvent should use QColor('#888888') or QColor(136, 136, 136). "
             "Current implementation uses QColor(150, 150, 150)."
+        )
 
     def test_widget_has_browse_files_button_attribute(self, mock_file_table_widget):
         """FileTableWidget should have a browse_files_button attribute.
@@ -114,10 +115,12 @@ class TestFileTableWidgetEmptyState:
         """
         widget = mock_file_table_widget
 
-        assert hasattr(widget, 'browse_files_button'), \
+        assert hasattr(widget, "browse_files_button"), (
             "FileTableWidget should have browse_files_button attribute"
-        assert isinstance(widget.browse_files_button, QPushButton), \
+        )
+        assert isinstance(widget.browse_files_button, QPushButton), (
             "browse_files_button should be a QPushButton instance"
+        )
 
     def test_widget_has_browse_folder_button_attribute(self, mock_file_table_widget):
         """FileTableWidget should have a browse_folder_button attribute.
@@ -127,10 +130,12 @@ class TestFileTableWidgetEmptyState:
         """
         widget = mock_file_table_widget
 
-        assert hasattr(widget, 'browse_folder_button'), \
+        assert hasattr(widget, "browse_folder_button"), (
             "FileTableWidget should have browse_folder_button attribute"
-        assert isinstance(widget.browse_folder_button, QPushButton), \
+        )
+        assert isinstance(widget.browse_folder_button, QPushButton), (
             "browse_folder_button should be a QPushButton instance"
+        )
 
 
 class TestFileTableWidgetEmptyStateIntegration:
@@ -166,8 +171,9 @@ class TestFileTableWidgetEmptyStateIntegration:
         # Verify the condition in paintEvent that controls empty state
         # The paintEvent only renders empty state when rowCount() == 0
         source = inspect.getsource(widget.paintEvent)
-        assert "if self.rowCount() == 0:" in source, \
+        assert "if self.rowCount() == 0:" in source, (
             "paintEvent should check rowCount() == 0 before rendering empty state"
+        )
 
     def test_empty_state_returns_after_deleting_all_files(
         self, mock_file_table_widget, mock_file_item, mock_file_manager_vm
@@ -184,12 +190,13 @@ class TestFileTableWidgetEmptyStateIntegration:
 
         # Delete the file
         widget.selectRow(0)
-        with patch.object(vm, 'delete_files'):
+        with patch.object(vm, "delete_files"):
             widget.handle_delete_selected()
 
         # Widget should be empty again
-        assert widget.rowCount() == 0, \
+        assert widget.rowCount() == 0, (
             "Widget should have 0 rows after deleting all files"
+        )
 
 
 class TestFileTableWidgetEmptyStateColorValues:
@@ -220,9 +227,10 @@ class TestFileTableWidgetEmptyStateColorValues:
         uses_new_hex_color = '"#888888"' in source or "'#888888'" in source
         uses_new_rgb_color = "QColor(136, 136, 136)" in source
 
-        assert uses_new_hex_color or uses_new_rgb_color, \
-            f"Expected QColor('#888888') or QColor(136, 136, 136), " \
-            f"but found QColor(150, 150, 150) which is rgb(150,150,150)"
+        assert uses_new_hex_color or uses_new_rgb_color, (
+            "Expected QColor('#888888') or QColor(136, 136, 136), "
+            "but found QColor(150, 150, 150) which is rgb(150,150,150)"
+        )
 
 
 class TestFileTableWidgetEmptyStateFontValues:
@@ -237,8 +245,9 @@ class TestFileTableWidgetEmptyStateFontValues:
         has_size_14 = "setPointSize(14)" in source
         has_size_12 = "setPointSize(12)" in source
 
-        assert has_size_14 and not has_size_12, \
-            f"Font should use setPointSize(14), not setPointSize(12)"
+        assert has_size_14 and not has_size_12, (
+            "Font should use setPointSize(14), not setPointSize(12)"
+        )
 
     def test_font_italic_setting(self, mock_file_table_widget):
         """Verify the font is NOT set to italic."""
@@ -249,8 +258,9 @@ class TestFileTableWidgetEmptyStateFontValues:
         has_italic_true = "setItalic(True)" in source
 
         # May have setItalic(False) or no setItalic call at all
-        assert not has_italic_true, \
+        assert not has_italic_true, (
             "Font should not use setItalic(True). Remove the italic setting or use setItalic(False)."
+        )
 
 
 class TestFileTableWidgetOrDivider:
@@ -278,16 +288,16 @@ class TestFileTableWidgetOrDivider:
 
         # The paintEvent should draw "or" text
         # Look for drawText with "or" string
-        has_or_text = (
-            'drawText' in source and
-            ('"or"' in source or "'or'" in source)
+        has_or_text = "drawText" in source and ('"or"' in source or "'or'" in source)
+
+        assert has_or_text, (
+            "paintEvent should contain code to draw 'or' text as a divider. "
+            "Expected drawText call with 'or' string."
         )
 
-        assert has_or_text, \
-            "paintEvent should contain code to draw 'or' text as a divider. " \
-            "Expected drawText call with 'or' string."
-
-    def test_paint_event_draws_horizontal_lines_for_divider(self, mock_file_table_widget):
+    def test_paint_event_draws_horizontal_lines_for_divider(
+        self, mock_file_table_widget
+    ):
         """paintEvent should draw horizontal lines on each side of 'or'.
 
         The divider should look like: --- or ---
@@ -297,11 +307,12 @@ class TestFileTableWidgetOrDivider:
         source = inspect.getsource(widget.paintEvent)
 
         # The paintEvent should contain drawLine calls for the horizontal lines
-        has_draw_line = 'drawLine' in source
+        has_draw_line = "drawLine" in source
 
-        assert has_draw_line, \
-            "paintEvent should contain drawLine calls to draw horizontal lines " \
+        assert has_draw_line, (
+            "paintEvent should contain drawLine calls to draw horizontal lines "
             "on each side of the 'or' divider (--- or ---)."
+        )
 
     def test_or_divider_uses_smaller_font_size(self, mock_file_table_widget):
         """The 'or' divider text should use a smaller font (10pt).
@@ -313,11 +324,12 @@ class TestFileTableWidgetOrDivider:
         source = inspect.getsource(widget.paintEvent)
 
         # The paintEvent should set font size to 10 for the 'or' text
-        has_10pt_font = 'setPointSize(10)' in source
+        has_10pt_font = "setPointSize(10)" in source
 
-        assert has_10pt_font, \
-            "paintEvent should use setPointSize(10) for the 'or' divider text. " \
+        assert has_10pt_font, (
+            "paintEvent should use setPointSize(10) for the 'or' divider text. "
             "The 'or' text should be smaller (10pt) than the main text (14pt)."
+        )
 
     def test_or_divider_uses_correct_color(self, mock_file_table_widget):
         """The 'or' divider should use the same gray color (#888888).
@@ -331,18 +343,19 @@ class TestFileTableWidgetOrDivider:
         # Verify the color is used (already checked in other tests, but
         # ensuring the divider section also uses it)
         uses_gray_color = (
-            '"#888888"' in source or
-            "'#888888'" in source or
-            'QColor(136, 136, 136)' in source
+            '"#888888"' in source
+            or "'#888888'" in source
+            or "QColor(136, 136, 136)" in source
         )
 
         # Additionally, verify there's a pen set before drawLine
         # The drawLine should use the same gray color
-        has_draw_line = 'drawLine' in source
+        has_draw_line = "drawLine" in source
 
-        assert uses_gray_color and has_draw_line, \
-            "paintEvent should use #888888 color for the 'or' divider lines. " \
+        assert uses_gray_color and has_draw_line, (
+            "paintEvent should use #888888 color for the 'or' divider lines. "
             "Both the 'or' text and horizontal lines should use this gray color."
+        )
 
 
 class TestFileTableWidgetBrowseFilesButton:
@@ -363,13 +376,16 @@ class TestFileTableWidgetBrowseFilesButton:
         """
         widget = mock_file_table_widget
 
-        has_browse_files = hasattr(widget, 'browse_files')
-        has_on_browse_files = hasattr(widget, 'on_browse_files')
+        has_browse_files = hasattr(widget, "browse_files")
+        has_on_browse_files = hasattr(widget, "on_browse_files")
 
-        assert has_browse_files or has_on_browse_files, \
+        assert has_browse_files or has_on_browse_files, (
             "FileTableWidget should have a 'browse_files' or 'on_browse_files' method"
+        )
 
-    def test_browse_files_button_clicked_signal_is_connected(self, mock_file_table_widget):
+    def test_browse_files_button_clicked_signal_is_connected(
+        self, mock_file_table_widget
+    ):
         """The browse_files_button.clicked signal should be connected.
 
         When browse_files_button is clicked, it should trigger the browse_files
@@ -381,9 +397,10 @@ class TestFileTableWidgetBrowseFilesButton:
         button = widget.browse_files_button
         receivers_count = button.receivers(button.clicked)
 
-        assert receivers_count > 0, \
-            "browse_files_button.clicked signal should be connected to a slot. " \
+        assert receivers_count > 0, (
+            "browse_files_button.clicked signal should be connected to a slot. "
             "Expected at least 1 receiver, got 0."
+        )
 
     def test_browse_files_method_calls_qfiledialog_with_tiff_filter(
         self, mock_file_table_widget
@@ -395,13 +412,15 @@ class TestFileTableWidgetBrowseFilesButton:
         """
         widget = mock_file_table_widget
 
-        with patch('view.file_table_widget.QFileDialog.getOpenFileNames') as mock_dialog:
+        with patch(
+            "view.file_table_widget.QFileDialog.getOpenFileNames"
+        ) as mock_dialog:
             mock_dialog.return_value = ([], "")  # No files selected
 
             # Call the browse_files method (or on_browse_files)
-            if hasattr(widget, 'browse_files'):
+            if hasattr(widget, "browse_files"):
                 widget.browse_files()
-            elif hasattr(widget, 'on_browse_files'):
+            elif hasattr(widget, "on_browse_files"):
                 widget.on_browse_files()
             else:
                 pytest.fail("Widget should have browse_files or on_browse_files method")
@@ -413,12 +432,14 @@ class TestFileTableWidgetBrowseFilesButton:
             call_args = mock_dialog.call_args
             # Check positional or keyword arguments for the filter
             args, kwargs = call_args
-            filter_arg = kwargs.get('filter') or (args[3] if len(args) > 3 else None)
+            filter_arg = kwargs.get("filter") or (args[3] if len(args) > 3 else None)
 
-            assert filter_arg is not None, \
+            assert filter_arg is not None, (
                 "QFileDialog.getOpenFileNames should be called with a filter argument"
-            assert 'tif' in filter_arg.lower() or 'tiff' in filter_arg.lower(), \
+            )
+            assert "tif" in filter_arg.lower() or "tiff" in filter_arg.lower(), (
                 f"Filter should include TIFF files. Got: {filter_arg}"
+            )
 
     def test_browse_files_passes_selected_files_to_callback(
         self, mock_file_table_widget
@@ -432,15 +453,17 @@ class TestFileTableWidgetBrowseFilesButton:
         callback_mock = MagicMock()
         widget.file_dropped_callback = callback_mock
 
-        test_files = ['/path/to/file1.tiff', '/path/to/file2.tif']
+        test_files = ["/path/to/file1.tiff", "/path/to/file2.tif"]
 
-        with patch('view.file_table_widget.QFileDialog.getOpenFileNames') as mock_dialog:
+        with patch(
+            "view.file_table_widget.QFileDialog.getOpenFileNames"
+        ) as mock_dialog:
             mock_dialog.return_value = (test_files, "TIFF Files (*.tif *.tiff)")
 
             # Call the browse_files method
-            if hasattr(widget, 'browse_files'):
+            if hasattr(widget, "browse_files"):
                 widget.browse_files()
-            elif hasattr(widget, 'on_browse_files'):
+            elif hasattr(widget, "on_browse_files"):
                 widget.on_browse_files()
             else:
                 pytest.fail("Widget should have browse_files or on_browse_files method")
@@ -460,13 +483,15 @@ class TestFileTableWidgetBrowseFilesButton:
         callback_mock = MagicMock()
         widget.file_dropped_callback = callback_mock
 
-        with patch('view.file_table_widget.QFileDialog.getOpenFileNames') as mock_dialog:
+        with patch(
+            "view.file_table_widget.QFileDialog.getOpenFileNames"
+        ) as mock_dialog:
             mock_dialog.return_value = ([], "")  # User canceled - no files
 
             # Call the browse_files method
-            if hasattr(widget, 'browse_files'):
+            if hasattr(widget, "browse_files"):
                 widget.browse_files()
-            elif hasattr(widget, 'on_browse_files'):
+            elif hasattr(widget, "on_browse_files"):
                 widget.on_browse_files()
             else:
                 pytest.fail("Widget should have browse_files or on_browse_files method")
@@ -484,15 +509,19 @@ class TestFileTableWidgetBrowseFilesButton:
         """
         widget = mock_file_table_widget
 
-        with patch('view.file_table_widget.QFileDialog.getOpenFileNames') as mock_dialog:
+        with patch(
+            "view.file_table_widget.QFileDialog.getOpenFileNames"
+        ) as mock_dialog:
             mock_dialog.return_value = ([], "")
 
             # Simulate button click
             widget.browse_files_button.click()
 
             # Verify the dialog was opened
-            mock_dialog.assert_called_once(), \
-                "Clicking browse_files_button should open QFileDialog.getOpenFileNames"
+            (
+                mock_dialog.assert_called_once(),
+                "Clicking browse_files_button should open QFileDialog.getOpenFileNames",
+            )
 
 
 class TestFileTableWidgetBrowseFolderButton:
@@ -514,13 +543,16 @@ class TestFileTableWidgetBrowseFolderButton:
         """
         widget = mock_file_table_widget
 
-        has_browse_folder = hasattr(widget, 'browse_folder')
-        has_on_browse_folder = hasattr(widget, 'on_browse_folder')
+        has_browse_folder = hasattr(widget, "browse_folder")
+        has_on_browse_folder = hasattr(widget, "on_browse_folder")
 
-        assert has_browse_folder or has_on_browse_folder, \
+        assert has_browse_folder or has_on_browse_folder, (
             "FileTableWidget should have a 'browse_folder' or 'on_browse_folder' method"
+        )
 
-    def test_browse_folder_button_clicked_signal_is_connected(self, mock_file_table_widget):
+    def test_browse_folder_button_clicked_signal_is_connected(
+        self, mock_file_table_widget
+    ):
         """The browse_folder_button.clicked signal should be connected.
 
         When browse_folder_button is clicked, it should trigger the browse_folder
@@ -532,9 +564,10 @@ class TestFileTableWidgetBrowseFolderButton:
         button = widget.browse_folder_button
         receivers_count = button.receivers(button.clicked)
 
-        assert receivers_count > 0, \
-            "browse_folder_button.clicked signal should be connected to a slot. " \
+        assert receivers_count > 0, (
+            "browse_folder_button.clicked signal should be connected to a slot. "
             "Expected at least 1 receiver, got 0."
+        )
 
     def test_browse_folder_method_calls_qfiledialog_getexistingdirectory(
         self, mock_file_table_widget
@@ -545,16 +578,20 @@ class TestFileTableWidgetBrowseFolderButton:
         """
         widget = mock_file_table_widget
 
-        with patch('view.file_table_widget.QFileDialog.getExistingDirectory') as mock_dialog:
+        with patch(
+            "view.file_table_widget.QFileDialog.getExistingDirectory"
+        ) as mock_dialog:
             mock_dialog.return_value = ""  # No folder selected
 
             # Call the browse_folder method (or on_browse_folder)
-            if hasattr(widget, 'browse_folder'):
+            if hasattr(widget, "browse_folder"):
                 widget.browse_folder()
-            elif hasattr(widget, 'on_browse_folder'):
+            elif hasattr(widget, "on_browse_folder"):
                 widget.on_browse_folder()
             else:
-                pytest.fail("Widget should have browse_folder or on_browse_folder method")
+                pytest.fail(
+                    "Widget should have browse_folder or on_browse_folder method"
+                )
 
             # Verify QFileDialog.getExistingDirectory was called
             mock_dialog.assert_called_once()
@@ -571,18 +608,22 @@ class TestFileTableWidgetBrowseFolderButton:
         callback_mock = MagicMock()
         widget.file_dropped_callback = callback_mock
 
-        test_folder = '/path/to/selected/folder'
+        test_folder = "/path/to/selected/folder"
 
-        with patch('view.file_table_widget.QFileDialog.getExistingDirectory') as mock_dialog:
+        with patch(
+            "view.file_table_widget.QFileDialog.getExistingDirectory"
+        ) as mock_dialog:
             mock_dialog.return_value = test_folder
 
             # Call the browse_folder method
-            if hasattr(widget, 'browse_folder'):
+            if hasattr(widget, "browse_folder"):
                 widget.browse_folder()
-            elif hasattr(widget, 'on_browse_folder'):
+            elif hasattr(widget, "on_browse_folder"):
                 widget.on_browse_folder()
             else:
-                pytest.fail("Widget should have browse_folder or on_browse_folder method")
+                pytest.fail(
+                    "Widget should have browse_folder or on_browse_folder method"
+                )
 
             # Verify callback was called with the folder as a list
             callback_mock.assert_called_once_with([test_folder])
@@ -599,16 +640,20 @@ class TestFileTableWidgetBrowseFolderButton:
         callback_mock = MagicMock()
         widget.file_dropped_callback = callback_mock
 
-        with patch('view.file_table_widget.QFileDialog.getExistingDirectory') as mock_dialog:
+        with patch(
+            "view.file_table_widget.QFileDialog.getExistingDirectory"
+        ) as mock_dialog:
             mock_dialog.return_value = ""  # User canceled - empty string
 
             # Call the browse_folder method
-            if hasattr(widget, 'browse_folder'):
+            if hasattr(widget, "browse_folder"):
                 widget.browse_folder()
-            elif hasattr(widget, 'on_browse_folder'):
+            elif hasattr(widget, "on_browse_folder"):
                 widget.on_browse_folder()
             else:
-                pytest.fail("Widget should have browse_folder or on_browse_folder method")
+                pytest.fail(
+                    "Widget should have browse_folder or on_browse_folder method"
+                )
 
             # Verify callback was NOT called
             callback_mock.assert_not_called()
@@ -623,15 +668,19 @@ class TestFileTableWidgetBrowseFolderButton:
         """
         widget = mock_file_table_widget
 
-        with patch('view.file_table_widget.QFileDialog.getExistingDirectory') as mock_dialog:
+        with patch(
+            "view.file_table_widget.QFileDialog.getExistingDirectory"
+        ) as mock_dialog:
             mock_dialog.return_value = ""
 
             # Simulate button click
             widget.browse_folder_button.click()
 
             # Verify the dialog was opened
-            mock_dialog.assert_called_once(), \
-                "Clicking browse_folder_button should open QFileDialog.getExistingDirectory"
+            (
+                mock_dialog.assert_called_once(),
+                "Clicking browse_folder_button should open QFileDialog.getExistingDirectory",
+            )
 
 
 class TestFileTableWidgetButtonVisibility:
@@ -656,10 +705,12 @@ class TestFileTableWidgetButtonVisibility:
         assert widget.rowCount() == 0, "Table should be empty for this test"
 
         # Buttons should be visible when empty
-        assert widget.browse_files_button.isVisible(), \
+        assert widget.browse_files_button.isVisible(), (
             "browse_files_button should be visible when table is empty"
-        assert widget.browse_folder_button.isVisible(), \
+        )
+        assert widget.browse_folder_button.isVisible(), (
             "browse_folder_button should be visible when table is empty"
+        )
 
     def test_buttons_hidden_after_adding_file_item(
         self, mock_file_table_widget, mock_file_item
@@ -684,10 +735,12 @@ class TestFileTableWidgetButtonVisibility:
         assert widget.rowCount() == 1, "Table should have 1 row after adding file"
 
         # Buttons should now be hidden
-        assert not widget.browse_files_button.isVisible(), \
+        assert not widget.browse_files_button.isVisible(), (
             "browse_files_button should be hidden when table has files"
-        assert not widget.browse_folder_button.isVisible(), \
+        )
+        assert not widget.browse_folder_button.isVisible(), (
             "browse_folder_button should be hidden when table has files"
+        )
 
     def test_widget_has_update_button_visibility_method(self, mock_file_table_widget):
         """FileTableWidget should have an update_button_visibility method.
@@ -698,12 +751,13 @@ class TestFileTableWidgetButtonVisibility:
         """
         widget = mock_file_table_widget
 
-        has_public_method = hasattr(widget, 'update_button_visibility')
-        has_private_method = hasattr(widget, '_update_button_visibility')
+        has_public_method = hasattr(widget, "update_button_visibility")
+        has_private_method = hasattr(widget, "_update_button_visibility")
 
-        assert has_public_method or has_private_method, \
-            "FileTableWidget should have 'update_button_visibility' or " \
+        assert has_public_method or has_private_method, (
+            "FileTableWidget should have 'update_button_visibility' or "
             "'_update_button_visibility' method"
+        )
 
     def test_update_button_visibility_shows_buttons_when_empty(
         self, mock_file_table_widget
@@ -719,9 +773,9 @@ class TestFileTableWidgetButtonVisibility:
         assert widget.rowCount() == 0
 
         # Call the visibility update method
-        if hasattr(widget, 'update_button_visibility'):
+        if hasattr(widget, "update_button_visibility"):
             widget.update_button_visibility()
-        elif hasattr(widget, '_update_button_visibility'):
+        elif hasattr(widget, "_update_button_visibility"):
             widget._update_button_visibility()
         else:
             pytest.fail(
@@ -730,10 +784,12 @@ class TestFileTableWidgetButtonVisibility:
             )
 
         # Buttons should be visible
-        assert widget.browse_files_button.isVisible(), \
+        assert widget.browse_files_button.isVisible(), (
             "browse_files_button should be visible after update when table is empty"
-        assert widget.browse_folder_button.isVisible(), \
+        )
+        assert widget.browse_folder_button.isVisible(), (
             "browse_folder_button should be visible after update when table is empty"
+        )
 
     def test_update_button_visibility_hides_buttons_when_files_present(
         self, mock_file_table_widget, mock_file_item
@@ -750,9 +806,9 @@ class TestFileTableWidgetButtonVisibility:
         assert widget.rowCount() == 1
 
         # Call the visibility update method
-        if hasattr(widget, 'update_button_visibility'):
+        if hasattr(widget, "update_button_visibility"):
             widget.update_button_visibility()
-        elif hasattr(widget, '_update_button_visibility'):
+        elif hasattr(widget, "_update_button_visibility"):
             widget._update_button_visibility()
         else:
             pytest.fail(
@@ -761,10 +817,12 @@ class TestFileTableWidgetButtonVisibility:
             )
 
         # Buttons should be hidden
-        assert not widget.browse_files_button.isVisible(), \
+        assert not widget.browse_files_button.isVisible(), (
             "browse_files_button should be hidden after update when table has files"
-        assert not widget.browse_folder_button.isVisible(), \
+        )
+        assert not widget.browse_folder_button.isVisible(), (
             "browse_folder_button should be hidden after update when table has files"
+        )
 
     def test_add_file_item_calls_visibility_update(
         self, mock_file_table_widget, mock_file_item
@@ -778,10 +836,10 @@ class TestFileTableWidgetButtonVisibility:
 
         # Patch the visibility update method to track if it's called
         visibility_method_name = None
-        if hasattr(widget, 'update_button_visibility'):
-            visibility_method_name = 'update_button_visibility'
-        elif hasattr(widget, '_update_button_visibility'):
-            visibility_method_name = '_update_button_visibility'
+        if hasattr(widget, "update_button_visibility"):
+            visibility_method_name = "update_button_visibility"
+        elif hasattr(widget, "_update_button_visibility"):
+            visibility_method_name = "_update_button_visibility"
 
         if visibility_method_name is None:
             pytest.fail(
@@ -790,13 +848,17 @@ class TestFileTableWidgetButtonVisibility:
             )
 
         with patch.object(
-            widget, visibility_method_name, wraps=getattr(widget, visibility_method_name)
+            widget,
+            visibility_method_name,
+            wraps=getattr(widget, visibility_method_name),
         ) as mock_visibility:
             widget.add_file_item(mock_file_item)
 
             # Verify the visibility update was called
-            mock_visibility.assert_called(), \
-                f"add_file_item should call {visibility_method_name}"
+            (
+                mock_visibility.assert_called(),
+                f"add_file_item should call {visibility_method_name}",
+            )
 
     def test_buttons_become_visible_again_after_removing_all_files(
         self, mock_file_table_widget, mock_file_item, mock_file_manager_vm
@@ -817,27 +879,29 @@ class TestFileTableWidgetButtonVisibility:
         # Buttons should be hidden with files present
         # (This relies on add_file_item triggering visibility update)
         # For now, manually check if method exists and call it
-        if hasattr(widget, 'update_button_visibility'):
+        if hasattr(widget, "update_button_visibility"):
             widget.update_button_visibility()
-        elif hasattr(widget, '_update_button_visibility'):
+        elif hasattr(widget, "_update_button_visibility"):
             widget._update_button_visibility()
 
         # Delete all files
         widget.selectRow(0)
-        with patch.object(vm, 'delete_files'):
+        with patch.object(vm, "delete_files"):
             widget.handle_delete_selected()
 
         # Table should be empty
         assert widget.rowCount() == 0, "Table should be empty after deleting all files"
 
         # Update visibility (this should be called by handle_delete_selected ideally)
-        if hasattr(widget, 'update_button_visibility'):
+        if hasattr(widget, "update_button_visibility"):
             widget.update_button_visibility()
-        elif hasattr(widget, '_update_button_visibility'):
+        elif hasattr(widget, "_update_button_visibility"):
             widget._update_button_visibility()
 
         # Buttons should be visible again
-        assert widget.browse_files_button.isVisible(), \
+        assert widget.browse_files_button.isVisible(), (
             "browse_files_button should be visible after removing all files"
-        assert widget.browse_folder_button.isVisible(), \
+        )
+        assert widget.browse_folder_button.isVisible(), (
             "browse_folder_button should be visible after removing all files"
+        )

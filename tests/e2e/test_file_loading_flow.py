@@ -2,11 +2,10 @@
 End-to-end tests for file loading workflow.
 """
 
-import os
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
+
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 
@@ -21,8 +20,9 @@ class TestFileLoadingE2E:
         window = mock_main_window
         path = tmp_tiff_path()
 
-        with patch('PyQt6.QtWidgets.QFileDialog.getOpenFileName', 
-                   return_value=(path, "")):
+        with patch(
+            "PyQt6.QtWidgets.QFileDialog.getOpenFileName", return_value=(path, "")
+        ):
             window.handle_dropped_paths([path])
 
         assert path in window.vm.files
@@ -35,8 +35,9 @@ class TestFileLoadingE2E:
         window = mock_main_window
         folder_path = tmp_tiff_folder(3)
 
-        with patch('PyQt6.QtWidgets.QFileDialog.getExistingDirectory',
-                   return_value=folder_path):
+        with patch(
+            "PyQt6.QtWidgets.QFileDialog.getExistingDirectory", return_value=folder_path
+        ):
             window.handle_dropped_paths([folder_path])
 
         assert len(window.vm.files) == 3
@@ -65,7 +66,7 @@ class TestFileLoadingE2E:
         mock_url.toLocalFile.return_value = path
         mock_mime.urls.return_value = [mock_url]
 
-        with patch.object(widget, 'file_dropped_callback') as callback:
+        with patch.object(widget, "file_dropped_callback") as callback:
             event = MagicMock()
             event.mimeData.return_value = mock_mime
             widget.dropEvent(event)
@@ -78,7 +79,7 @@ class TestFileLoadingE2E:
         window = mock_main_window
         folder_path = tmp_tiff_folder(3)
 
-        with patch('viewmodel.file_manager_vm.get_tif_info') as mock_info:
+        with patch("viewmodel.file_manager_vm.get_tif_info") as mock_info:
             mock_info.return_value = ((1, 512, 512), np.uint16)
             window.vm.load_folder(folder_path)
 
@@ -91,22 +92,18 @@ class TestFileLoadingE2E:
         window = mock_main_window
         path = tmp_tiff_path()
 
-        with patch('viewmodel.file_manager_vm.get_tif_info') as mock_info:
+        with patch("viewmodel.file_manager_vm.get_tif_info") as mock_info:
             mock_info.return_value = ((1, 512, 512), np.uint16)
             window.vm.load_file(path)
 
         assert window.vm.files[path].status == FileStatus.RAW
 
-    def test_table_sorting_enabled(
-        self, mock_main_window, tmp_tiff_folder, qtbot
-    ):
+    def test_table_sorting_enabled(self, mock_main_window, tmp_tiff_folder, qtbot):
         """Table should have sorting enabled."""
         window = mock_main_window
         assert window.file_table_widget.isSortingEnabled()
 
-    def test_table_columns_configured(
-        self, mock_main_window, qtbot
-    ):
+    def test_table_columns_configured(self, mock_main_window, qtbot):
         """Table should have 4 columns with correct headers."""
         widget = mock_main_window.file_table_widget
 
@@ -118,9 +115,7 @@ class TestFileLoadingE2E:
 class TestFileLoadingErrors:
     """Tests for error handling during file loading."""
 
-    def test_invalid_file_path(
-        self, mock_main_window, mock_file_manager_vm, qtbot
-    ):
+    def test_invalid_file_path(self, mock_main_window, mock_file_manager_vm, qtbot):
         """Invalid file path should not add file to VM."""
         window = mock_main_window
         invalid_path = "/non/existent/file.tif"
@@ -137,7 +132,7 @@ class TestFileLoadingErrors:
         empty_folder = tmp_path / "empty"
         empty_folder.mkdir()
 
-        with patch('viewmodel.file_manager_vm.list_tiff_files', return_value=[]):
+        with patch("viewmodel.file_manager_vm.list_tiff_files", return_value=[]):
             window.handle_dropped_paths([str(empty_folder)])
 
         assert len(window.vm.files) == 0
@@ -146,14 +141,12 @@ class TestFileLoadingErrors:
 class TestFileLoadingSignals:
     """Tests for signal handling during file loading."""
 
-    def test_emitted_files_tracked(
-        self, mock_main_window, tmp_tiff_path, mocker
-    ):
+    def test_emitted_files_tracked(self, mock_main_window, tmp_tiff_path, mocker):
         """emitted_files should track which files were emitted."""
         window = mock_main_window
         path = tmp_tiff_path()
 
-        with patch('viewmodel.file_manager_vm.get_tif_info') as mock_info:
+        with patch("viewmodel.file_manager_vm.get_tif_info") as mock_info:
             mock_info.return_value = ((1, 512, 512), np.uint16)
             window.vm.load_file(path)
 

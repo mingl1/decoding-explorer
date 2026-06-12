@@ -30,12 +30,11 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QSlider,
     QSplitter,
     QVBoxLayout,
 )
 
-from utils import adjust_contrast, to_uint8,find_min_std_partition
+from utils import adjust_contrast, find_min_std_partition, to_uint8
 
 
 def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_columns):
@@ -48,25 +47,26 @@ def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_colum
         bead_data[col] = bead_data[col].astype(int)
         if not protein_profile.empty:
             protein_profile[col] = protein_profile[col].astype(int)
-    
-    
+
     # Handle empty protein_profile case
     if protein_profile.empty:
         # Group by merge columns to get count per combination
-        combination_counts = bead_data.groupby(merge_columns).size().reset_index(name='count')
-        
+        combination_counts = (
+            bead_data.groupby(merge_columns).size().reset_index(name="count")
+        )
+
         # Extract the counts for partitioning
-        counts = combination_counts['count'].tolist()
-        
+        counts = combination_counts["count"].tolist()
+
         if len(counts) > 1:
             # Use find_min_std_partition to separate into two groups
             groups, min_std = find_min_std_partition(counts)
-            
+
             # Determine which group has lower values (invalid) and higher values (valid)
             # Compare the minimum values of each group instead of means
-            group1_min = min(groups[0]) if groups[0] else float('inf')
-            group2_min = min(groups[1]) if groups[1] else float('inf')
-            
+            group1_min = min(groups[0]) if groups[0] else float("inf")
+            group2_min = min(groups[1]) if groups[1] else float("inf")
+
             if group1_min <= group2_min:
                 invalid_counts_set = set(groups[0])
                 valid_counts_set = set(groups[1])
@@ -77,45 +77,45 @@ def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_colum
             # If only one combination, consider it invalid
             invalid_counts_set = set(counts)
             valid_counts_set = set()
-        
+
         # Create protein profile dataframe
         protein_profile_data = []
         valid_protein_counter = 1
-        
+
         # Assign protein names to each combination
         for _, row in combination_counts.iterrows():
-            if row['count'] in invalid_counts_set:
+            if row["count"] in invalid_counts_set:
                 protein_name = "Invalid"
             else:
                 # Assign unique protein names (Protein 1, Protein 2, etc.) to valid combinations
                 protein_name = f"Protein {valid_protein_counter}"
                 valid_protein_counter += 1
-            
+
             # Create row for protein profile
             profile_row = {}
             for col in merge_columns:
                 profile_row[col] = row[col]
-            profile_row['Protein name'] = protein_name
+            profile_row["Protein name"] = protein_name
             protein_profile_data.append(profile_row)
-        
+
         # Create the protein profile dataframe
         protein_profile = pd.DataFrame(protein_profile_data)
-    
+
     # Merge bead_data with protein_profile
     # Create the filtered row
     # filtered_row = {col: 255 for col in merge_columns}
     # filtered_row['Protein name'] = 'Filtered'
 
     # protein_profile = pd.concat([protein_profile, pd.DataFrame([filtered_row])], ignore_index=True)
-    
+
     bead_data = bead_data.merge(protein_profile, how="left", on=merge_columns)
-    
+
     # Fill NaN values with "Invalid"
-    bead_data['Protein name'].fillna("Invalid", inplace=True)
+    bead_data["Protein name"].fillna("Invalid", inplace=True)
     # For all merge columns being 255
     mask_all_255 = (bead_data[merge_columns] == 255).all(axis=1)
-    bead_data.loc[mask_all_255, 'Protein name'] = "Filtered"
-    
+    bead_data.loc[mask_all_255, "Protein name"] = "Filtered"
+
     return bead_data
 
 
@@ -177,7 +177,10 @@ class ZoomableImageView(QGraphicsView):
             assert dot is not None
             dot.setZValue(1)  # Make sure it appears above the image
 
+
 from image_processing import gaussian_kernel
+
+
 class ROIInspector(QDialog):
     show_bead_signal = pyqtSignal(np.ndarray)
 
@@ -194,7 +197,7 @@ class ROIInspector(QDialog):
         merge_columns = []
         for i in range(len(self.cycles)):
             merge_columns.append(f"cy{i}")
-            
+
         # Merge bead data with protein profile if both are provided
         if (
             self.beads is not None
@@ -202,9 +205,9 @@ class ROIInspector(QDialog):
             and merge_columns
         ):
             self.merged_bead_data = merge_bead_data_with_protein_profile(
-                    self.beads.copy(), self.protein_profile.copy(), merge_columns
-                )
-            
+                self.beads.copy(), self.protein_profile.copy(), merge_columns
+            )
+
             print(self.merged_bead_data.head())
         else:
             self.merged_bead_data = None
@@ -222,7 +225,7 @@ class ROIInspector(QDialog):
         self.image_view.mouseDoubleClickEvent = self.inspect_roi
 
     def _setup_ui(self):
-        self.setWindowTitle(f"Bead Data Analysis")
+        self.setWindowTitle("Bead Data Analysis")
         self.resize(1400, 800)  # Increased width to accommodate sidebar
 
         # Main splitter to separate sidebar from main content
@@ -258,7 +261,9 @@ class ROIInspector(QDialog):
         self.resample_invalids_button = QPushButton("Resample Invalids")
         self.resample_invalids_button.clicked.connect(self._populate_invalid_beads_list)
         self.resample_filtered_button = QPushButton("Resample Filtereds")
-        self.resample_filtered_button.clicked.connect(self._populate_filtered_beads_list)
+        self.resample_filtered_button.clicked.connect(
+            self._populate_filtered_beads_list
+        )
 
         # Add count label
         invalid_count = len(
@@ -273,7 +278,7 @@ class ROIInspector(QDialog):
 
         sidebar_layout.addWidget(self.invalid_count_label)
         sidebar_layout.addWidget(self.beads_list)
-        
+
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.resample_invalids_button)
         button_layout.addWidget(self.resample_filtered_button)
@@ -323,7 +328,7 @@ class ROIInspector(QDialog):
             self.beads_list.clear()  # Clear previous items if any
 
             for idx, row in sampled_beads.iterrows():
-                x, y = int(row["x"]), int(row['y'])
+                x, y = int(row["x"]), int(row["y"])
                 item_text = f"Bead {idx}: ({x}, {y})"
                 item = QListWidgetItem(item_text)
                 item.setData(Qt.ItemDataRole.UserRole, (idx, x, y))
@@ -677,7 +682,7 @@ class ROIGridDisplay(QDialog):
             channel_label = QLabel(f"Channel {i}")
             grid_layout.addWidget(channel_label, 0, i + offset)
         if output is not None and len(output):
-            out_label = QLabel(f"Output")
+            out_label = QLabel("Output")
             grid_layout.addWidget(out_label, 0, num_channels + offset)
         # add grayscale bright field images if provided
         starting_col = 1
@@ -748,9 +753,8 @@ class ROIGridDisplay(QDialog):
         self.setLayout(layout)
 
 
-from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QLabel
+from PyQt6.QtCore import QRectF
+from PyQt6.QtGui import QPixmap
 from scipy.signal import correlate2d
 
 

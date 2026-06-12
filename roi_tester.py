@@ -1,18 +1,16 @@
 import sys
 
-import cv2
 import numpy as np
 import pandas as pd
 import tifffile as tiff
-from PIL import Image
 from PyQt6.QtWidgets import QApplication
 from scipy.signal import correlate2d
-from skimage.exposure import match_histograms
+from skimage.exposure import adjust_sigmoid, match_histograms
+from skimage.morphology import erosion
 
-from utils import adjust_contrast, to_uint8
+from utils import adjust_contrast
 from view import roi_inspector
-from skimage.exposure import adjust_sigmoid
-from skimage.morphology import erosion, isotropic_erosion
+
 
 def best_split_df_max_avg_gap(df, count_col):
     # Sort by counts
@@ -144,7 +142,7 @@ if __name__ == "__main__":
     for i, cycle in enumerate([cycle1, cycle2]):
         reference_layer = cycle[0]  # First layer as reference
         matched_and_equalized = []
-        for j in range(num_layers-1, -1,-1):
+        for j in range(num_layers - 1, -1, -1):
             img16 = cycle[j]
             # Match histogram to reference layer
             matched_img = match_histograms(img16, reference_layer)
@@ -152,9 +150,9 @@ if __name__ == "__main__":
             # img8 = np.zeros_like(img16, dtype=np.uint8)
             # img8 = cv2.normalize(matched_img, img8, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
             # img_eq = cv2.equalizeHist(img8)
-            img_eq = adjust_sigmoid(cycle[j],0.2)
+            img_eq = adjust_sigmoid(cycle[j], 0.2)
             img_eq = erosion(img_eq)
-            matched_and_equalized.insert(0,img_eq)
+            matched_and_equalized.insert(0, img_eq)
         if i == 0:
             cycle1 = np.vstack((cycle1, np.array(matched_and_equalized)))
         else:

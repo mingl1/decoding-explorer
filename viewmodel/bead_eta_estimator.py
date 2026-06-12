@@ -311,9 +311,14 @@ class BeadEtaEstimator:
             if stage == self._current_stage:
                 break
             completed += self._expected_seconds.get(stage, 0.0) * scale
-        if self._current_stage is not None and self._current_stage_started_at is not None:
+        if (
+            self._current_stage is not None
+            and self._current_stage_started_at is not None
+        ):
             elapsed = max(0.0, now - self._current_stage_started_at)
-            expected_current = self._expected_seconds.get(self._current_stage, 0.0) * scale
+            expected_current = (
+                self._expected_seconds.get(self._current_stage, 0.0) * scale
+            )
             stage_fraction = 0.0
             if (
                 self._stage_units_total is not None
@@ -347,10 +352,7 @@ class BeadEtaEstimator:
             per_unit_observed = elapsed / self._stage_units_done
             remaining_units = max(self._stage_units_total - self._stage_units_done, 0.0)
             return max(remaining_units * per_unit_observed, 0.0)
-        if (
-            self._stage_units_total is not None
-            and self._stage_units_total > 0
-        ):
+        if self._stage_units_total is not None and self._stage_units_total > 0:
             return max(expected_current, 0.0)
         if expected_current > 0 and elapsed > expected_current:
             return OVERRUN_FLOOR_SECONDS
@@ -378,9 +380,7 @@ class BeadEtaEstimator:
             )
         return self._smoothed_total_eta
 
-    def _snapshot_unlocked(
-        self, now: float
-    ) -> Tuple[int, str, Optional[float]]:
+    def _snapshot_unlocked(self, now: float) -> Tuple[int, str, Optional[float]]:
         if self._finished:
             if self._success:
                 return 100, self._current_message, 0.0

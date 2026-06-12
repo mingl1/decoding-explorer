@@ -9,8 +9,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ensemble import (compute_bead_profile_metrics, get_latest_trace,
-                      label_beads_with_proteins, load_protein_profiles)
+from ensemble import (
+    compute_bead_profile_metrics,
+    get_latest_trace,
+    label_beads_with_proteins,
+    load_protein_profiles,
+)
 
 
 def create_trace(run, output_dir):
@@ -34,17 +38,28 @@ def create_trace(run, output_dir):
     cache_meta_path = os.path.join(trace_dir, ".cache_meta.json")
     cycle1_name = os.path.basename(ct["cycle1"])
 
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "labeling_benchmark.py")
+    script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "labeling_benchmark.py"
+    )
     cmd = [
-        sys.executable, script,
-        "--cycle1", ct["cycle1"],
-        "--cycle2", ct["cycle2"],
-        "--protein-csvs", *run["protein_profiles"],
-        "--methods", method,
-        "--output-folder", trace_dir,
-        "--border-erosion", str(ct.get("border_erosion", 2)),
-        "--min-margin-ratio", ct.get("min_margin_ratio", "1.0-1.5"),
-        "--trace-output", os.path.join(trace_dir, "trace.json"),
+        sys.executable,
+        script,
+        "--cycle1",
+        ct["cycle1"],
+        "--cycle2",
+        ct["cycle2"],
+        "--protein-csvs",
+        *run["protein_profiles"],
+        "--methods",
+        method,
+        "--output-folder",
+        trace_dir,
+        "--border-erosion",
+        str(ct.get("border_erosion", 2)),
+        "--min-margin-ratio",
+        ct.get("min_margin_ratio", "1.0-1.5"),
+        "--trace-output",
+        os.path.join(trace_dir, "trace.json"),
     ]
     if "bead_csv" in ct:
         cmd += ["--bead-csv", ct["bead_csv"]]
@@ -87,16 +102,22 @@ def process_run(run, output_dir):
     results_df["x"] = np.rint(results_df["x"]).astype(np.float32)
     results_df["y"] = np.rint(results_df["y"]).astype(np.float32)
 
-    merged_df = results_df.merge(other_df, on=["x", "y"], suffixes=("", "_other"), how="left")
+    merged_df = results_df.merge(
+        other_df, on=["x", "y"], suffixes=("", "_other"), how="left"
+    )
 
     # cy0/cy1 correction: if cy0==255 but cy0_other is not, use other_df's values
     mask_255_cy0 = merged_df["cy0"] == 255
-    mask_255_cy0_other = (merged_df["cy0_other"] == 255) | (merged_df["cy0_other"].isna())
+    mask_255_cy0_other = (merged_df["cy0_other"] == 255) | (
+        merged_df["cy0_other"].isna()
+    )
     mask_update = mask_255_cy0 & ~mask_255_cy0_other
     merged_df.loc[mask_update, "cy0"] = merged_df.loc[mask_update, "cy0_other"]
     merged_df.loc[mask_update, "cy1"] = merged_df.loc[mask_update, "cy1_other"]
 
-    labeled_df = label_beads_with_proteins(merged_df.drop(columns=["Protein name"], errors="ignore"), protein_df)
+    labeled_df = label_beads_with_proteins(
+        merged_df.drop(columns=["Protein name"], errors="ignore"), protein_df
+    )
 
     # save outputs
     run_out = os.path.join(output_dir, name)
@@ -141,17 +162,26 @@ def process_run(run, output_dir):
     with open(os.path.join(run_out, "stats.json"), "w") as f:
         json.dump(stats, f, indent=2)
 
-    print(f"  Total: {total}  Valid: {valid} ({stats['valid_pct']}%)  "
-          f"Invalid: {invalid} ({stats['invalid_pct']}%)  "
-          f"Filtered: {filtered} ({stats['filtered_pct']}%)")
+    print(
+        f"  Total: {total}  Valid: {valid} ({stats['valid_pct']}%)  "
+        f"Invalid: {invalid} ({stats['invalid_pct']}%)  "
+        f"Filtered: {filtered} ({stats['filtered_pct']}%)"
+    )
     print(f"  Saved to {run_out}/")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("config", help="Path to batch config JSON")
-    parser.add_argument("--parallel", action="store_true", help="Process runs in parallel")
-    parser.add_argument("--workers", type=int, default=None, help="Number of parallel workers (default: number of runs)")
+    parser.add_argument(
+        "--parallel", action="store_true", help="Process runs in parallel"
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers (default: number of runs)",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).resolve()
@@ -162,7 +192,9 @@ if __name__ == "__main__":
 
     # input_dir: where run folders live; resolve relative to config file location
     raw_input = config.get("input_dir", ".")
-    input_dir = Path(raw_input) if Path(raw_input).is_absolute() else (config_dir / raw_input)
+    input_dir = (
+        Path(raw_input) if Path(raw_input).is_absolute() else (config_dir / raw_input)
+    )
 
     # Resolve run paths relative to input_dir
     def resolve(p):
@@ -186,7 +218,9 @@ if __name__ == "__main__":
 
     # output_dir: where results are written; resolve relative to input_dir
     raw_output = config.get("output_dir", "./batch_results")
-    output_dir = str(Path(raw_output) if Path(raw_output).is_absolute() else (input_dir / raw_output))
+    output_dir = str(
+        Path(raw_output) if Path(raw_output).is_absolute() else (input_dir / raw_output)
+    )
     os.makedirs(output_dir, exist_ok=True)
 
     runs = config["runs"]
@@ -197,7 +231,10 @@ if __name__ == "__main__":
         print("Note: output from runs may be interleaved.\n")
         failed = []
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(process_run, run, output_dir): run["name"] for run in runs}
+            futures = {
+                executor.submit(process_run, run, output_dir): run["name"]
+                for run in runs
+            }
             for future in as_completed(futures):
                 name = futures[future]
                 try:

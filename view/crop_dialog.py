@@ -155,7 +155,9 @@ class ZoomableImageView(pg.GraphicsView):
         self.drag_start_rect = None
         self.crop_rect_item: InteractiveCropRect | None = None
 
-    def set_images(self, arrays: list[np.ndarray], opacities: list[float] | None = None):
+    def set_images(
+        self, arrays: list[np.ndarray], opacities: list[float] | None = None
+    ):
         """Set RGBA numpy arrays as image layers."""
         for item in self.image_items:
             self._vb.removeItem(item)
@@ -483,7 +485,9 @@ class CropDialog(QDialog):
             else:
                 img_u8 = to_uint8(img)
             rgba = colorize_grayscale(img_u8, color)
-            self.image_view.image_items[i].setImage(rgba, autoLevels=False, levels=[0, 255])
+            self.image_view.image_items[i].setImage(
+                rgba, autoLevels=False, levels=[0, 255]
+            )
 
     def _on_auto_contrast_changed(self):
         """Swap image data with/without contrast — no scene or zoom changes."""

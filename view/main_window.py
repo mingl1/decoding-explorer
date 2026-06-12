@@ -31,6 +31,7 @@ from model.file_item import FileItem
 from model.status_enum import FileStatus
 from utils import find_min_std_partition, is_dark_mode
 from view.alignment_preview_dialog import AlignmentPreviewDialog
+from view.crop_anchor_dialog import CropAnchorDialog
 from view.crop_dialog import CropDialog
 from view.cycle_assignment_dialog import CycleAssignmentDialog
 from view.decoding_workflow_panel import DecodingWorkflowPanel
@@ -157,7 +158,9 @@ class MainWindow(QMainWindow):
         self.metadata_view.manually_align_sig.connect(self.start_manual_alignment)
         self.metadata_view.crop_selected_sig.connect(self.start_crop)
         self.metadata_view.crop_beads_sig.connect(self.start_bead_crop)
+        self.metadata_view.find_crop_anchor_sig.connect(self.start_crop_anchor)
         self.metadata_vm.inspect_beads_sig.connect(self.vm.inspect_beads)
+
         self.metadata_view.protein_files_uploaded.connect(
             self.metadata_vm.set_protein_files
         )
@@ -601,6 +604,7 @@ class MainWindow(QMainWindow):
     def handle_table_emptied(self):
         """Hide metadata view when no files remain in the table."""
         self.metadata_view.hide()
+        self.metadata_view.reset_cycle_assignment_button()
 
     def handle_dropped_paths(self, paths: List[str]):
         dirs = []
@@ -643,7 +647,14 @@ class MainWindow(QMainWindow):
             self.cancel_button.clicked.disconnect()
             self.cancel_button.clicked.connect(self.cancel_shading)
             self.vm.selected_files = selected_files
-            self.vm.apply_shading(selected_files)
+            shading_files = []
+            reference_file = self.vm.reference_item
+            if reference_file:
+                shading_files.append(reference_file)
+            for f in selected_files:
+                if reference_file is None or f.path != reference_file.path:
+                    shading_files.append(f)
+            self.vm.apply_shading(shading_files)
         else:
             self.progress_bar.setVisible(True)
             self.status_label.setVisible(True)
@@ -991,6 +1002,66 @@ class MainWindow(QMainWindow):
             self,
             "Bead Crop Applied",
             f"Beads: {total_before} → {total_after} (cropped {total_before - total_after})",
+        )
+
+    def start_crop_anchor(self):
+        assignments = self._get_required_dataset_assignments()
+        if assignments is None:
+            return
+
+        reference_item = assignments[0]
+        ref_image = self.vm._get_brightfield_image(reference_item, use_original=True)
+        if ref_image is None:
+            self.show_error("Could not load reference brightfield image.")
+            return
+
+        moving_files = []
+        for cycle_num, file_item in sorted(assignments.items(), key=lambda x: x[0]):
+            if cycle_num != 0:
+                img = self.vm._get_brightfield_image(file_item, use_original=True)
+                if img is not None:
+                    moving_files.append(
+                        {
+                            "label": f"Cycle {cycle_num + 1}",
+                            "file_item": file_item,
+                            "image": img,
+                        }
+                    )
+
+        protein_file = self.vm.get_dataset_protein_file()
+        if protein_file is not None:
+            img = self.vm._get_brightfield_image(protein_file, use_original=True)
+            if img is not None:
+                moving_files.append(
+                    {"label": "Protein", "file_item": protein_file, "image": img}
+                )
+
+        if not moving_files:
+            self.show_error("No moving images available for crop anchoring.")
+            return
+
+        dialog = CropAnchorDialog(
+            ref_image, moving_files, ref_shape=ref_image.shape, parent=self
+        )
+        dialog.transform_ready_sig.connect(
+            lambda file_item, payload: self._apply_crop_anchor(
+                file_item, payload["T"], payload["crop_w"], payload["crop_h"]
+            )
+        )
+        dialog.exec()
+
+    def _apply_crop_anchor(self, file_item, T, crop_w, crop_h):
+        self.vm.apply_crop_with_transform(file_item, T, crop_w, crop_h)
+        self._refresh_metadata_for_dataset()
+        reference_item = self.vm.reference_item
+        if reference_item is not None:
+            self.calculate_statistics_for_file(
+                reference_item, self.metadata_vm.protein_df
+            )
+        QMessageBox.information(
+            self,
+            "Crop Anchor Applied",
+            f"Successfully aligned and cropped {os.path.basename(file_item.path)}.",
         )
 
     def _refresh_metadata_for_dataset(self):

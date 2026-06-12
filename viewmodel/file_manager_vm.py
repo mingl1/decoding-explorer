@@ -4,6 +4,7 @@ import threading
 from functools import reduce
 from typing import List, Optional
 
+import cv2
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
@@ -14,7 +15,7 @@ import image_processing
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 from view.alignment_preview_dialog import AlignmentPreviewDialog
-from viewmodel.file_io import load_and_constrain_image, load_image
+from viewmodel.file_io import load_image
 from viewmodel.tasks import (
     bead_generation_task,
     bead_upload_task,
@@ -427,8 +428,11 @@ class FileManagerVM(QObject):
         stop = threading.Event()
         self.manual_align_preview_thread = WorkerThread(
             brightfield_batch_loading_task(
-                ordered_files, self.files, self._extract_brightfield_image,
-                materialize=True, stop=stop,
+                ordered_files,
+                self.files,
+                self._extract_brightfield_image,
+                materialize=True,
+                stop=stop,
             ),
             stop,
         )
@@ -496,6 +500,8 @@ class FileManagerVM(QObject):
             # Update FileItem
             my_f.working_image = cropped
             my_f.shape = cropped.shape
+            my_f.status = FileStatus.CROPPED
+            my_f.metadata.prefix = FileStatus.CROPPED.name.lower()
 
             # Cap max_size to the new (smaller) cropped dimensions
             cropped_min_side = min(cropped.shape[-2], cropped.shape[-1])
@@ -510,6 +516,49 @@ class FileManagerVM(QObject):
         if to_be_updated:
             self.file_information_update.emit(to_be_updated)
 
+    def apply_crop_with_transform(
+        self, file_item: FileItem, transform: np.ndarray, crop_w: int, crop_h: int
+    ):
+        my_f = self.files.get(file_item.path)
+        if not my_f:
+            return
+
+        full_image = np.array(load_image(my_f))
+
+        T = np.asarray(transform, dtype=np.float64).reshape(2, 3)
+        A = T[:, :2]
+        t = T[:, 2]
+        inv_a = np.linalg.inv(A)
+        M = np.hstack([inv_a, (-inv_a @ t).reshape(2, 1)]).astype(np.float32)
+
+        crop_w = int(round(crop_w))
+        crop_h = int(round(crop_h))
+
+        if len(full_image.shape) == 2:
+            warped = cv2.warpAffine(
+                full_image, M, (crop_w, crop_h), flags=cv2.INTER_LINEAR
+            )
+        else:
+            num_channels = full_image.shape[0]
+            warped = np.zeros((num_channels, crop_h, crop_w), dtype=full_image.dtype)
+            for ch in range(num_channels):
+                warped[ch] = cv2.warpAffine(
+                    full_image[ch], M, (crop_w, crop_h), flags=cv2.INTER_LINEAR
+                )
+
+        my_f.working_image = warped
+        my_f.shape = warped.shape
+        my_f.status = FileStatus.CROPPED
+        my_f.metadata.prefix = FileStatus.CROPPED.name.lower()
+
+        cropped_min_side = min(warped.shape[-2], warped.shape[-1])
+        if int(my_f.metadata.max_size) > cropped_min_side:
+            my_f.metadata.max_size = cropped_min_side
+
+        my_f.metadata.crop_bounds = (0, 0, crop_w, crop_h)
+
+        self.file_information_update.emit([my_f])
+
     # appy metadata changes to selected files
     def apply_metadata(self, metadata_changes: dict, selected_files: list[FileItem]):
         logger.debug(f"Applying metadata changes: {metadata_changes}")
@@ -518,7 +567,25 @@ class FileManagerVM(QObject):
         # min of width and height for all files selected
         max_viable_size = reduce(
             lambda x, y: min(x, y),
-            [min(int(f.shape[-2]), int(f.shape[-1])) for f in selected_files],
+            [
+                min(
+                    int(
+                        (
+                            f.working_image.shape
+                            if f.working_image is not None
+                            else f.original_shape
+                        )[-2]
+                    ),
+                    int(
+                        (
+                            f.working_image.shape
+                            if f.working_image is not None
+                            else f.original_shape
+                        )[-1]
+                    ),
+                )
+                for f in selected_files
+            ],
             int(metadata_changes.get("max_size", float("inf"))),
         )
         corrected_values = {}
@@ -951,7 +1018,9 @@ class FileManagerVM(QObject):
     ):
         stop = threading.Event()
         self.upload_thread = WorkerThread(
-            bead_upload_task(csv_path, reference_file, cycle_assignments, self.files, stop),
+            bead_upload_task(
+                csv_path, reference_file, cycle_assignments, self.files, stop
+            ),
             stop,
         )
         self.upload_thread.progress.connect(self.bead_upload_progress.emit)

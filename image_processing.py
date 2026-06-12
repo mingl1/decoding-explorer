@@ -12,8 +12,7 @@ import cv2
 # import diplib as dip
 import numpy as np
 import pandas as pd
-from scipy import ndimage
-from scipy import ndimage as ndi
+from scipy import ndimage, ndimage as ndi
 from skimage import filters, img_as_float, img_as_uint, measure
 from skimage.exposure import match_histograms
 from skimage.feature import peak_local_max

@@ -1,6 +1,6 @@
 import json
 
-from viewmodel.eta_profile_store import EtaProfileStore, PROFILE_VERSION
+from viewmodel.eta_profile_store import PROFILE_VERSION, EtaProfileStore
 
 
 def test_round_trip_record_and_load(tmp_path):
@@ -49,7 +49,9 @@ def test_per_mode_isolation(tmp_path):
 def test_version_mismatch_resets_to_defaults(tmp_path):
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(
-        json.dumps({"version": 1, "modes": {"legacy": {"per_pixel_sq_seconds": {"x": 9.9}}}}),
+        json.dumps(
+            {"version": 1, "modes": {"legacy": {"per_pixel_sq_seconds": {"x": 9.9}}}}
+        ),
         encoding="utf-8",
     )
     store = EtaProfileStore(path=str(profile_path))

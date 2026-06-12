@@ -1,14 +1,12 @@
-import os
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import cv2
-import image_processing
 import numpy as np
-import pytest
+from PyQt6.QtCore import Qt
+
+import image_processing
 from model.file_item import FileItem
 from model.status_enum import FileStatus
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QDialog
 
 
 class TestMainWindow:
@@ -26,9 +24,7 @@ class TestMainWindow:
         selected = window.get_selected_files()
         assert isinstance(selected, list)
 
-    def test_update_file_list_adds_items(
-        self, mock_main_window, mock_file_items
-    ):
+    def test_update_file_list_adds_items(self, mock_main_window, mock_file_items):
         """update_file_list should add items to the table."""
         window = mock_main_window
 
@@ -36,11 +32,11 @@ class TestMainWindow:
 
         window.update_file_list(mock_file_items)
 
-        assert window.file_table_widget.rowCount() == initial_count + len(mock_file_items)
+        assert window.file_table_widget.rowCount() == initial_count + len(
+            mock_file_items
+        )
 
-    def test_update_files_view_updates_status(
-        self, mock_main_window, mock_file_item
-    ):
+    def test_update_files_view_updates_status(self, mock_main_window, mock_file_item):
         """update_files_view should update the status display."""
         window = mock_main_window
 
@@ -50,7 +46,7 @@ class TestMainWindow:
             path=mock_file_item.path,
             status=FileStatus.ALIGNED,
             shape=(1, 512, 512),
-            dtype="uint16"
+            dtype="uint16",
         )
         window.update_files_view([updated_item])
 
@@ -67,64 +63,59 @@ class TestMainWindow:
         window.file_table_widget.selectRow(0)
         window.handle_selection_change()
 
-    def test_handle_dropped_paths_loads_folder(
-        self, mock_main_window, mocker
-    ):
+    def test_handle_dropped_paths_loads_folder(self, mock_main_window, mocker):
         """handle_dropped_paths with folder should call load_folder."""
         window = mock_main_window
 
-        with patch('os.path.isdir', return_value=True), \
-             patch.object(window.vm, 'load_folder') as mock_load_folder:
+        with (
+            patch("os.path.isdir", return_value=True),
+            patch.object(window.vm, "load_folder") as mock_load_folder,
+        ):
             window.handle_dropped_paths(["/test/folder"])
 
             mock_load_folder.assert_called_once_with(["/test/folder"])
 
-    def test_handle_dropped_paths_loads_file(
-        self, mock_main_window, mocker
-    ):
+    def test_handle_dropped_paths_loads_file(self, mock_main_window, mocker):
         """handle_dropped_paths with file should call load_file."""
         window = mock_main_window
 
-        with patch('os.path.isfile', return_value=True), \
-             patch.object(window.vm, 'load_file') as mock_load_file:
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch.object(window.vm, "load_file") as mock_load_file,
+        ):
             window.handle_dropped_paths(["/test/file.tif"])
 
             mock_load_file.assert_called_once_with(["/test/file.tif"])
 
-    def test_start_alignment_shows_progress(
-        self, mock_main_window, mocker
-    ):
+    def test_start_alignment_shows_progress(self, mock_main_window, mocker):
         """start_alignment sets up UI for alignment progress."""
         window = mock_main_window
 
         # Verify the method exists and is callable
-        assert hasattr(window, 'start_alignment')
+        assert hasattr(window, "start_alignment")
         assert callable(window.start_alignment)
 
-    def test_start_alignment_no_reference(
-        self, mock_main_window, mocker
-    ):
+    def test_start_alignment_no_reference(self, mock_main_window, mocker):
         """start_alignment without assignment should show assignment error."""
         window = mock_main_window
 
         # Add files to VM
         from model.file_item import FileItem
+
         for i in range(3):
             item = FileItem(path=f"/test/file{i}.tif")
             window.vm.files[item.path] = item
 
         # Mock get_selected_files to return files
         files = [window.vm.files[f"/test/file{i}.tif"] for i in range(3)]
-        mocker.patch.object(window, 'get_selected_files', return_value=files)
+        mocker.patch.object(window, "get_selected_files", return_value=files)
 
-        with patch.object(window, 'show_error') as mock_error:
+        with patch.object(window, "show_error") as mock_error:
             window.start_alignment()
 
             mock_error.assert_called_once_with("Assign cycles to continue.")
 
-    def test_start_alignment_no_files_selected(
-        self, mock_main_window, mocker
-    ):
+    def test_start_alignment_no_files_selected(self, mock_main_window, mocker):
         """start_alignment without dataset assignment should show assignment error."""
         window = mock_main_window
 
@@ -132,28 +123,27 @@ class TestMainWindow:
         window.vm.reference_item = reference_item
         window.vm.files[reference_item.path] = reference_item
 
-        with patch.object(window, 'show_error') as mock_error:
+        with patch.object(window, "show_error") as mock_error:
             window.start_alignment()
 
             mock_error.assert_called_once_with("Assign cycles to continue.")
 
-    def test_start_bead_generation_no_reference(
-        self, mock_main_window, mocker
-    ):
+    def test_start_bead_generation_no_reference(self, mock_main_window, mocker):
         """start_bead_generation without assignment should show assignment error."""
         window = mock_main_window
 
         # Add files to VM
         from model.file_item import FileItem
+
         for i in range(3):
             item = FileItem(path=f"/test/file{i}.tif")
             window.vm.files[item.path] = item
 
         # Mock get_selected_files to return files
         files = [window.vm.files[f"/test/file{i}.tif"] for i in range(3)]
-        mocker.patch.object(window, 'get_selected_files', return_value=files)
+        mocker.patch.object(window, "get_selected_files", return_value=files)
 
-        with patch.object(window, 'show_error') as mock_error:
+        with patch.object(window, "show_error") as mock_error:
             window.start_bead_generation()
 
             mock_error.assert_called_once_with("Assign cycles to continue.")
@@ -390,7 +380,9 @@ class TestMainWindow:
             3: files[2],
         }
         dialog_instance.get_protein_file.return_value = None
-        mocker.patch("view.main_window.CycleAssignmentDialog", return_value=dialog_instance)
+        mocker.patch(
+            "view.main_window.CycleAssignmentDialog", return_value=dialog_instance
+        )
 
         window.assign_cycles()
 
@@ -418,7 +410,9 @@ class TestMainWindow:
             2: files[1],
         }
         dialog_instance.get_protein_file.return_value = files[2]
-        mocker.patch("view.main_window.CycleAssignmentDialog", return_value=dialog_instance)
+        mocker.patch(
+            "view.main_window.CycleAssignmentDialog", return_value=dialog_instance
+        )
 
         window.assign_cycles()
 
@@ -441,6 +435,7 @@ class TestMainWindow:
 
         with patch.object(window, "start_export_flow") as mock_export:
             import pandas as pd
+
             beads = pd.DataFrame({"x": [1, 2, 3]})
             window.on_beads_generated(beads)
             mock_export.assert_not_called()
@@ -464,11 +459,23 @@ class TestMainWindow:
 
         stats_df = pd.DataFrame(
             [
-                {"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0},
-                {"ratio": 1.05, "valid_pct": 15.0, "invalid_pct": 15.0, "filtered_pct": 70.0},
+                {
+                    "ratio": 1.0,
+                    "valid_pct": 10.0,
+                    "invalid_pct": 20.0,
+                    "filtered_pct": 70.0,
+                },
+                {
+                    "ratio": 1.05,
+                    "valid_pct": 15.0,
+                    "invalid_pct": 15.0,
+                    "filtered_pct": 70.0,
+                },
             ]
         )
-        window.metadata_view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=1.0)
+        window.metadata_view.set_ensemble_sweep_stats(
+            stats_df, selected_ratio=1.05, applied_ratio=1.0
+        )
 
         dialog_instance = MagicMock()
         dialog_instance.exec.return_value = True
@@ -477,18 +484,23 @@ class TestMainWindow:
         dialog_instance.get_beads_format.return_value = "csv"
 
         with (
-            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
-            patch("view.main_window.QFileDialog.getExistingDirectory", return_value="/tmp/export"),
+            patch(
+                "view.main_window.ExportSelectionDialog", return_value=dialog_instance
+            ),
+            patch(
+                "view.main_window.QFileDialog.getExistingDirectory",
+                return_value="/tmp/export",
+            ),
             patch("pandas.DataFrame.to_csv") as mock_to_csv,
             patch.object(window.vm, "apply_ensemble_ratio") as mock_apply,
         ):
             window.start_export_flow()
             mock_apply.assert_called_once_with(mock_file_item, 1.05)
-            mock_to_csv.assert_called_once_with("/tmp/export/beads_result.csv", index=False)
+            mock_to_csv.assert_called_once_with(
+                "/tmp/export/beads_result.csv", index=False
+            )
 
-    def test_start_export_flow_forwards_selected_tiff_targets(
-        self, mock_main_window
-    ):
+    def test_start_export_flow_forwards_selected_tiff_targets(self, mock_main_window):
         window = mock_main_window
         reference_item = FileItem(path="/tmp/ref.tif")
         cycle_item = FileItem(path="/tmp/cycle2.tif")
@@ -503,16 +515,26 @@ class TestMainWindow:
 
         dialog_instance = MagicMock()
         dialog_instance.exec.return_value = True
-        dialog_instance.get_selected_tiff_files.return_value = [cycle_item, protein_item]
+        dialog_instance.get_selected_tiff_files.return_value = [
+            cycle_item,
+            protein_item,
+        ]
         dialog_instance.should_export_beads.return_value = False
 
         with (
-            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
-            patch("view.main_window.QFileDialog.getExistingDirectory", return_value="/tmp/export"),
+            patch(
+                "view.main_window.ExportSelectionDialog", return_value=dialog_instance
+            ),
+            patch(
+                "view.main_window.QFileDialog.getExistingDirectory",
+                return_value="/tmp/export",
+            ),
             patch.object(window.vm, "export_files") as mock_export,
         ):
             window.start_export_flow()
-            mock_export.assert_called_once_with("/tmp/export", [cycle_item, protein_item])
+            mock_export.assert_called_once_with(
+                "/tmp/export", [cycle_item, protein_item]
+            )
 
     def test_start_export_flow_cancelled_dialog_does_not_export(
         self, mock_main_window, mock_file_item
@@ -527,7 +549,9 @@ class TestMainWindow:
         dialog_instance.exec.return_value = False
 
         with (
-            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
+            patch(
+                "view.main_window.ExportSelectionDialog", return_value=dialog_instance
+            ),
             patch("view.main_window.QFileDialog.getExistingDirectory") as mock_folder,
             patch.object(window.vm, "export_files") as mock_export,
         ):
@@ -550,7 +574,9 @@ class TestMainWindow:
         dialog_instance.should_export_beads.return_value = False
 
         with (
-            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
+            patch(
+                "view.main_window.ExportSelectionDialog", return_value=dialog_instance
+            ),
             patch("view.main_window.QFileDialog.getExistingDirectory", return_value=""),
             patch.object(window.vm, "export_files") as mock_export,
         ):
@@ -572,7 +598,9 @@ class TestMainWindow:
         dialog_instance.should_export_beads.return_value = False
 
         with (
-            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
+            patch(
+                "view.main_window.ExportSelectionDialog", return_value=dialog_instance
+            ),
             patch("view.main_window.QFileDialog.getExistingDirectory") as mock_folder,
             patch.object(window, "show_error") as mock_error,
         ):
@@ -598,7 +626,9 @@ class TestMainWindow:
         dialog_instance = MagicMock()
         dialog_instance.exec.return_value = False
 
-        with patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance) as mock_dialog:
+        with patch(
+            "view.main_window.ExportSelectionDialog", return_value=dialog_instance
+        ) as mock_dialog:
             window.start_export_flow()
 
         options = mock_dialog.call_args.kwargs["tiff_options"]
@@ -622,7 +652,9 @@ class TestMainWindow:
         dialog_instance = MagicMock()
         dialog_instance.exec.return_value = False
 
-        with patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance) as mock_dialog:
+        with patch(
+            "view.main_window.ExportSelectionDialog", return_value=dialog_instance
+        ) as mock_dialog:
             window.start_export_flow()
 
         options = mock_dialog.call_args.kwargs["tiff_options"]
@@ -636,11 +668,16 @@ class TestMainWindow:
         window = mock_main_window
         import pandas as pd
 
-        mock_file_item.beads = pd.DataFrame({"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]})
+        mock_file_item.beads = pd.DataFrame(
+            {"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]}
+        )
         window.vm.reference_item = mock_file_item
         window.vm.files[mock_file_item.path] = mock_file_item
 
-        with patch.object(window.vm, "remove_ensemble_applied_changes") as mock_remove, patch.object(window, "calculate_statistics_for_file"):
+        with (
+            patch.object(window.vm, "remove_ensemble_applied_changes") as mock_remove,
+            patch.object(window, "calculate_statistics_for_file"),
+        ):
             window.remove_ensemble_applied_changes()
             mock_remove.assert_called_once_with(mock_file_item)
 
@@ -650,14 +687,19 @@ class TestMainWindow:
         window = mock_main_window
         import pandas as pd
 
-        mock_file_item.beads = pd.DataFrame({"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]})
+        mock_file_item.beads = pd.DataFrame(
+            {"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]}
+        )
         mock_file_item.pre_ensemble_beads = mock_file_item.beads.copy()
         mock_file_item.ensemble_cache = {"dummy": True}
         mock_file_item.ensemble_ratio_applied = 1.2
         window.vm.reference_item = mock_file_item
         window.vm.files[mock_file_item.path] = mock_file_item
 
-        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "calculate_statistics_for_file"):
+        with (
+            patch.object(window.vm, "apply_ensemble_ratio") as mock_apply,
+            patch.object(window, "calculate_statistics_for_file"),
+        ):
             window.lower_invalid_ratio()
 
         mock_apply.assert_called_once_with(mock_file_item, 1.25)
@@ -668,7 +710,9 @@ class TestMainWindow:
         window = mock_main_window
         import pandas as pd
 
-        mock_file_item.beads = pd.DataFrame({"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]})
+        mock_file_item.beads = pd.DataFrame(
+            {"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]}
+        )
         mock_file_item.pre_ensemble_beads = mock_file_item.beads.copy()
         mock_file_item.ensemble_cache = {"dummy": True}
         mock_file_item.ensemble_ratio_applied = None
@@ -677,13 +721,28 @@ class TestMainWindow:
 
         stats_df = pd.DataFrame(
             [
-                {"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0},
-                {"ratio": 1.05, "valid_pct": 15.0, "invalid_pct": 15.0, "filtered_pct": 70.0},
+                {
+                    "ratio": 1.0,
+                    "valid_pct": 10.0,
+                    "invalid_pct": 20.0,
+                    "filtered_pct": 70.0,
+                },
+                {
+                    "ratio": 1.05,
+                    "valid_pct": 15.0,
+                    "invalid_pct": 15.0,
+                    "filtered_pct": 70.0,
+                },
             ]
         )
-        window.metadata_view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.05, applied_ratio=None)
+        window.metadata_view.set_ensemble_sweep_stats(
+            stats_df, selected_ratio=1.05, applied_ratio=None
+        )
 
-        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "calculate_statistics_for_file"):
+        with (
+            patch.object(window.vm, "apply_ensemble_ratio") as mock_apply,
+            patch.object(window, "calculate_statistics_for_file"),
+        ):
             window.lower_filter_ratio()
 
         mock_apply.assert_called_once_with(mock_file_item, 1.0)
@@ -694,14 +753,19 @@ class TestMainWindow:
         window = mock_main_window
         import pandas as pd
 
-        mock_file_item.beads = pd.DataFrame({"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]})
+        mock_file_item.beads = pd.DataFrame(
+            {"x": [1.0], "y": [2.0], "cy0": [1], "cy1": [2]}
+        )
         mock_file_item.pre_ensemble_beads = mock_file_item.beads.copy()
         mock_file_item.ensemble_cache = {"dummy": True}
         mock_file_item.ensemble_ratio_applied = 1.5
         window.vm.reference_item = mock_file_item
         window.vm.files[mock_file_item.path] = mock_file_item
 
-        with patch.object(window.vm, "apply_ensemble_ratio") as mock_apply, patch.object(window, "calculate_statistics_for_file"):
+        with (
+            patch.object(window.vm, "apply_ensemble_ratio") as mock_apply,
+            patch.object(window, "calculate_statistics_for_file"),
+        ):
             window.lower_invalid_ratio()
 
         mock_apply.assert_called_once_with(mock_file_item, 1.55)
@@ -726,11 +790,23 @@ class TestMainWindow:
 
         stats_df = pd.DataFrame(
             [
-                {"ratio": 1.0, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0},
-                {"ratio": 1.5, "valid_pct": 15.0, "invalid_pct": 15.0, "filtered_pct": 70.0},
+                {
+                    "ratio": 1.0,
+                    "valid_pct": 10.0,
+                    "invalid_pct": 20.0,
+                    "filtered_pct": 70.0,
+                },
+                {
+                    "ratio": 1.5,
+                    "valid_pct": 15.0,
+                    "invalid_pct": 15.0,
+                    "filtered_pct": 70.0,
+                },
             ]
         )
-        window.metadata_view.set_ensemble_sweep_stats(stats_df, selected_ratio=1.55, applied_ratio=1.55)
+        window.metadata_view.set_ensemble_sweep_stats(
+            stats_df, selected_ratio=1.55, applied_ratio=1.55
+        )
 
         dialog_instance = MagicMock()
         dialog_instance.exec.return_value = True
@@ -739,8 +815,13 @@ class TestMainWindow:
         dialog_instance.get_beads_format.return_value = "csv"
 
         with (
-            patch("view.main_window.ExportSelectionDialog", return_value=dialog_instance),
-            patch("view.main_window.QFileDialog.getExistingDirectory", return_value="/tmp/export"),
+            patch(
+                "view.main_window.ExportSelectionDialog", return_value=dialog_instance
+            ),
+            patch(
+                "view.main_window.QFileDialog.getExistingDirectory",
+                return_value="/tmp/export",
+            ),
             patch("pandas.DataFrame.to_csv") as mock_to_csv,
             patch.object(window.vm, "apply_ensemble_ratio") as mock_apply,
         ):
@@ -758,7 +839,7 @@ class TestMainWindow:
         window.file_table_widget.selectRow(0)
 
         new_metadata = {"max_size": 1000}
-        with patch.object(window.vm, 'apply_metadata') as mock_apply:
+        with patch.object(window.vm, "apply_metadata") as mock_apply:
             window.handle_metadata_applied(new_metadata)
             mock_apply.assert_called_once_with(new_metadata, [mock_file_item])
 
@@ -836,7 +917,9 @@ class TestMainWindow:
                 break
 
         assert protein_row is not None
-        assert window.file_table_widget.item(protein_row, 2).text() == "C=1, Y=256, X=256"
+        assert (
+            window.file_table_widget.item(protein_row, 2).text() == "C=1, Y=256, X=256"
+        )
 
     def test_max_size_autosave_updates_assigned_protein_tiff_shape(
         self, mock_main_window
@@ -889,7 +972,9 @@ class TestMainWindow:
                 break
 
         assert protein_row is not None
-        assert window.file_table_widget.item(protein_row, 2).text() == "C=1, Y=256, X=256"
+        assert (
+            window.file_table_widget.item(protein_row, 2).text() == "C=1, Y=256, X=256"
+        )
 
     def test_minimum_size_set(self, mock_main_window):
         """MainWindow should have minimum size set."""
@@ -911,7 +996,9 @@ class TestMainWindow:
 
         corrected_values = {"max_size": 512}
 
-        with patch.object(window.metadata_vm, 'update_corrected_metadata') as mock_update:
+        with patch.object(
+            window.metadata_vm, "update_corrected_metadata"
+        ) as mock_update:
             window.handle_metadata_corrected(corrected_values)
 
             mock_update.assert_called_once_with("max_size", 512)
@@ -927,10 +1014,26 @@ class TestMainWindow:
 
         new_metadata = {"max_size": 1000}
 
-        with patch.object(window.vm, 'apply_metadata') as mock_apply:
+        with patch.object(window.vm, "apply_metadata") as mock_apply:
             window.handle_metadata_applied(new_metadata)
 
             mock_apply.assert_called_once()
             args, kwargs = mock_apply.call_args
             assert args[0] == new_metadata
             assert len(args[1]) == 1
+
+    def test_assign_cycles_button_text(self, mock_main_window):
+        """assign_cycles_btn text should update correctly based on readiness and reset on empty table."""
+        window = mock_main_window
+        assert window.metadata_view.assign_cycles_btn.text() == "Assign Cycles"
+
+        window.on_dataset_assignment_changed(True, "Assigned")
+        assert window.metadata_view.assign_cycles_btn.text() == "Re-assign Cycles"
+
+        window.on_dataset_assignment_changed(
+            False, "File list changed. Reassign cycles."
+        )
+        assert window.metadata_view.assign_cycles_btn.text() == "Re-assign Cycles"
+
+        window.handle_table_emptied()
+        assert window.metadata_view.assign_cycles_btn.text() == "Assign Cycles"

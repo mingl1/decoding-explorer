@@ -100,22 +100,31 @@ if selected == "(overview)":
             else:
                 v_diff = i_diff = total_gain = None
 
-            rows.append({
-                "Run": s["name"],
-                "Total beads": s["total_beads"],
-                "Valid %": fmt_valid(valid_pct, v_diff),
-                "Invalid %": fmt_invalid(inv_pct, i_diff),
-                "Filtered %": f"{s['filtered_pct']}%",
-                "Total Gain %": total_gain,
-            })
+            rows.append(
+                {
+                    "Run": s["name"],
+                    "Total beads": s["total_beads"],
+                    "Valid %": fmt_valid(valid_pct, v_diff),
+                    "Invalid %": fmt_invalid(inv_pct, i_diff),
+                    "Filtered %": f"{s['filtered_pct']}%",
+                    "Total Gain %": total_gain,
+                }
+            )
 
         df = pd.DataFrame(rows).set_index("Run")
         styled = (
-            df.style
-            .map(color_valid, subset=["Valid %"])
+            df.style.map(color_valid, subset=["Valid %"])
             .map(color_invalid, subset=["Invalid %"])
             .map(color_gain, subset=["Total Gain %"])
-            .format({"Total Gain %": lambda v: f"+{v}%" if isinstance(v, float) and v > 0 else (f"{v}%" if isinstance(v, float) else "—")})
+            .format(
+                {
+                    "Total Gain %": lambda v: (
+                        f"+{v}%"
+                        if isinstance(v, float) and v > 0
+                        else (f"{v}%" if isinstance(v, float) else "—")
+                    )
+                }
+            )
         )
         st.dataframe(styled, use_container_width=True)
 
@@ -150,11 +159,14 @@ else:
         st.subheader(f"Margin ratio sweep  *(selected: {selected_ratio}x)*")
         rows = [
             {
-                "Ratio": f"{v['min_margin_ratio']}x" + (" ✓" if v["min_margin_ratio"] == selected_ratio else ""),
+                "Ratio": f"{v['min_margin_ratio']}x"
+                + (" ✓" if v["min_margin_ratio"] == selected_ratio else ""),
                 "Valid %": v["valid_pct"],
                 "Invalid %": v["invalid_pct"],
                 "Filtered %": v["filtered_pct"],
-                "Score (V-I)": v.get("score", round(v["valid_pct"] - v["invalid_pct"], 2)),
+                "Score (V-I)": v.get(
+                    "score", round(v["valid_pct"] - v["invalid_pct"], 2)
+                ),
             }
             for v in sweep_data["sweep"].values()
         ]
@@ -163,9 +175,13 @@ else:
 
     if stats["protein_counts"]:
         st.subheader("Protein counts")
-        protein_df = pd.DataFrame(
-            list(stats["protein_counts"].items()), columns=["Protein", "Count"]
-        ).set_index("Protein").sort_values("Count", ascending=False)
+        protein_df = (
+            pd.DataFrame(
+                list(stats["protein_counts"].items()), columns=["Protein", "Count"]
+            )
+            .set_index("Protein")
+            .sort_values("Count", ascending=False)
+        )
         st.bar_chart(protein_df)
         st.dataframe(protein_df, use_container_width=True)
     else:

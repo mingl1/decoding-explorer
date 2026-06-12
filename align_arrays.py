@@ -1,8 +1,11 @@
 import heapq
+import logging
 import math
 import os
 import re
 import time
+
+logger = logging.getLogger(__name__)
 
 import astroalign as aa
 import cv2
@@ -105,7 +108,32 @@ class Register(QThread):
             self._fatal_error_message("Reference file not found")
             return
 
-        reference_image = load_image_from_path(ref_path, ref_file.shape, m)
+        if (
+            ref_file.working_image is not None
+            and len(ref_file.working_image.shape) == 3
+        ):
+            print(
+                f"Register: Loading reference image from 3D working_image (shape: {ref_file.working_image.shape}): {ref_path}"
+            )
+            reference_image = np.array(ref_file.working_image)[:, :m, :m]
+        else:
+            print(
+                f"Register: Loading reference image from disk (shape: {ref_file.shape}): {ref_path}"
+            )
+            reference_image = load_image_from_path(ref_path, ref_file.shape, m)
+            if (
+                ref_file.working_image is not None
+                and len(ref_file.working_image.shape) == 2
+            ):
+                print(
+                    f"Register: Overwriting reference channel {reference_tif_index} with 2D working_image: {ref_path}"
+                )
+                if len(reference_image.shape) < 3:
+                    reference_image = np.expand_dims(reference_image, axis=0)
+                reference_image[reference_tif_index] = ref_file.working_image[:m, :m]
+
+        if len(reference_image.shape) < 3:
+            reference_image = np.expand_dims(reference_image, axis=0)
 
         print("Reference channel is: ", reference_tif_index)
         print(f"Aligning {len(reference_image)} channels with max size {m}")
@@ -130,7 +158,31 @@ class Register(QThread):
                 )
                 continue
 
-            image = load_image_from_path(f.path, file_item.shape, m)
+            bf_channel = int(f.metadata.reference_channel)
+
+            if (
+                file_item.working_image is not None
+                and len(file_item.working_image.shape) == 3
+            ):
+                print(
+                    f"Register: Loading moving image {i + 1}/{total_files} from 3D working_image (shape: {file_item.working_image.shape}): {f.path}"
+                )
+                image = np.array(file_item.working_image)[:, :m, :m]
+            else:
+                print(
+                    f"Register: Loading moving image {i + 1}/{total_files} from disk (shape: {file_item.shape}): {f.path}"
+                )
+                image = load_image_from_path(f.path, file_item.shape, m)
+                if (
+                    file_item.working_image is not None
+                    and len(file_item.working_image.shape) == 2
+                ):
+                    print(
+                        f"Register: Overwriting reference channel {bf_channel} with 2D working_image: {f.path}"
+                    )
+                    if len(image.shape) < 3:
+                        image = np.expand_dims(image, axis=0)
+                    image[bf_channel] = file_item.working_image[:m, :m]
 
             if len(image.shape) < 3:
                 image = np.expand_dims(image, axis=0)
@@ -141,9 +193,6 @@ class Register(QThread):
                     f"File {os.path.basename(f.path)} reference channel {bf_channel} exceeds number of channels ({image.shape[0]}). Skipping alignment for this file."
                 )
                 continue
-
-            if file_item.working_image is not None:
-                image[bf_channel] = np.array(file_item.working_image)[:m, :m]
 
             self.tifs.append(
                 {

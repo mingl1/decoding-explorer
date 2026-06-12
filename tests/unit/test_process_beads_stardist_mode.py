@@ -323,7 +323,14 @@ def test_process_beads_stardist_forwards_custom_ensemble_sweep(monkeypatch):
             ),
             "ensemble_cache": {"cached": True},
             "ensemble_sweep_stats": pd.DataFrame(
-                [{"ratio": 1.2, "valid_pct": 10.0, "invalid_pct": 20.0, "filtered_pct": 70.0}]
+                [
+                    {
+                        "ratio": 1.2,
+                        "valid_pct": 10.0,
+                        "invalid_pct": 20.0,
+                        "filtered_pct": 70.0,
+                    }
+                ]
             ),
             "ensemble_ratio_applied": 1.2,
             "cycles": {"cy0": tifs[0][0], "cy1": tifs[1][0]},
@@ -361,7 +368,9 @@ def test_process_beads_stardist_bead_centers_uses_stardist_detector(monkeypatch)
     brightfield = np.zeros((40, 40), dtype=np.uint16)
 
     def fail_beadfinding(*args, **kwargs):
-        raise AssertionError("Legacy beadfinding should not run in center StarDist mode")
+        raise AssertionError(
+            "Legacy beadfinding should not run in center StarDist mode"
+        )
 
     def fake_load_custom_model(model_dir):
         return object()

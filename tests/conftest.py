@@ -25,17 +25,20 @@ def qapp():
 @pytest.fixture
 def tmp_tiff_path(tmp_path):
     """Create a temporary TIFF file for testing."""
+
     def _create_tiff(filename="test.tif", shape=(1, 512, 512), dtype=np.uint16):
         arr = np.random.randint(0, 65535, shape, dtype=dtype)
         path = tmp_path / filename
         tifffile.imwrite(str(path), arr)
         return str(path)
+
     return _create_tiff
 
 
 @pytest.fixture
 def tmp_tiff_folder(tmp_path):
     """Create a temporary folder with multiple TIFF files."""
+
     def _create_folder(num_files=3, filename_prefix="test"):
         folder = tmp_path / "tiffs"
         folder.mkdir()
@@ -43,6 +46,7 @@ def tmp_tiff_folder(tmp_path):
             arr = np.random.randint(0, 65535, (1, 512, 512), dtype=np.uint16)
             tifffile.imwrite(str(folder / f"{filename_prefix}_{i}.tif"), arr)
         return str(folder)
+
     return _create_folder
 
 
@@ -82,6 +86,7 @@ def mock_file_items(tmp_tiff_folder):
 def mock_file_manager_vm(qapp):
     """Create a FileManagerVM instance for testing."""
     from viewmodel.file_manager_vm import FileManagerVM
+
     return FileManagerVM()
 
 
@@ -89,6 +94,7 @@ def mock_file_manager_vm(qapp):
 def mock_main_window(qapp):
     """Create a MainWindow instance for testing."""
     from view.main_window import MainWindow
+
     window = MainWindow()
     yield window
     window.close()
@@ -103,8 +109,7 @@ def mock_file_table_widget(qapp, mock_file_manager_vm):
         pass
 
     widget = FileTableWidget(
-        file_dropped_callback=noop_callback,
-        vm=mock_file_manager_vm
+        file_dropped_callback=noop_callback, vm=mock_file_manager_vm
     )
     widget.show()
     yield widget
@@ -115,15 +120,16 @@ def mock_file_table_widget(qapp, mock_file_manager_vm):
 def mock_metadata_vm(qapp):
     """Create a MetadataVM instance for testing."""
     from viewmodel.metadata_vm import MetadataVM
+
     return MetadataVM()
 
 
 @pytest.fixture
 def mock_alignment_preview_dialog(qapp):
     """Create a mocked AlignmentPreviewDialog."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
-    with patch('viewmodel.file_manager_vm.AlignmentPreviewDialog') as mock_dialog:
+    with patch("viewmodel.file_manager_vm.AlignmentPreviewDialog") as mock_dialog:
         mock_instance = MagicMock()
         mock_instance.exec.return_value = True  # Simulate accepted dialog
         mock_dialog.return_value = mock_instance
@@ -133,8 +139,7 @@ def mock_alignment_preview_dialog(qapp):
 @pytest.fixture
 def mock_register_thread(qapp):
     """Create a mocked Register thread for alignment tests."""
-    from unittest.mock import MagicMock, patch
-    from PyQt6.QtCore import QThread, pyqtSignal
+    from PyQt6.QtCore import QThread
 
     mock_thread = MagicMock()
     mock_thread.progress = MagicMock(spec=QThread)
@@ -148,8 +153,7 @@ def mock_register_thread(qapp):
 @pytest.fixture
 def mock_bead_thread(qapp):
     """Create a mocked BeadGenerationThread for bead tests."""
-    from unittest.mock import MagicMock, patch
-    from PyQt6.QtCore import QThread, pyqtSignal
+    from PyQt6.QtCore import QThread
 
     mock_thread = MagicMock()
     mock_thread.bead_generated = MagicMock(spec=QThread)
@@ -166,19 +170,18 @@ def mock_tifffile():
     mock_dtype = np.uint16
     mock_array = np.zeros(mock_shape, dtype=mock_dtype)
 
-    with patch('tifffile.TiffFile') as mock_tiff, \
-         patch('tifffile.imread', return_value=mock_array), \
-         patch('tifffile.memmap', return_value=mock_array):
-
+    with (
+        patch("tifffile.TiffFile") as mock_tiff,
+        patch("tifffile.imread", return_value=mock_array),
+        patch("tifffile.memmap", return_value=mock_array),
+    ):
         mock_tiff.return_value.__enter__.return_value.pages[0].shape = mock_shape[1:]
         mock_tiff.return_value.__enter__.return_value.dtype = mock_dtype
-        mock_tiff.return_value.__enter__.return_value.pages.__len__ = lambda self: mock_shape[0]
+        mock_tiff.return_value.__enter__.return_value.pages.__len__ = lambda self: (
+            mock_shape[0]
+        )
 
-        yield {
-            'shape': mock_shape,
-            'dtype': mock_dtype,
-            'array': mock_array
-        }
+        yield {"shape": mock_shape, "dtype": mock_dtype, "array": mock_array}
 
 
 @pytest.fixture
@@ -186,18 +189,19 @@ def mock_qfiledialog(qapp):
     """Mock QFileDialog for testing file loading."""
     from unittest.mock import patch
 
-    with patch('PyQt6.QtWidgets.QFileDialog.getOpenFileName') as mock_open, \
-         patch('PyQt6.QtWidgets.QFileDialog.getExistingDirectory') as mock_dir, \
-         patch('PyQt6.QtWidgets.QFileDialog.getSaveFileName') as mock_save:
-
+    with (
+        patch("PyQt6.QtWidgets.QFileDialog.getOpenFileName") as mock_open,
+        patch("PyQt6.QtWidgets.QFileDialog.getExistingDirectory") as mock_dir,
+        patch("PyQt6.QtWidgets.QFileDialog.getSaveFileName") as mock_save,
+    ):
         mock_open.return_value = ("", "")  # Default: no file selected
         mock_dir.return_value = ""  # Default: no directory selected
         mock_save.return_value = ("", "")  # Default: no file selected
 
         yield {
-            'getOpenFileName': mock_open,
-            'getExistingDirectory': mock_dir,
-            'getSaveFileName': mock_save
+            "getOpenFileName": mock_open,
+            "getExistingDirectory": mock_dir,
+            "getSaveFileName": mock_save,
         }
 
 
@@ -205,11 +209,11 @@ def mock_qfiledialog(qapp):
 def sample_metadata():
     """Sample metadata for testing."""
     return {
-        'max_size': 512,
-        'reference_channel': 0,
-        'num_tiles': 1,
-        'overlap': 0.1,
-        'prefix': '',
+        "max_size": 512,
+        "reference_channel": 0,
+        "num_tiles": 1,
+        "overlap": 0.1,
+        "prefix": "",
     }
 
 

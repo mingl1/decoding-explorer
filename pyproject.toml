@@ -82,3 +82,21 @@ testpaths = [
 ]
 qt_api = "pyqt6"
 python_files = "test_*.py"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = []
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[dependency-groups]
+dev = [
+    "pytest-mock>=3.15.1",
+    "ruff>=0.15.17",
+]
+

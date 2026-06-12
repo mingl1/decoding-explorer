@@ -1,16 +1,15 @@
 import pytest
 
 from viewmodel.bead_eta_estimator import (
-    BeadEtaEstimator,
-    EtaRange,
-    LEGACY_STAGE_ORDER,
     LEGACY_PRIORS_PER_PIXEL_SQ,
+    LEGACY_STAGE_ORDER,
     STARDIST_PRIORS_PER_PIXEL_SQ,
     STARDIST_STAGE_ORDER,
     WARMUP_PROGRESS_GATE,
+    BeadEtaEstimator,
+    EtaRange,
 )
 from viewmodel.eta_profile_store import EtaProfileStore
-
 
 LEGACY_MESSAGES = {
     "load_images": "Loading images (1/1)",
@@ -65,8 +64,8 @@ def test_whole_run_scale_doubles_future_when_observed_doubles(tmp_path):
     est_baseline = make_estimator(tmp_path / "a.json")
     t0 = 1000.0
     est_baseline.update_from_message(LEGACY_MESSAGES["load_images"], now=t0)
-    expected_load = LEGACY_PRIORS_PER_PIXEL_SQ["load_images"] * (10000 ** 2)
-    expected_pre = LEGACY_PRIORS_PER_PIXEL_SQ["preprocess"] * (10000 ** 2)
+    expected_load = LEGACY_PRIORS_PER_PIXEL_SQ["load_images"] * (10000**2)
+    expected_pre = LEGACY_PRIORS_PER_PIXEL_SQ["preprocess"] * (10000**2)
     est_baseline.update_from_message(
         LEGACY_MESSAGES["preprocess"], now=t0 + expected_load
     )
@@ -117,7 +116,9 @@ def test_finish_success_persists_profile(tmp_path):
 
 
 def test_stardist_walkthrough_produces_monotonic_progress(tmp_path):
-    est = make_estimator(tmp_path / "stardist.json", mode="stardist", channels=6, max_size=10000)
+    est = make_estimator(
+        tmp_path / "stardist.json", mode="stardist", channels=6, max_size=10000
+    )
     t0 = 2000.0
     progresses = []
 
@@ -190,9 +191,7 @@ def test_stardist_total_eta_increases_after_set_workload_by_activation_prior():
     total_after = est_after._smoothed_total_eta
 
     expected_delta = (
-        channels
-        * STARDIST_PRIORS_PER_PIXEL_SQ["activation_regions"]
-        * (max_size ** 2)
+        channels * STARDIST_PRIORS_PER_PIXEL_SQ["activation_regions"] * (max_size**2)
     )
     observed_delta = float(total_after) - float(total_before)
     assert observed_delta == pytest.approx(expected_delta, rel=0.12)
@@ -210,7 +209,9 @@ def test_stardist_finish_failure_does_not_persist_profile(tmp_path):
 
 
 def test_rate_info_units_per_second_when_stage_has_units(tmp_path):
-    est = make_estimator(tmp_path / "p.json", mode="stardist", channels=6, max_size=10000)
+    est = make_estimator(
+        tmp_path / "p.json", mode="stardist", channels=6, max_size=10000
+    )
     t0 = 8000.0
     est.update_stage_units(
         "activation_regions",
@@ -238,18 +239,14 @@ def test_rate_info_falls_back_to_percent_per_second_without_units(tmp_path):
     est = make_estimator(tmp_path / "p.json")
     t0 = 9000.0
     est.update_from_message(LEGACY_MESSAGES["load_images"], now=t0)
-    expected_load = LEGACY_PRIORS_PER_PIXEL_SQ["load_images"] * (10000 ** 2)
-    expected_pre = LEGACY_PRIORS_PER_PIXEL_SQ["preprocess"] * (10000 ** 2)
-    est.update_from_message(
-        LEGACY_MESSAGES["preprocess"], now=t0 + expected_load
-    )
+    expected_load = LEGACY_PRIORS_PER_PIXEL_SQ["load_images"] * (10000**2)
+    expected_pre = LEGACY_PRIORS_PER_PIXEL_SQ["preprocess"] * (10000**2)
+    est.update_from_message(LEGACY_MESSAGES["preprocess"], now=t0 + expected_load)
     est.update_from_message(
         LEGACY_MESSAGES["initial_detection"],
         now=t0 + expected_load + expected_pre,
     )
-    _, _, _, rate_info = est.heartbeat(
-        now=t0 + expected_load + expected_pre + 4.0
-    )
+    _, _, _, rate_info = est.heartbeat(now=t0 + expected_load + expected_pre + 4.0)
     if rate_info is not None:
         assert rate_info.is_progress_pct
         assert rate_info.units_done is None
@@ -258,7 +255,9 @@ def test_rate_info_falls_back_to_percent_per_second_without_units(tmp_path):
 
 
 def test_rate_info_suppressed_below_min_elapsed(tmp_path):
-    est = make_estimator(tmp_path / "p.json", mode="stardist", channels=6, max_size=10000)
+    est = make_estimator(
+        tmp_path / "p.json", mode="stardist", channels=6, max_size=10000
+    )
     t0 = 10000.0
     _, _, _, rate_info = est.update_stage_units(
         "init_det_tiles", 1, 10, message=STARDIST_MESSAGES["init_det_tiles"], now=t0
@@ -267,14 +266,12 @@ def test_rate_info_suppressed_below_min_elapsed(tmp_path):
 
 
 def _walk_legacy_past_warmup(est, t0):
-    e_load = LEGACY_PRIORS_PER_PIXEL_SQ["load_images"] * (10000 ** 2)
-    e_pre = LEGACY_PRIORS_PER_PIXEL_SQ["preprocess"] * (10000 ** 2)
-    e_init = LEGACY_PRIORS_PER_PIXEL_SQ["initial_detection"] * (10000 ** 2)
-    e_dedup = LEGACY_PRIORS_PER_PIXEL_SQ["deduplicate"] * (10000 ** 2)
+    e_load = LEGACY_PRIORS_PER_PIXEL_SQ["load_images"] * (10000**2)
+    e_pre = LEGACY_PRIORS_PER_PIXEL_SQ["preprocess"] * (10000**2)
+    e_init = LEGACY_PRIORS_PER_PIXEL_SQ["initial_detection"] * (10000**2)
+    e_dedup = LEGACY_PRIORS_PER_PIXEL_SQ["deduplicate"] * (10000**2)
     est.update_from_message(LEGACY_MESSAGES["load_images"], now=t0)
-    est.update_from_message(
-        LEGACY_MESSAGES["preprocess"], now=t0 + e_load
-    )
+    est.update_from_message(LEGACY_MESSAGES["preprocess"], now=t0 + e_load)
     est.update_from_message(
         LEGACY_MESSAGES["initial_detection"], now=t0 + e_load + e_pre
     )
@@ -331,11 +328,9 @@ def test_eta_range_upper_bound_resets_after_stage_transition(tmp_path):
         if candidate_range is not None:
             range_before = candidate_range
     assert range_before is not None
-    e_second = LEGACY_PRIORS_PER_PIXEL_SQ["second_pass"] * (10000 ** 2)
+    e_second = LEGACY_PRIORS_PER_PIXEL_SQ["second_pass"] * (10000**2)
     transition_now = after + e_second * 3.0
-    est.update_from_message(
-        LEGACY_MESSAGES["optimize_params"], now=transition_now
-    )
+    est.update_from_message(LEGACY_MESSAGES["optimize_params"], now=transition_now)
     _, _, range_after_transition, _ = est.heartbeat(now=transition_now + 0.5)
     if range_after_transition is not None:
         assert range_after_transition.hi != pytest.approx(range_before.hi, abs=1e-6)

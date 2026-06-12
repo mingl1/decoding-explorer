@@ -131,15 +131,50 @@ def shading_correction_task(selected_files, files, stop: threading.Event):
         if not my_f:
             continue
 
-        image = np.array(load_image(f))
-        bf_channel = int(f.metadata.reference_channel)
-        bright_field = image[bf_channel] if bf_channel < image.shape[0] else image[0]
         max_size = int(f.metadata.max_size)
-        bright_field = bright_field[:max_size, :max_size]
+        bf_channel = int(f.metadata.reference_channel)
 
-        yield progress_pct, f"Applying shading correction ({i + 1}/{total_files})"
-        corrected = utils.shading_correction(bright_field)
-        my_f.working_image = corrected
+        if my_f.working_image is not None:
+            working = np.array(my_f.working_image)
+            if len(working.shape) == 3:
+                bright_field = (
+                    working[bf_channel] if bf_channel < working.shape[0] else working[0]
+                )
+                bright_field = bright_field[:max_size, :max_size]
+
+                yield (
+                    progress_pct,
+                    f"Applying shading correction ({i + 1}/{total_files})",
+                )
+                corrected = utils.shading_correction(bright_field)
+
+                # Overwrite only the reference channel of the 3D working_image
+                my_f.working_image[bf_channel, :max_size, :max_size] = corrected
+            else:
+                logger.error(
+                    f"Shading correction: working_image for {f.path} is already 2D (shape: {working.shape}). Shading correction may have already been applied."
+                )
+                bright_field = working[:max_size, :max_size]
+
+                yield (
+                    progress_pct,
+                    f"Applying shading correction ({i + 1}/{total_files})",
+                )
+                corrected = utils.shading_correction(bright_field)
+                my_f.working_image = corrected
+        else:
+            image = np.array(load_image(f))
+            bright_field = (
+                image[bf_channel]
+                if (len(image.shape) == 3 and bf_channel < image.shape[0])
+                else (image[0] if len(image.shape) == 3 else image)
+            )
+            bright_field = bright_field[:max_size, :max_size]
+
+            yield progress_pct, f"Applying shading correction ({i + 1}/{total_files})"
+            corrected = utils.shading_correction(bright_field)
+            my_f.working_image = corrected
+
         my_f.status = FileStatus.SHADE_CORRECTED
         my_f.metadata.prefix = FileStatus.SHADE_CORRECTED.name.lower()
         to_be_updated.append(my_f)

@@ -196,17 +196,23 @@ class BenchmarkTracer:
         opt["layers"][key] = {"steps": []}
 
     def record_sa_step(self, step, prob, nms, score, n_instances, T, accepted):
-        key = list(self.data["methods"][self._current_method]["optimization"]["layers"].keys())[-1]
-        layer_data = self.data["methods"][self._current_method]["optimization"]["layers"][key]
-        layer_data["steps"].append({
-            "step": step,
-            "prob": round(float(prob), 4),
-            "nms": round(float(nms), 3),
-            "score": round(float(score), 4),
-            "n_instances": int(n_instances),
-            "T": round(float(T), 4),
-            "accepted": bool(accepted),
-        })
+        key = list(
+            self.data["methods"][self._current_method]["optimization"]["layers"].keys()
+        )[-1]
+        layer_data = self.data["methods"][self._current_method]["optimization"][
+            "layers"
+        ][key]
+        layer_data["steps"].append(
+            {
+                "step": step,
+                "prob": round(float(prob), 4),
+                "nms": round(float(nms), 3),
+                "score": round(float(score), 4),
+                "n_instances": int(n_instances),
+                "T": round(float(T), 4),
+                "accepted": bool(accepted),
+            }
+        )
 
     def record_sa_best(self, cycle, layer, prob, nms, n_instances):
         key = f"cy{cycle}_layer{layer}"
@@ -222,16 +228,20 @@ class BenchmarkTracer:
         m = self.data["methods"][self._current_method]
         m["optimization"] = {
             "type": "grid",
-            "param_grid": {k: [_jsonable(v) for v in vs] for k, vs in param_grid.items()},
+            "param_grid": {
+                k: [_jsonable(v) for v in vs] for k, vs in param_grid.items()
+            },
             "results": [],
         }
 
     def record_grid_result(self, params: dict, score: float):
         opt = self.data["methods"][self._current_method]["optimization"]
-        opt["results"].append({
-            "params": {k: _jsonable(v) for k, v in params.items()},
-            "score": round(float(score), 6),
-        })
+        opt["results"].append(
+            {
+                "params": {k: _jsonable(v) for k, v in params.items()},
+                "score": round(float(score), 6),
+            }
+        )
 
     def record_grid_best(self, params: dict, score: float):
         opt = self.data["methods"][self._current_method]["optimization"]
@@ -241,13 +251,17 @@ class BenchmarkTracer:
         }
 
     # -- Segmentation --
-    def record_layer_segmentation(self, cycle, layer, n_instances, params_used, labeled_img):
+    def record_layer_segmentation(
+        self, cycle, layer, n_instances, params_used, labeled_img
+    ):
         m = self.data["methods"][self._current_method]
         entry = {
             "cycle": int(cycle),
             "layer": int(layer),
             "n_instances": int(n_instances),
-            "params": {k: _jsonable(v) for k, v in params_used.items()} if params_used else {},
+            "params": {k: _jsonable(v) for k, v in params_used.items()}
+            if params_used
+            else {},
         }
         try:
             entry["preview"] = _label_to_base64_png(labeled_img)
@@ -258,10 +272,12 @@ class BenchmarkTracer:
     # -- Pipeline --
     def record_pipeline_stage(self, stage_name: str, counts: dict):
         m = self.data["methods"][self._current_method]
-        m["pipeline"].append({
-            "stage": stage_name,
-            "counts": {k: _jsonable(v) for k, v in counts.items()},
-        })
+        m["pipeline"].append(
+            {
+                "stage": stage_name,
+                "counts": {k: _jsonable(v) for k, v in counts.items()},
+            }
+        )
 
     def record_final_stats(self, stats: dict):
         m = self.data["methods"][self._current_method]
@@ -286,7 +302,9 @@ class BenchmarkTracer:
         N = len(xy)
 
         # a. Build voronoi regions
-        vor_lbl = voronoi_from_centers_tiled(xy, shape, tile=tile, cache_path=voronoi_cache_path)
+        vor_lbl = voronoi_from_centers_tiled(
+            xy, shape, tile=tile, cache_path=voronoi_cache_path
+        )
         H0 = min(max_size, shape[0])
         W0 = min(max_size, shape[1])
         vor = vor_lbl[:H0, :W0]
@@ -295,15 +313,17 @@ class BenchmarkTracer:
         if border_erosion > 0:
             boundary = np.zeros(vor.shape, dtype=bool)
             boundary[:-1, :] |= vor[:-1, :] != vor[1:, :]
-            boundary[1:, :]  |= vor[:-1, :] != vor[1:, :]
+            boundary[1:, :] |= vor[:-1, :] != vor[1:, :]
             boundary[:, :-1] |= vor[:, :-1] != vor[:, 1:]
-            boundary[:, 1:]  |= vor[:, :-1] != vor[:, 1:]
+            boundary[:, 1:] |= vor[:, :-1] != vor[:, 1:]
             dist = distance_transform_edt(~boundary)
             vor = vor.copy()
             vor[dist < border_erosion] = -1
             n_eroded = int((dist < border_erosion).sum())
             n_total = vor.size
-            print(f"  Border erosion={border_erosion}: excluded {n_eroded}/{n_total} pixels ({100*n_eroded/n_total:.1f}%)")
+            print(
+                f"  Border erosion={border_erosion}: excluded {n_eroded}/{n_total} pixels ({100 * n_eroded / n_total:.1f}%)"
+            )
 
         # b. Compute median intensity per bead per cycle_layer
         n_cycles = len(cycle_images)
@@ -378,12 +398,13 @@ class BenchmarkTracer:
             sv = vals[surviving]
             per_cycle_stats[cy_key] = {
                 "mean_assigned": round(float(sv.mean()), 4) if len(sv) > 0 else 0.0,
-                "median_assigned": round(float(np.median(sv)), 4) if len(sv) > 0 else 0.0,
+                "median_assigned": round(float(np.median(sv)), 4)
+                if len(sv) > 0
+                else 0.0,
                 "n_surviving": int(surviving.sum()),
             }
 
         # g. Build resolved bead_df with cy0, cy1, ... columns
-        import pandas as pd
 
         resolved = bead_df[["x", "y"]].copy()
         for cy_key, layers in assigned_layers.items():
@@ -420,4 +441,3 @@ def _jsonable(v):
     if isinstance(v, np.ndarray):
         return v.tolist()
     return v
-

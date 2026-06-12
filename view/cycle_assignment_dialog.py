@@ -3,14 +3,14 @@ import re
 from typing import Optional
 
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDialog,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
-    QAbstractItemView,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -154,7 +154,9 @@ class CycleAssignmentDialog(QDialog):
             assigned_paths.add(file_item.path)
 
         remaining = [
-            file_item for file_item in non_protein_files if file_item.path not in assigned_paths
+            file_item
+            for file_item in non_protein_files
+            if file_item.path not in assigned_paths
         ]
         for cycle_num in range(1, cycle_slots + 1):
             if cycle_num in assignments:

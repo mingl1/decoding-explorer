@@ -10,9 +10,7 @@ This test verifies the core behavior:
   to the selected files before alignment proceeds
 """
 
-from unittest.mock import call
 
-import pytest
 from PyQt6.QtWidgets import QCheckBox
 
 from model.file_item import FileItem
@@ -40,7 +38,7 @@ class TestAlignWithShadingCorrection:
         # ----------------------------------------------------------------
         # ASSERTION 1: MetadataView must have the checkbox
         # ----------------------------------------------------------------
-        assert hasattr(metadata_view, 'apply_shading_checkbox'), (
+        assert hasattr(metadata_view, "apply_shading_checkbox"), (
             "MetadataView should have an 'apply_shading_checkbox' attribute"
         )
         checkbox = metadata_view.apply_shading_checkbox
@@ -90,8 +88,8 @@ class TestAlignWithShadingCorrection:
         # ----------------------------------------------------------------
         # Mock the VM methods to track calls
         # ----------------------------------------------------------------
-        apply_shading_mock = mocker.patch.object(window.vm, 'apply_shading')
-        align_channels_mock = mocker.patch.object(window.vm, 'align_channels')
+        apply_shading_mock = mocker.patch.object(window.vm, "apply_shading")
+        align_channels_mock = mocker.patch.object(window.vm, "align_channels")
 
         # ----------------------------------------------------------------
         # ACTION: Click the 'Align to Reference' button

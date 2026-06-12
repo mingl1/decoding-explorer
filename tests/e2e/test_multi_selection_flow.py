@@ -2,11 +2,10 @@
 End-to-end tests for multi-selection workflow.
 """
 
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
-import pytest
+
 from model.file_item import FileItem
 from model.status_enum import FileStatus
 
@@ -14,9 +13,7 @@ from model.status_enum import FileStatus
 class TestMultiSelectionE2E:
     """End-to-end tests for multi-selection."""
 
-    def test_select_single_file(
-        self, mock_main_window, mock_file_items, qtbot
-    ):
+    def test_select_single_file(self, mock_main_window, mock_file_items, qtbot):
         """Selecting one file should work."""
         window = mock_main_window
 
@@ -46,9 +43,7 @@ class TestMultiSelectionE2E:
 class TestReferenceSettingE2E:
     """End-to-end tests for reference setting."""
 
-    def test_set_reference_updates_vm(
-        self, mock_file_manager_vm, mock_file_items
-    ):
+    def test_set_reference_updates_vm(self, mock_file_manager_vm, mock_file_items):
         """set_reference should update vm.reference_item."""
         vm = mock_file_manager_vm
 
@@ -73,9 +68,7 @@ class TestReferenceSettingE2E:
         assert vm.reference_item == mock_file_items[1]
         assert vm.files[mock_file_items[1].path].status == FileStatus.RAW
 
-    def test_change_reference_keeps_status(
-        self, mock_file_manager_vm, mock_file_items
-    ):
+    def test_change_reference_keeps_status(self, mock_file_manager_vm, mock_file_items):
         """Changing reference should NOT change any file's status."""
         vm = mock_file_manager_vm
 
@@ -89,9 +82,7 @@ class TestReferenceSettingE2E:
         assert vm.files[mock_file_items[0].path].status == FileStatus.SHADE_CORRECTED
         assert vm.files[mock_file_items[1].path].status == FileStatus.SHADE_CORRECTED
 
-    def test_only_one_reference_at_a_time(
-        self, mock_file_manager_vm, mock_file_items
-    ):
+    def test_only_one_reference_at_a_time(self, mock_file_manager_vm, mock_file_items):
         """Only the last set file should be the reference."""
         vm = mock_file_manager_vm
 
@@ -114,7 +105,7 @@ class TestFullWorkflowE2E:
         window = mock_main_window
 
         folder_path = tmp_tiff_folder(3)
-        with patch('viewmodel.file_manager_vm.get_tif_info') as mock_info:
+        with patch("viewmodel.file_manager_vm.get_tif_info") as mock_info:
             mock_info.return_value = ((1, 512, 512), np.uint16)
             window.vm.load_folder(folder_path)
 
@@ -135,7 +126,7 @@ class TestFullWorkflowE2E:
         window = mock_main_window
 
         folder_path = tmp_tiff_folder(5)
-        with patch('viewmodel.file_manager_vm.get_tif_info') as mock_info:
+        with patch("viewmodel.file_manager_vm.get_tif_info") as mock_info:
             mock_info.return_value = ((1, 512, 512), np.uint16)
             window.vm.load_folder(folder_path)
 

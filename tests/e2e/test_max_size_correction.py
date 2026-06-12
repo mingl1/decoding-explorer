@@ -1,10 +1,11 @@
-import os
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 import tifffile
-from PyQt6.QtWidgets import QFileDialog
 from PyQt6.QtCore import Qt
-from unittest.mock import patch
+from PyQt6.QtWidgets import QFileDialog
+
 from view.main_window import MainWindow
 
 
@@ -31,11 +32,14 @@ def test_max_size_correction_persists_on_reselection(qtbot, small_tiff_folder):
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(small_tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(small_tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 2
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()

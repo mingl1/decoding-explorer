@@ -1,12 +1,13 @@
-import os
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 import tifffile
-from PyQt6.QtWidgets import QFileDialog
 from PyQt6.QtCore import Qt
-from unittest.mock import patch
-from view.main_window import MainWindow
+from PyQt6.QtWidgets import QFileDialog
+
 from model.status_enum import FileStatus
+from view.main_window import MainWindow
 
 
 @pytest.fixture
@@ -23,7 +24,9 @@ def tiff_folder(tmp_path):
     return folder
 
 
-def test_use_status_as_prefix_checkbox_enables_disables_prefix_input(qtbot, tiff_folder):
+def test_use_status_as_prefix_checkbox_enables_disables_prefix_input(
+    qtbot, tiff_folder
+):
     """
     Test that the checkbox enables/disables the prefix input field.
     When checkbox is checked, prefix input should be disabled.
@@ -33,28 +36,39 @@ def test_use_status_as_prefix_checkbox_enables_disables_prefix_input(qtbot, tiff
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
     qtbot.wait(500)
 
-    assert window.metadata_view.prefix_checkbox.isChecked() == True, "Checkbox should be checked when prefix matches status"
+    assert window.metadata_view.prefix_checkbox.isChecked() == True, (
+        "Checkbox should be checked when prefix matches status"
+    )
 
     window.metadata_view.prefix_checkbox.setChecked(False)
     qtbot.wait(100)
 
-    assert window.metadata_view.prefix_input.isEnabled() == True, "Prefix input should be enabled when checkbox is unchecked"
+    assert window.metadata_view.prefix_input.isEnabled() == True, (
+        "Prefix input should be enabled when checkbox is unchecked"
+    )
 
     window.metadata_view.prefix_checkbox.setChecked(True)
     qtbot.wait(100)
-    window.metadata_view.on_prefix_checkbox_changed(window.metadata_view.prefix_checkbox.checkState())
+    window.metadata_view.on_prefix_checkbox_changed(
+        window.metadata_view.prefix_checkbox.checkState()
+    )
 
-    assert window.metadata_view.prefix_input.isEnabled() == False, "Prefix input should be disabled when checkbox is checked"
+    assert window.metadata_view.prefix_input.isEnabled() == False, (
+        "Prefix input should be disabled when checkbox is checked"
+    )
 
 
 def test_use_status_as_prefix_applies_status_to_prefix(qtbot, tiff_folder):
@@ -66,11 +80,14 @@ def test_use_status_as_prefix_applies_status_to_prefix(qtbot, tiff_folder):
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
@@ -100,21 +117,28 @@ def test_use_status_as_prefix_with_manual_prefix_unchecked(qtbot, tiff_folder):
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
     qtbot.wait(500)
 
-    assert window.metadata_view.prefix_checkbox.isChecked() == True, "Checkbox should be checked initially"
+    assert window.metadata_view.prefix_checkbox.isChecked() == True, (
+        "Checkbox should be checked initially"
+    )
 
     window.metadata_view.prefix_checkbox.setChecked(False)
     qtbot.wait(100)
-    assert window.metadata_view.prefix_checkbox.isChecked() == False, "Checkbox should be unchecked after setChecked(False)"
+    assert window.metadata_view.prefix_checkbox.isChecked() == False, (
+        "Checkbox should be unchecked after setChecked(False)"
+    )
 
     manual_prefix = "my_custom_prefix"
     window.metadata_view.prefix_input.clear()
@@ -141,11 +165,14 @@ def test_use_status_as_prefix_checkbox_state_after_selection(qtbot, tiff_folder)
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
@@ -164,7 +191,9 @@ def test_use_status_as_prefix_checkbox_state_after_selection(qtbot, tiff_folder)
     )
 
 
-def test_use_status_as_prefix_checkbox_unchecked_when_prefixes_mismatch(qtbot, tiff_folder):
+def test_use_status_as_prefix_checkbox_unchecked_when_prefixes_mismatch(
+    qtbot, tiff_folder
+):
     """
     Test that checkbox is unchecked when selected files have different prefixes
     that don't match their statuses.
@@ -173,11 +202,14 @@ def test_use_status_as_prefix_checkbox_unchecked_when_prefixes_mismatch(qtbot, t
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
@@ -208,11 +240,14 @@ def test_use_status_as_prefix_disabled_persists_after_reselection(qtbot, tiff_fo
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
@@ -249,11 +284,14 @@ def test_use_status_as_prefix_updates_on_status_change(qtbot, tiff_folder):
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectRow(0)
@@ -261,10 +299,15 @@ def test_use_status_as_prefix_updates_on_status_change(qtbot, tiff_folder):
 
     assert window.metadata_view.prefix_checkbox.isChecked() == True
 
-    initial_status = window.file_table_widget.item(0, 0).data(Qt.ItemDataRole.UserRole).status
+    initial_status = (
+        window.file_table_widget.item(0, 0).data(Qt.ItemDataRole.UserRole).status
+    )
     assert window.metadata_view.prefix_input.text() == initial_status.value.lower()
 
-    window.vm.set_status(window.file_table_widget.item(0, 0).data(Qt.ItemDataRole.UserRole), FileStatus.SHADE_CORRECTED)
+    window.vm.set_status(
+        window.file_table_widget.item(0, 0).data(Qt.ItemDataRole.UserRole),
+        FileStatus.SHADE_CORRECTED,
+    )
     qtbot.wait(200)
 
     window.file_table_widget.clearSelection()
@@ -287,11 +330,14 @@ def test_use_status_as_prefix_shows_current_status_in_input(qtbot, tiff_folder):
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
@@ -328,11 +374,14 @@ def test_use_status_as_prefix_unchecked_enables_input_for_editing(qtbot, tiff_fo
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
@@ -379,11 +428,14 @@ def test_use_status_as_prefix_unchecked_persists_after_reselection(qtbot, tiff_f
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
@@ -413,7 +465,9 @@ def test_use_status_as_prefix_unchecked_persists_after_reselection(qtbot, tiff_f
     )
 
 
-def test_use_status_as_prefix_updates_prefix_immediately_on_status_change(qtbot, tiff_folder):
+def test_use_status_as_prefix_updates_prefix_immediately_on_status_change(
+    qtbot, tiff_folder
+):
     """
     Test that when status is changed in file list table, the prefix input
     updates immediately, not just after reselection.
@@ -422,17 +476,22 @@ def test_use_status_as_prefix_updates_prefix_immediately_on_status_change(qtbot,
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectRow(0)
     qtbot.wait(200)
 
-    initial_status = window.file_table_widget.item(0, 0).data(Qt.ItemDataRole.UserRole).status
+    initial_status = (
+        window.file_table_widget.item(0, 0).data(Qt.ItemDataRole.UserRole).status
+    )
     assert window.metadata_view.prefix_input.text() == initial_status.value.lower()
 
     file_item = window.file_table_widget.item(0, 0).data(Qt.ItemDataRole.UserRole)

@@ -1,11 +1,11 @@
-import os
-import shutil
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 import tifffile
-from PyQt6.QtWidgets import QFileDialog
 from PyQt6.QtCore import Qt
-from unittest.mock import patch
+from PyQt6.QtWidgets import QFileDialog
+
 from view.main_window import MainWindow
 
 
@@ -29,11 +29,14 @@ def test_metadata_update_comprehensive(qtbot, tiff_folder):
     window.show()
     qtbot.addWidget(window)
 
-    with patch.object(QFileDialog, 'getExistingDirectory', return_value=str(tiff_folder)):
+    with patch.object(
+        QFileDialog, "getExistingDirectory", return_value=str(tiff_folder)
+    ):
         qtbot.mouseClick(window.load_button, Qt.MouseButton.LeftButton)
 
     def check_files_loaded():
         assert window.file_table_widget.rowCount() == 3
+
     qtbot.waitUntil(check_files_loaded, timeout=5000)
 
     window.file_table_widget.selectAll()
@@ -85,10 +88,16 @@ def test_metadata_update_comprehensive(qtbot, tiff_folder):
 
     assert window.metadata_view.axes_input.text() == new_values["axes"]
     assert window.metadata_view.unit_input.text() == new_values["unit"]
-    assert float(window.metadata_view.size_y_input.text()) == float(new_values["size_y"])
+    assert float(window.metadata_view.size_y_input.text()) == float(
+        new_values["size_y"]
+    )
     assert int(window.metadata_view.channel_input.text()) == int(new_values["channel"])
-    assert int(window.metadata_view.max_size_input.text()) == int(new_values["max_size"])
-    assert int(window.metadata_view.num_tiles_input.text()) == int(new_values["num_tiles"])
+    assert int(window.metadata_view.max_size_input.text()) == int(
+        new_values["max_size"]
+    )
+    assert int(window.metadata_view.num_tiles_input.text()) == int(
+        new_values["num_tiles"]
+    )
     assert int(window.metadata_view.overlap_input.text()) == int(new_values["overlap"])
 
     window.file_table_widget.selectRow(1)

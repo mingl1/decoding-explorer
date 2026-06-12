@@ -23,7 +23,9 @@ def _normalize_cycle_values(df: pd.DataFrame, cycle_cols: list[str]) -> pd.DataF
     return normalized.fillna(255).astype(np.int64)
 
 
-def compute_bead_profile_metrics(bead_df: pd.DataFrame, protein_df: pd.DataFrame) -> dict:
+def compute_bead_profile_metrics(
+    bead_df: pd.DataFrame, protein_df: pd.DataFrame
+) -> dict:
     total = int(len(bead_df))
     cycle_cols = _shared_cycle_columns(bead_df, protein_df)
 
@@ -51,7 +53,9 @@ def compute_bead_profile_metrics(bead_df: pd.DataFrame, protein_df: pd.DataFrame
         unique_cycle_combos = 0
     else:
         bead_cycles = _normalize_cycle_values(bead_df, cycle_cols)
-        profile_cycles = _normalize_cycle_values(protein_df, cycle_cols).drop_duplicates()
+        profile_cycles = _normalize_cycle_values(
+            protein_df, cycle_cols
+        ).drop_duplicates()
         unique_cycle_combos = int(len(profile_cycles))
         filtered_mask = bead_cycles.ge(254).any(axis=1).to_numpy(dtype=bool)
         if unique_cycle_combos == 0:
@@ -155,10 +159,17 @@ def get_latest_trace(folder, method="voronoi_median"):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ensemble bead labeling with protein profiles.")
+    parser = argparse.ArgumentParser(
+        description="Ensemble bead labeling with protein profiles."
+    )
     parser.add_argument("--bead-df", required=True, help="Path to bead_df CSV")
     parser.add_argument("--results-df", required=True, help="Path to results_df CSV")
-    parser.add_argument("--protein-profiles", nargs="+", required=True, help="Path(s) to protein profile CSV/Excel files")
+    parser.add_argument(
+        "--protein-profiles",
+        nargs="+",
+        required=True,
+        help="Path(s) to protein profile CSV/Excel files",
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--other-df", help="Path to other (trace) CSV")
     group.add_argument("--trace-folder", help="Folder to auto-select latest trace from")

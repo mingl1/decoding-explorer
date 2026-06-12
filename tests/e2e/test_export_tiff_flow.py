@@ -2,13 +2,11 @@
 End-to-end tests for Export As TIFF context menu functionality.
 """
 
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
-import pytest
 import tifffile
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint
 from PyQt6.QtWidgets import QMenu
 
 from model.file_item import FileItem
@@ -56,9 +54,7 @@ class TestExportAsTiffE2E:
         exported_files = list(export_folder.glob("*.tif"))
         assert len(exported_files) == 3
 
-    def test_export_preserves_image_data(
-        self, mock_main_window, tmp_path, qtbot
-    ):
+    def test_export_preserves_image_data(self, mock_main_window, tmp_path, qtbot):
         """Exported TIFF should contain the same image data."""
         window = mock_main_window
 
@@ -144,16 +140,16 @@ class TestExportAsTiffE2E:
         file_item = window.vm.files[source_path]
 
         progress_calls = []
-        window.vm.export_progress.connect(lambda pct, msg: progress_calls.append((pct, msg)))
+        window.vm.export_progress.connect(
+            lambda pct, msg: progress_calls.append((pct, msg))
+        )
 
         window.vm.export_files(str(export_folder), [file_item])
 
         assert len(progress_calls) >= 1
         assert progress_calls[-1][0] == 100
 
-    def test_export_respects_max_size(
-        self, mock_main_window, tmp_path, qtbot
-    ):
+    def test_export_respects_max_size(self, mock_main_window, tmp_path, qtbot):
         """Export should crop image to max_size from metadata."""
         window = mock_main_window
 
@@ -228,7 +224,7 @@ class TestExportContextMenuInteraction:
             menus_shown.append(self)
             return None
 
-        with patch.object(QMenu, 'exec', capture_menu):
+        with patch.object(QMenu, "exec", capture_menu):
             widget.open_context_menu(QPoint(10, 10))
 
         assert len(menus_shown) == 1
@@ -237,7 +233,12 @@ class TestExportContextMenuInteraction:
         assert "Export As TIFF" in action_texts
 
     def test_export_action_triggers_file_dialog(
-        self, mock_file_table_widget, mock_file_item, mock_file_manager_vm, tmp_path, qtbot
+        self,
+        mock_file_table_widget,
+        mock_file_item,
+        mock_file_manager_vm,
+        tmp_path,
+        qtbot,
     ):
         """Clicking Export should open folder selection dialog."""
         widget = mock_file_table_widget
@@ -256,8 +257,8 @@ class TestExportContextMenuInteraction:
             dialog_called.append(True)
             return str(export_folder)
 
-        with patch('PyQt6.QtWidgets.QFileDialog.getExistingDirectory', mock_dialog):
-            with patch.object(vm, 'export_files') as mock_export:
+        with patch("PyQt6.QtWidgets.QFileDialog.getExistingDirectory", mock_dialog):
+            with patch.object(vm, "export_files") as mock_export:
                 menus = []
                 original_exec = QMenu.exec
 
@@ -268,7 +269,7 @@ class TestExportContextMenuInteraction:
                             action.trigger()
                             return
 
-                with patch.object(QMenu, 'exec', run_export_action):
+                with patch.object(QMenu, "exec", run_export_action):
                     widget.open_context_menu(QPoint(10, 10))
 
         assert len(dialog_called) == 1
@@ -284,8 +285,8 @@ class TestExportContextMenuInteraction:
         vm.files[mock_file_item.path] = mock_file_item
         widget.selectRow(0)
 
-        with patch('PyQt6.QtWidgets.QFileDialog.getExistingDirectory', return_value=""):
-            with patch.object(vm, 'export_files') as mock_export:
+        with patch("PyQt6.QtWidgets.QFileDialog.getExistingDirectory", return_value=""):
+            with patch.object(vm, "export_files") as mock_export:
                 menus = []
 
                 def run_export_action(self, *args, **kwargs):
@@ -295,7 +296,7 @@ class TestExportContextMenuInteraction:
                             action.trigger()
                             return
 
-                with patch.object(QMenu, 'exec', run_export_action):
+                with patch.object(QMenu, "exec", run_export_action):
                     widget.open_context_menu(QPoint(10, 10))
 
                 mock_export.assert_not_called()
@@ -304,9 +305,7 @@ class TestExportContextMenuInteraction:
 class TestExportWithDifferentStatuses:
     """Tests for exporting files with different processing statuses."""
 
-    def test_export_raw_file(
-        self, mock_main_window, tmp_tiff_path, tmp_path, qtbot
-    ):
+    def test_export_raw_file(self, mock_main_window, tmp_tiff_path, tmp_path, qtbot):
         """Exporting RAW file should use 'raw' prefix."""
         window = mock_main_window
         source_path = tmp_tiff_path("test.tif")
@@ -371,9 +370,7 @@ class TestExportWithDifferentStatuses:
 class TestExportMetadataPreservation:
     """Tests for metadata preservation during export."""
 
-    def test_export_preserves_axes_metadata(
-        self, mock_main_window, tmp_path, qtbot
-    ):
+    def test_export_preserves_axes_metadata(self, mock_main_window, tmp_path, qtbot):
         """Exported TIFF should contain axes metadata."""
         window = mock_main_window
 
@@ -395,13 +392,11 @@ class TestExportMetadataPreservation:
 
         exported_path = list(export_folder.glob("*.tif"))[0]
         with tifffile.TiffFile(str(exported_path)) as tif:
-            metadata = tif.pages[0].tags.get('ImageDescription')
+            metadata = tif.pages[0].tags.get("ImageDescription")
             if metadata:
                 assert "axes" in str(metadata.value).lower() or True
 
-    def test_export_preserves_physical_size(
-        self, mock_main_window, tmp_path, qtbot
-    ):
+    def test_export_preserves_physical_size(self, mock_main_window, tmp_path, qtbot):
         """Exported TIFF should contain physical size metadata."""
         window = mock_main_window
 
@@ -429,9 +424,7 @@ class TestExportMetadataPreservation:
 class TestExportEdgeCases:
     """Tests for edge cases in export functionality."""
 
-    def test_export_2d_image(
-        self, mock_main_window, tmp_path, qtbot
-    ):
+    def test_export_2d_image(self, mock_main_window, tmp_path, qtbot):
         """Exporting 2D image should work correctly."""
         window = mock_main_window
 
@@ -455,9 +448,7 @@ class TestExportEdgeCases:
 
         assert exported_data.shape == (128, 128)
 
-    def test_export_with_2d_working_image(
-        self, mock_main_window, tmp_path, qtbot
-    ):
+    def test_export_with_2d_working_image(self, mock_main_window, tmp_path, qtbot):
         """Export should handle 2D working image (shade correction result)."""
         window = mock_main_window
 

@@ -3,7 +3,6 @@ from pathlib import Path
 from threading import Lock
 from typing import Dict, Optional
 
-
 PROFILE_VERSION = 2
 DEFAULT_PROFILE_PATH = Path.home() / ".decoding-explorer" / "bead_progress_profile.json"
 DEFAULT_ALPHA = 0.35
@@ -65,7 +64,9 @@ class EtaProfileStore:
                 if not isinstance(previous, (int, float)) or previous <= 0:
                     ema[stage] = float(observed)
                 else:
-                    ema[stage] = self.alpha * float(observed) + (1.0 - self.alpha) * float(previous)
+                    ema[stage] = self.alpha * float(observed) + (
+                        1.0 - self.alpha
+                    ) * float(previous)
             mode_data["runs"] = int(mode_data.get("runs", 0)) + 1
 
     def save(self):

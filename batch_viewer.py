@@ -44,6 +44,7 @@ def calc_invalid_pct(s):
         return 0.0
     return round(s["invalid"] / (s["valid"] / num_combos) * 100, 2)
 
+
 # Overview tab
 if selected == "(overview)":
     st.subheader("Overview")
@@ -77,11 +78,14 @@ else:
         st.subheader(f"Margin ratio sweep  *(selected: {selected}x)*")
         rows = [
             {
-                "Ratio": f"{v['min_margin_ratio']}x" + (" ✓" if v["min_margin_ratio"] == selected else ""),
+                "Ratio": f"{v['min_margin_ratio']}x"
+                + (" ✓" if v["min_margin_ratio"] == selected else ""),
                 "Valid %": v["valid_pct"],
                 "Invalid %": v["invalid_pct"],
                 "Filtered %": v["filtered_pct"],
-                "Score (V-I)": v.get("score", round(v["valid_pct"] - v["invalid_pct"], 2)),
+                "Score (V-I)": v.get(
+                    "score", round(v["valid_pct"] - v["invalid_pct"], 2)
+                ),
             }
             for v in sweep_data["sweep"].values()
         ]
@@ -90,9 +94,13 @@ else:
 
     if stats["protein_counts"]:
         st.subheader("Protein counts")
-        protein_df = pd.DataFrame(
-            list(stats["protein_counts"].items()), columns=["Protein", "Count"]
-        ).set_index("Protein").sort_values("Count", ascending=False)
+        protein_df = (
+            pd.DataFrame(
+                list(stats["protein_counts"].items()), columns=["Protein", "Count"]
+            )
+            .set_index("Protein")
+            .sort_values("Count", ascending=False)
+        )
         st.bar_chart(protein_df)
         st.dataframe(protein_df, use_container_width=True)
     else:
