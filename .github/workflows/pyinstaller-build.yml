@@ -1,48 +1,49 @@
-name: PyInstaller Build
+name: Build Windows
 
 on:
   push:
-    branches:
-      - main
+    branches: [main, newer]
+  pull_request:
+    branches: [main, newer]
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
         with:
-          python-version: "3.10"
-          cache: "pip"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "3.10.17"
 
       - name: Install Visual C++ Redistributable
-        if: runner.os=='Windows'
-        run: choco install vcredist2013 vcredist2015 -y
+        run: choco install vcredist140 -y
+
+      - name: Install UPX
+        run: choco install upx -y
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+        run: uv sync --frozen --extra build
 
-      - name: Build with PyInstaller (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          pyinstaller main.py --onefile --windowed --name "Decoding-Explorer" --add-data "assets:assets"
+      - name: Build with PyInstaller
+        run: uv run pyinstaller Decoding-Explorer-Windows.spec
 
-      - name: Build with PyInstaller (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          pyinstaller main.py --onefile --windowed --name "Decoding-Explorer" --add-data "assets;assets"
+      - name: Zip folder distribution
+        shell: pwsh
+        run: Compress-Archive -Path dist\Decoding-Explorer -DestinationPath dist\Decoding-Explorer-folder.zip
 
-      - name: Upload artifact
+      - name: Upload standalone exe
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-build
-          path: dist/*
+          name: Decoding-Explorer-exe
+          path: dist\Decoding-Explorer.exe
+
+      - name: Upload folder distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: Decoding-Explorer-folder
+          path: dist\Decoding-Explorer-folder.zip
