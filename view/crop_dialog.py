@@ -10,6 +10,7 @@ from PyQt6.QtGui import (
     QPainter,
     QPolygonF,
     QPainterPath,
+    QKeyEvent,
 )
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -543,17 +544,22 @@ class CropDialog(QDialog):
             side_layout = QVBoxLayout(self.side_panel)
 
             tools_group = QGroupBox("ROI Drawing Tools")
-            tools_layout = QHBoxLayout(tools_group)
+            tools_main_layout = QVBoxLayout(tools_group)
 
-            self.select_tool_btn = QPushButton("Select/Pan")
+            btn_layout = QHBoxLayout()
+            self.select_tool_btn = QPushButton("Select")
             self.select_tool_btn.setCheckable(True)
             self.select_tool_btn.setChecked(True)
-            self.rect_tool_btn = QPushButton("Rect")
+            self.select_tool_btn.setToolTip("Select (S)")
+            self.rect_tool_btn = QPushButton("Rectangle")
             self.rect_tool_btn.setCheckable(True)
+            self.rect_tool_btn.setToolTip("Rectangle (R)")
             self.circle_tool_btn = QPushButton("Circle")
             self.circle_tool_btn.setCheckable(True)
+            self.circle_tool_btn.setToolTip("Circle (C)")
             self.poly_tool_btn = QPushButton("Lasso")
             self.poly_tool_btn.setCheckable(True)
+            self.poly_tool_btn.setToolTip("Lasso (L)")
 
             self.tool_group = QButtonGroup(self)
             self.tool_group.addButton(self.select_tool_btn)
@@ -562,10 +568,17 @@ class CropDialog(QDialog):
             self.tool_group.addButton(self.poly_tool_btn)
             self.tool_group.setExclusive(True)
 
-            tools_layout.addWidget(self.select_tool_btn)
-            tools_layout.addWidget(self.rect_tool_btn)
-            tools_layout.addWidget(self.circle_tool_btn)
-            tools_layout.addWidget(self.poly_tool_btn)
+            btn_layout.addWidget(self.select_tool_btn)
+            btn_layout.addWidget(self.rect_tool_btn)
+            btn_layout.addWidget(self.circle_tool_btn)
+            btn_layout.addWidget(self.poly_tool_btn)
+
+            tools_main_layout.addLayout(btn_layout)
+
+            keybind_indicator = QLabel("Keybinds: S = Select | R = Rectangle | C = Circle | L = Lasso")
+            keybind_indicator.setStyleSheet("color: gray; font-size: 10px;")
+            keybind_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            tools_main_layout.addWidget(keybind_indicator)
 
             self.select_tool_btn.clicked.connect(lambda: self._set_draw_mode(DrawMode.SELECT))
             self.rect_tool_btn.clicked.connect(lambda: self._set_draw_mode(DrawMode.RECT))
@@ -822,6 +835,10 @@ class CropDialog(QDialog):
         self.roi_list_widget.addItem(name)
         self._update_selected_beads_count()
 
+        if self.mode == "bead":
+            self.select_tool_btn.setChecked(True)
+            self._set_draw_mode(DrawMode.SELECT)
+
     def _delete_selected_roi(self):
         current_row = self.roi_list_widget.currentRow()
         if current_row < 0:
@@ -865,8 +882,8 @@ class CropDialog(QDialog):
             elif t == "polygon":
                 pts = []
                 for pt in item.points:
-                    pt_scene = item.mapToScene(pt)
-                    pts.append((float(pt_scene.x()), float(pt_scene.y())))
+                    pt_parent = item.mapToParent(pt)
+                    pts.append((float(pt_parent.x()), float(pt_parent.y())))
                 rois.append({
                     "type": "polygon",
                     "points": pts
@@ -958,6 +975,37 @@ class CropDialog(QDialog):
         self.image_view.reset_zoom()
         if event:
             event.accept()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        from PyQt6.QtWidgets import QLineEdit
+        if isinstance(self.focusWidget(), QLineEdit):
+            super().keyPressEvent(event)
+            return
+
+        if self.mode == "bead":
+            key = event.key()
+            if key == Qt.Key.Key_S:
+                self.select_tool_btn.setChecked(True)
+                self._set_draw_mode(DrawMode.SELECT)
+                event.accept()
+                return
+            elif key == Qt.Key.Key_R:
+                self.rect_tool_btn.setChecked(True)
+                self._set_draw_mode(DrawMode.RECT)
+                event.accept()
+                return
+            elif key == Qt.Key.Key_C:
+                self.circle_tool_btn.setChecked(True)
+                self._set_draw_mode(DrawMode.CIRCLE)
+                event.accept()
+                return
+            elif key == Qt.Key.Key_L:
+                self.poly_tool_btn.setChecked(True)
+                self._set_draw_mode(DrawMode.POLY)
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
 
 
 def colorize_grayscale(gray_img: np.ndarray, color: str) -> np.ndarray:

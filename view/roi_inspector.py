@@ -18,6 +18,7 @@ from PyQt6.QtGui import (
     QPixmap,
     QPolygonF,
     QTransform,
+    QKeyEvent,
 )
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -29,6 +30,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -38,6 +40,8 @@ from PyQt6.QtWidgets import (
     QRadioButton,
     QSplitter,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -311,9 +315,166 @@ def colorize_grayscale_rgba(gray_img: np.ndarray, color: str) -> np.ndarray:
         rgba[:, :, 0] = gray_img
         rgba[:, :, 1] = gray_img
 
-    mask = gray_img > 0
-    rgba[:, :, 3] = mask.astype(np.uint8) * 255
     return np.ascontiguousarray(rgba)
+
+
+class BeadCropMaskOverlay(QGraphicsItem):
+    def __init__(self, inspector, parent=None):
+        super().__init__(parent)
+        self.inspector = inspector
+        self.setZValue(5)
+        self.mask_color = QColor(0, 120, 250, 45)
+
+    def boundingRect(self):
+        if self.inspector.target_image is not None:
+            h, w = self.inspector.target_image.shape[:2]
+            return QRectF(0, 0, w, h)
+        return QRectF(0, 0, 1000, 1000)
+
+    def paint(self, painter, option, widget=None):
+        if self.inspector.sidebar_tabs.currentIndex() != 1:
+            return
+
+        rois = self.inspector.created_rois
+        if not rois:
+            return
+
+        is_exclude = self.inspector.exclude_radio.isChecked()
+
+        rois_path = QPainterPath()
+        for roi_info in rois:
+            item = roi_info["roi_item"]
+            t = roi_info["type"]
+
+            if t == "rect":
+                pos = item.pos()
+                size = item.size()
+                rois_path.addRect(QRectF(pos[0], pos[1], size[0], size[1]))
+            elif t == "circle":
+                pos = item.pos()
+                size = item.size()
+                rois_path.addEllipse(QRectF(pos[0], pos[1], size[0], size[1]))
+            elif t == "polygon":
+                polygon = item.polygon()
+                parent_polygon = QPolygonF()
+                for pt in polygon:
+                    parent_polygon.append(item.mapToParent(pt))
+                rois_path.addPolygon(parent_polygon)
+
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(self.mask_color))
+
+        if is_exclude:
+            h, w = self.inspector.target_image.shape[:2]
+            image_path = QPainterPath()
+            image_path.addRect(QRectF(0, 0, w, h))
+            mask_path = image_path.subtracted(rois_path)
+            painter.drawPath(mask_path)
+        else:
+            painter.drawPath(rois_path)
+
+        painter.restore()
+
+
+class ROIStatsDialog(QDialog):
+    def __init__(self, roi_name: str, stats: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Statistics for {roi_name}")
+        self.resize(500, 600)
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel(f"<b>ROI:</b> {roi_name}"))
+        layout.addWidget(QLabel(f"Total Beads: {stats['total_beads']}"))
+        layout.addWidget(QLabel(f"Filtered Beads: {stats['filtered_beads_percentage']:.2f}%"))
+        layout.addWidget(QLabel(f"Mean Rows per Protein: {stats['mean_rows']:.2f}"))
+        layout.addWidget(QLabel(f"Error Rate: {stats['error_rate']:.4f}%"))
+
+        layout.addWidget(QLabel("<br><b>Protein Counts:</b>"))
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(2)
+        self.table.setHorizontalHeaderLabels(["Protein name", "row_count"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+        counts_table_data = stats.get("counts_table")
+        if counts_table_data is not None and not counts_table_data.empty:
+            self.table.setRowCount(len(counts_table_data))
+            for i, (_, row) in enumerate(counts_table_data.iterrows()):
+                self.table.setItem(i, 0, QTableWidgetItem(str(row["Protein name"])))
+                self.table.setItem(i, 1, QTableWidgetItem(str(row["row_count"])))
+        else:
+            self.table.setRowCount(0)
+
+        layout.addWidget(self.table)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+
+def calculate_bead_subset_statistics(beads_subset, protein_profile):
+    if beads_subset is None or beads_subset.empty:
+        return {
+            "total_beads": 0,
+            "filtered_beads_percentage": 0.0,
+            "mean_rows": 0.0,
+            "error_rate": 0.0,
+            "counts_table": pd.DataFrame(columns=["Protein name", "row_count"]),
+        }
+
+    total_beads = len(beads_subset)
+    merge_columns = [col for col in beads_subset.columns if col.startswith("cy") and col[2:].isdigit()]
+
+    beads_for_merge = beads_subset.copy()
+    for col in merge_columns:
+        if col not in beads_for_merge.columns:
+            return {
+                "total_beads": total_beads,
+                "filtered_beads_percentage": 0.0,
+                "mean_rows": 0.0,
+                "error_rate": 0.0,
+                "counts_table": pd.DataFrame(columns=["Protein name", "row_count"]),
+            }
+
+    merged_beads = merge_bead_data_with_protein_profile(
+        beads_for_merge, protein_profile, merge_columns
+    )
+    counts_table = (
+        merged_beads.groupby("Protein name")
+        .size()
+        .reset_index(name="row_count")
+        .sort_values("row_count", ascending=False)
+    )
+    valid_proteins = counts_table[
+        (counts_table["Protein name"] != "Invalid")
+        & (counts_table["Protein name"] != "Filtered")
+        & (counts_table["Protein name"].str.strip() != "")
+    ]
+    unique_rows = valid_proteins["row_count"].unique().mean() if not valid_proteins.empty else 0.0
+    if np.isnan(unique_rows):
+        unique_rows = 0.0
+
+    try:
+        invalid_count = counts_table[counts_table["Protein name"] == "Invalid"]["row_count"].sum()
+        error_rate = (invalid_count / unique_rows) if unique_rows > 0 else 0.0
+    except:
+        error_rate = 0.0
+
+    try:
+        filtered_count = counts_table[counts_table["Protein name"] == "Filtered"]["row_count"].sum()
+        filtered_beads_percentage = (filtered_count / total_beads) if total_beads > 0 else 0.0
+    except:
+        filtered_beads_percentage = 0.0
+
+    return {
+        "total_beads": total_beads,
+        "filtered_beads_percentage": float(filtered_beads_percentage) * 100,
+        "mean_rows": float(unique_rows),
+        "error_rate": float(error_rate) * 100,
+        "counts_table": valid_proteins,
+    }
 
 
 class ROIInspector(QDialog):
@@ -394,6 +555,9 @@ class ROIInspector(QDialog):
         self.image_view.double_clicked.connect(self._on_canvas_double_clicked)
         self.image_view.roi_added.connect(self._on_roi_added)
 
+        self.mask_overlay_item = BeadCropMaskOverlay(self)
+        self.image_view._vb.addItem(self.mask_overlay_item)
+
         self.selected_bead_scatter = pg.ScatterPlotItem(
             size=12,
             pen=pg.mkPen(QColor(0, 255, 255), width=2),
@@ -473,17 +637,22 @@ class ROIInspector(QDialog):
         crop_layout = QVBoxLayout(crop_widget)
 
         tools_group = QGroupBox("ROI Drawing Tools")
-        tools_layout = QHBoxLayout(tools_group)
+        tools_main_layout = QVBoxLayout(tools_group)
 
-        self.select_tool_btn = QPushButton("Select/Pan")
+        btn_layout = QHBoxLayout()
+        self.select_tool_btn = QPushButton("Select")
         self.select_tool_btn.setCheckable(True)
         self.select_tool_btn.setChecked(True)
-        self.rect_tool_btn = QPushButton("Rect")
+        self.select_tool_btn.setToolTip("Select (S)")
+        self.rect_tool_btn = QPushButton("Rectangle")
         self.rect_tool_btn.setCheckable(True)
+        self.rect_tool_btn.setToolTip("Rectangle (R)")
         self.circle_tool_btn = QPushButton("Circle")
         self.circle_tool_btn.setCheckable(True)
+        self.circle_tool_btn.setToolTip("Circle (C)")
         self.poly_tool_btn = QPushButton("Lasso")
         self.poly_tool_btn.setCheckable(True)
+        self.poly_tool_btn.setToolTip("Lasso (L)")
 
         self.tool_group = QButtonGroup(self)
         self.tool_group.addButton(self.select_tool_btn)
@@ -492,10 +661,17 @@ class ROIInspector(QDialog):
         self.tool_group.addButton(self.poly_tool_btn)
         self.tool_group.setExclusive(True)
 
-        tools_layout.addWidget(self.select_tool_btn)
-        tools_layout.addWidget(self.rect_tool_btn)
-        tools_layout.addWidget(self.circle_tool_btn)
-        tools_layout.addWidget(self.poly_tool_btn)
+        btn_layout.addWidget(self.select_tool_btn)
+        btn_layout.addWidget(self.rect_tool_btn)
+        btn_layout.addWidget(self.circle_tool_btn)
+        btn_layout.addWidget(self.poly_tool_btn)
+
+        tools_main_layout.addLayout(btn_layout)
+
+        keybind_indicator = QLabel("Keybinds: S = Select | R = Rectangle | C = Circle | L = Lasso")
+        keybind_indicator.setStyleSheet("color: gray; font-size: 10px;")
+        keybind_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tools_main_layout.addWidget(keybind_indicator)
 
         self.select_tool_btn.clicked.connect(lambda: self._set_draw_mode(DrawMode.SELECT))
         self.rect_tool_btn.clicked.connect(lambda: self._set_draw_mode(DrawMode.RECT))
@@ -529,6 +705,7 @@ class ROIInspector(QDialog):
         roi_layout = QVBoxLayout(roi_group)
 
         self.roi_list_widget = QListWidget()
+        self.roi_list_widget.itemClicked.connect(self._on_roi_list_item_clicked)
         roi_layout.addWidget(self.roi_list_widget)
 
         list_btn_layout = QHBoxLayout()
@@ -909,6 +1086,8 @@ class ROIInspector(QDialog):
             show_rois = False
             for roi_info in self.created_rois:
                 roi_info["roi_item"].setVisible(show_rois)
+            if hasattr(self, "mask_overlay_item"):
+                self.mask_overlay_item.setVisible(False)
             return
 
         bg_img = self._get_background_image(self.adjust_contrast)
@@ -924,6 +1103,10 @@ class ROIInspector(QDialog):
 
         for roi_info in self.created_rois:
             roi_info["roi_item"].setVisible(show_rois)
+
+        if hasattr(self, "mask_overlay_item"):
+            self.mask_overlay_item.setVisible(show_rois)
+            self.mask_overlay_item.update()
 
     def _on_canvas_double_clicked(self, view_pos):
         if self.image_view.draw_mode == DrawMode.SELECT:
@@ -955,13 +1138,16 @@ class ROIInspector(QDialog):
             roi_type = "rect"
             name = f"Rect ROI {len([r for r in self.created_rois if r['type'] == 'rect']) + 1}"
             roi_item.sigRegionChangeFinished.connect(self._update_selected_beads_count)
+            roi_item.sigRegionChanged.connect(self.mask_overlay_item.update)
         elif isinstance(roi_item, CropCircleROI):
             roi_type = "circle"
             name = f"Circle ROI {len([r for r in self.created_rois if r['type'] == 'circle']) + 1}"
             roi_item.sigRegionChangeFinished.connect(self._update_selected_beads_count)
+            roi_item.sigRegionChanged.connect(self.mask_overlay_item.update)
         elif isinstance(roi_item, CropPolyROI):
             roi_type = "polygon"
             name = f"Poly ROI {len([r for r in self.created_rois if r['type'] == 'polygon']) + 1}"
+            roi_item.fill_color = QColor(0, 0, 0, 0)
             roi_item.sigRegionChangeFinished.connect(self._update_selected_beads_count)
 
         self.created_rois.append({
@@ -971,6 +1157,9 @@ class ROIInspector(QDialog):
         })
         self.roi_list_widget.addItem(name)
         self._update_selected_beads_count()
+
+        self.select_tool_btn.setChecked(True)
+        self._set_draw_mode(DrawMode.SELECT)
 
     def _delete_selected_roi(self):
         current_row = self.roi_list_widget.currentRow()
@@ -1015,8 +1204,8 @@ class ROIInspector(QDialog):
             elif t == "polygon":
                 pts = []
                 for pt in item.points:
-                    pt_scene = item.mapToScene(pt)
-                    pts.append((float(pt_scene.x()), float(pt_scene.y())))
+                    pt_parent = item.mapToParent(pt)
+                    pts.append((float(pt_parent.x()), float(pt_parent.y())))
                 rois.append({
                     "type": "polygon",
                     "points": pts
@@ -1024,6 +1213,8 @@ class ROIInspector(QDialog):
         return rois
 
     def _update_selected_beads_count(self):
+        if hasattr(self, "mask_overlay_item"):
+            self.mask_overlay_item.update()
         if self.beads is None or self.beads.empty:
             self.beads_count_label.setText("Selected Beads: 0 / 0 (0.0%)")
             return
@@ -1113,17 +1304,21 @@ class ROIInspector(QDialog):
                 roi_item = CropRectROI([x1, y1], [x2 - x1, y2 - y1])
                 name = f"Rect ROI {len([r for r in self.created_rois if r['type'] == 'rect']) + 1}"
                 roi_item.sigRegionChangeFinished.connect(self._update_selected_beads_count)
+                roi_item.sigRegionChanged.connect(self.mask_overlay_item.update)
             elif roi_type == "circle":
                 cx, cy, r = roi["cx"], roi["cy"], roi["r"]
                 roi_item = CropCircleROI([cx - r, cy - r], [r * 2, r * 2])
                 name = f"Circle ROI {len([r for r in self.created_rois if r['type'] == 'circle']) + 1}"
                 roi_item.sigRegionChangeFinished.connect(self._update_selected_beads_count)
+                roi_item.sigRegionChanged.connect(self.mask_overlay_item.update)
             elif roi_type == "polygon":
                 points = roi["points"]
                 roi_item = CropPolyROI()
+                roi_item.fill_color = QColor(0, 0, 0, 0)
                 for pt in points:
                     roi_item.add_point(QPointF(pt[0], pt[1]))
                 roi_item.complete()
+                roi_item.sigRegionChangeFinished.connect(self._update_selected_beads_count)
                 name = f"Poly ROI {len([r for r in self.created_rois if r['type'] == 'polygon']) + 1}"
             else:
                 continue
@@ -1137,6 +1332,105 @@ class ROIInspector(QDialog):
             self.roi_list_widget.addItem(name)
         self._update_selected_beads_count()
         self.create_direct_overlay(reset_zoom=False)
+
+    def _get_single_roi_definition(self, info):
+        item = info["roi_item"]
+        t = info["type"]
+        if t == "rect":
+            pos = item.pos()
+            size = item.size()
+            return {
+                "type": "rect",
+                "x1": float(pos[0]),
+                "y1": float(pos[1]),
+                "x2": float(pos[0] + size[0]),
+                "y2": float(pos[1] + size[1])
+            }
+        elif t == "circle":
+            pos = item.pos()
+            size = item.size()
+            return {
+                "type": "circle",
+                "cx": float(pos[0] + size[0]/2),
+                "cy": float(pos[1] + size[1]/2),
+                "r": float(size[0]/2)
+            }
+        elif t == "polygon":
+            pts = []
+            for pt in item.points:
+                pt_parent = item.mapToParent(pt)
+                pts.append((float(pt_parent.x()), float(pt_parent.y())))
+            return {
+                "type": "polygon",
+                "points": pts
+            }
+        return None
+
+    def _on_roi_list_item_clicked(self, item):
+        row = self.roi_list_widget.row(item)
+        if row < 0 or row >= len(self.created_rois):
+            return
+
+        roi_info = self.created_rois[row]
+        roi_name = roi_info["name"]
+
+        roi_def = self._get_single_roi_definition(roi_info)
+        if roi_def is None or self.beads is None or self.beads.empty:
+            return
+
+        in_roi = np.zeros(len(self.beads), dtype=bool)
+        if roi_def["type"] == "rect":
+            x1, y1, x2, y2 = roi_def["x1"], roi_def["y1"], roi_def["x2"], roi_def["y2"]
+            in_roi = (
+                (self.beads["x"] >= x1)
+                & (self.beads["x"] < x2)
+                & (self.beads["y"] >= y1)
+                & (self.beads["y"] < y2)
+            )
+        elif roi_def["type"] == "circle":
+            cx, cy, r = roi_def["cx"], roi_def["cy"], roi_def["r"]
+            in_roi = ((self.beads["x"] - cx) ** 2 + (self.beads["y"] - cy) ** 2) <= r ** 2
+        elif roi_def["type"] == "polygon":
+            pts = roi_def["points"]
+            from matplotlib.path import Path
+            path = Path(pts)
+            in_roi = path.contains_points(self.beads[["x", "y"]].to_numpy())
+
+        beads_subset = self.beads[in_roi]
+        stats = calculate_bead_subset_statistics(beads_subset, self.protein_profile)
+
+        dialog = ROIStatsDialog(roi_name, stats, self)
+        dialog.exec()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        from PyQt6.QtWidgets import QLineEdit
+        if isinstance(self.focusWidget(), QLineEdit):
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        if key == Qt.Key.Key_S:
+            self.select_tool_btn.setChecked(True)
+            self._set_draw_mode(DrawMode.SELECT)
+            event.accept()
+            return
+        elif key == Qt.Key.Key_R:
+            self.rect_tool_btn.setChecked(True)
+            self._set_draw_mode(DrawMode.RECT)
+            event.accept()
+            return
+        elif key == Qt.Key.Key_C:
+            self.circle_tool_btn.setChecked(True)
+            self._set_draw_mode(DrawMode.CIRCLE)
+            event.accept()
+            return
+        elif key == Qt.Key.Key_L:
+            self.poly_tool_btn.setChecked(True)
+            self._set_draw_mode(DrawMode.POLY)
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
 
 
 class ROIGridDisplay(QDialog):
