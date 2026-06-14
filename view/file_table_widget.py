@@ -87,9 +87,9 @@ class FileTableWidget(QTableWidget):
         self.update_button_visibility()
 
     def browse_files(self):
-        """Open file dialog to browse for TIFF files."""
+        """Open file dialog to browse for TIFF and CSV files."""
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Select TIFF Files", "", "TIFF Files (*.tif *.tiff);;All Files (*)"
+            self, "Select Files", "", "TIFF and CSV Files (*.tif *.tiff *.csv);;TIFF Files (*.tif *.tiff);;CSV Files (*.csv);;All Files (*)"
         )
         if files and self.file_dropped_callback:
             self.file_dropped_callback(files)
@@ -248,7 +248,7 @@ class FileTableWidget(QTableWidget):
             painter.setFont(font)
             painter.setPen(QColor("#888888"))
 
-            text = "Drop TIFF files or folders here"
+            text = "Drop TIFF images, folders, or CSV data here"
             painter.drawText(
                 rect.adjusted(0, 30, 0, 0),  # shift down slightly under the SVG
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignCenter,

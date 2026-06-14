@@ -259,12 +259,18 @@ class FileManagerVM(QObject):
         # bright_fields["cy0"] = bf
         # use first channel of cycles as brightfield for other cycles
         for cy_name, cy_image in cycles.items():
-            bright_fields[cy_name] = cy_image[0]
+            if cy_image.ndim == 3:
+                bright_fields[cy_name] = cy_image[0]
+            else:
+                bright_fields[cy_name] = cy_image
         # set each cycle to exclude brightfield from decoding
         flour_cycles = {}
         flour_channel_start = most_updated_file.metadata.reference_channel + 1
-        for cy_name in cycles.keys():
-            flour_cycles[cy_name] = cycles[cy_name][flour_channel_start:]
+        for cy_name, cy_image in cycles.items():
+            if cy_image.ndim == 3:
+                flour_cycles[cy_name] = cy_image[flour_channel_start:]
+            else:
+                flour_cycles[cy_name] = cy_image
         self.inspect_beads_signal.emit(
             bright_fields,
             most_updated_file.beads,
@@ -971,6 +977,7 @@ class FileManagerVM(QObject):
 
         try:
             df = pd.read_csv(csv_path)
+            df.columns = [str(c).lstrip("#").strip() for c in df.columns]
         except Exception as e:
             return (False, f"Failed to read CSV: {str(e)}", 0)
 

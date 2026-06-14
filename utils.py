@@ -320,6 +320,9 @@ def to_uint8(image):
     if image.dtype == np.uint8:
         return image
 
+    if image.size == 0:
+        return image.astype(np.uint8)
+
     # Convert to float and scale to 0-255
     img_float = image.astype(np.float32)
     if img_float.max() > img_float.min():  # Check to avoid division by zero

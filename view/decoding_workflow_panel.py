@@ -40,8 +40,9 @@ class DecodingWorkflowPanel(QWidget):
     upload_beads_sig = pyqtSignal()
     manually_align_sig = pyqtSignal()
     crop_selected_sig = pyqtSignal()
-    crop_beads_sig = pyqtSignal()
     find_crop_anchor_sig = pyqtSignal()
+
+
 
     def __init__(self, parent, vm: MetadataVM):
         super().__init__(parent)
@@ -261,8 +262,8 @@ class DecodingWorkflowPanel(QWidget):
         self.lower_filter_btn.clicked.connect(self.lower_filter_sig.emit)
         self.export_btn = QPushButton("Export")
         self.export_btn.clicked.connect(self.export_sig.emit)
-        self.upload_beads_btn = QPushButton("Upload Bead CSV")
-        self.upload_beads_btn.clicked.connect(self.upload_beads_sig.emit)
+        self.import_beads_btn = QPushButton("Import Beads")
+        self.import_beads_btn.clicked.connect(self.upload_beads_sig.emit)
         self.ensemble_slider = QSlider(Qt.Orientation.Horizontal)
         self.ensemble_slider.setRange(0, 0)
         self.ensemble_slider.setValue(0)
@@ -272,10 +273,8 @@ class DecodingWorkflowPanel(QWidget):
         self.ensemble_valid_pct_label = QLabel("Preview Valid: N/A")
         self.ensemble_invalid_pct_label = QLabel("Preview Invalid: N/A")
         self.ensemble_filtered_pct_label = QLabel("Preview Filtered: N/A")
-        self.inspect_beads_btn = QPushButton("Inspect Beads")
+        self.inspect_beads_btn = QPushButton("Inspect && Crop Beads")
         self.inspect_beads_btn.clicked.connect(self.vm.inspect_beads)
-        self.crop_beads_btn = QPushButton("Crop Beads")
-        self.crop_beads_btn.clicked.connect(self.crop_beads_sig.emit)
         stats_title = make_section_title("Statistics & Export", "statistics")
         stats_sep = make_separator()
         self.total_beads_label = QLabel("Total Beads: N/A")
@@ -430,7 +429,6 @@ class DecodingWorkflowPanel(QWidget):
         self.form_layout.addRow(self.upload_protein_key_btn)
         self.form_layout.addRow(self.protein_key_files_label)
         self.form_layout.addRow(self.generate_beads_btn)
-        self.form_layout.addRow(self.upload_beads_btn)
         self._section_widgets["bead_generation"] = [
             self.use_stardist_checkbox,
             self.stardist_model_label,
@@ -445,7 +443,6 @@ class DecodingWorkflowPanel(QWidget):
             self.upload_protein_key_btn,
             self.protein_key_files_label,
             self.generate_beads_btn,
-            self.upload_beads_btn,
         ]
 
         # Crop section
@@ -477,8 +474,8 @@ class DecodingWorkflowPanel(QWidget):
         summary_layout.addWidget(self.mean_rows_label)
         summary_layout.addWidget(self.filtered_beads_label)
         summary_layout.addWidget(self.error_label)
+        summary_layout.addWidget(self.import_beads_btn)
         summary_layout.addWidget(self.inspect_beads_btn)
-        summary_layout.addWidget(self.crop_beads_btn)
         summary_layout.addWidget(self.export_btn)
         summary_layout.addWidget(self.counts_table_container)
         self.statistics_summary_tab.setLayout(summary_layout)
@@ -986,6 +983,7 @@ class DecodingWorkflowPanel(QWidget):
             self._set_ensemble_controls_enabled(False)
             self.export_btn.setEnabled(True)
             self.reset_ensemble_btn.setEnabled(False)
+            self.ensemble_slider.setEnabled(False)
             return
 
         if isinstance(stats_df, pd.DataFrame):
@@ -998,6 +996,7 @@ class DecodingWorkflowPanel(QWidget):
         df = df.sort_values("ratio").reset_index(drop=True)
         self._ensemble_sweep_stats = df
         self._set_ensemble_controls_enabled(True)
+        self.ensemble_slider.setEnabled(True)
 
         if applied_ratio is not None:
             self.ensemble_applied_ratio_label.setText(

@@ -255,6 +255,7 @@ def bead_upload_task(
 ):
     yield 0, "Loading beads data..."
     beads_df = pd.read_csv(csv_path)
+    beads_df.columns = [str(c).lstrip("#").strip() for c in beads_df.columns]
 
     cycles = {}
     total_cycles = len(cycle_assignments)

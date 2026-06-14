@@ -1,10 +1,15 @@
+from enum import Enum
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal, QPointF, QSize, QObject
 from PyQt6.QtGui import (
     QColor,
     QIntValidator,
     QPen,
+    QBrush,
+    QPainter,
+    QPolygonF,
+    QPainterPath,
 )
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -20,12 +25,129 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QGraphicsPolygonItem,
+    QStyleOptionGraphicsItem,
+    QListWidget,
+    QListWidgetItem,
+    QWidget,
+    QButtonGroup,
 )
 
 from utils import adjust_contrast, to_uint8
 
 
+def point_in_polygon(x, y, polygon):
+    num = len(polygon)
+    j = num - 1
+    c = False
+    for i in range(num):
+        if ((polygon[i][1] > y) != (polygon[j][1] > y)) and (x < (polygon[j][0] - polygon[i][0]) * (y - polygon[i][1]) / (polygon[j][1] - polygon[i][1]) + polygon[i][0]):
+            c = not c
+        j = i
+    return c
+
+
+class DrawMode(Enum):
+    SELECT = "select"
+    RECT = "rect"
+    CIRCLE = "circle"
+    POLY = "poly"
+
+
+class CropRectROI(pg.RectROI):
+    def __init__(self, pos, size, pen=None):
+        if pen is None:
+            pen = pg.mkPen(QColor(255, 255, 0), width=2, style=Qt.PenStyle.DashLine)
+        super().__init__(pos, size, pen=pen, rotatable=False, removable=True)
+        self.addScaleHandle([1, 1], [0, 0])
+        self.addScaleHandle([0.5, 1], [0.5, 0])
+        self.addScaleHandle([1, 0.5], [0, 0.5])
+
+
+class CropCircleROI(pg.EllipseROI):
+    def __init__(self, pos, size, pen=None):
+        if pen is None:
+            pen = pg.mkPen(QColor(0, 255, 255), width=2, style=Qt.PenStyle.DashLine)
+        super().__init__(pos, size, pen=pen, rotatable=False, aspectLocked=True, removable=True)
+        self.addScaleHandle([1, 1], [0.5, 0.5])
+
+
+class SignalHelper(QObject):
+    sigRegionChangeFinished = pyqtSignal(object)
+
+
+class CropPolyROI(QGraphicsPolygonItem):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.sig_helper = SignalHelper()
+        self.sigRegionChangeFinished = self.sig_helper.sigRegionChangeFinished
+        self.points = []
+        col = QColor(255, 0, 255)
+        self.line_color = col
+        self.fill_color = QColor(col.red(), col.green(), col.blue(), 50)
+        self.completed = False
+        self.temp_point = None
+        self.point_size = 6
+        self.setPen(QPen(self.line_color, 2, Qt.PenStyle.SolidLine))
+        self.setBrush(QBrush(self.fill_color))
+        self.setZValue(12)
+
+    def add_point(self, pt):
+        self.points.append(pt)
+        self.update_polygon()
+
+    def update_polygon(self):
+        polygon = QPolygonF(self.points)
+        self.setPolygon(polygon)
+
+    def set_temp_point(self, pt):
+        self.prepareGeometryChange()
+        self.temp_point = pt
+        self.update()
+
+    def complete(self):
+        if len(self.points) >= 3:
+            self.completed = True
+            self.temp_point = None
+            self.update_polygon()
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+            return True
+        return False
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self.sigRegionChangeFinished.emit(self)
+        return super().itemChange(change, value)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        lod = QStyleOptionGraphicsItem.levelOfDetailFromTransform(painter.worldTransform())
+        r = (self.point_size / 2) / lod
+        if len(self.points) > 1:
+            pen = QPen(self.line_color, 2 / lod)
+            painter.setPen(pen)
+            path = QPainterPath()
+            path.moveTo(self.points[0])
+            for pt in self.points[1:]:
+                path.lineTo(pt)
+            if self.completed:
+                path.lineTo(self.points[0])
+                painter.fillPath(path, QBrush(self.fill_color))
+            painter.drawPath(path)
+            if not self.completed and self.temp_point:
+                dash_pen = QPen(self.line_color, 1.5 / lod, Qt.PenStyle.DashLine)
+                painter.setPen(dash_pen)
+                painter.drawLine(self.points[-1], self.temp_point)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(255, 0, 0)))
+        for pt in self.points:
+            painter.drawEllipse(pt, r, r)
+
+
 class ResizeHandle(QGraphicsEllipseItem):
+
     """Draggable resize handle for crop rectangle."""
 
     def __init__(self, handle_type: str, parent=None):
@@ -128,94 +250,115 @@ class InteractiveCropRect(QGraphicsRectItem):
 
 
 class ZoomableImageView(pg.GraphicsView):
-    """Zoomable image view for crop dialog."""
-
-    mouse_moved = pyqtSignal(int, int)  # x, y in image coordinates
-    crop_changed = pyqtSignal(
-        float, float, float, float
-    )  # x1, y1, x2, y2 in image coordinates
+    mouse_moved = pyqtSignal(int, int)
+    crop_changed = pyqtSignal(float, float, float, float)
+    roi_added = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent, background="k")
-
         self._vb = pg.ViewBox(lockAspect=True, invertY=True, enableMenu=False)
         self._vb.setMouseMode(pg.ViewBox.PanMode)
         self.setCentralItem(self._vb)
-
-        self.image_items: list[pg.ImageItem] = []
-
+        self.image_items = []
         self.setMouseTracking(True)
         viewport = self.viewport()
         if viewport:
             viewport.setMouseTracking(True)
-
-        # Handle dragging state
-        self.dragging_handle: ResizeHandle | None = None
+        self.dragging_handle = None
         self.drag_start_pos = None
         self.drag_start_rect = None
-        self.crop_rect_item: InteractiveCropRect | None = None
+        self.crop_rect_item = None
+        self.draw_mode = DrawMode.SELECT
+        self.temp_roi = None
+        self.draw_start = None
 
-    def set_images(
-        self, arrays: list[np.ndarray], opacities: list[float] | None = None
-    ):
-        """Set RGBA numpy arrays as image layers."""
+    def set_images(self, arrays, opacities=None):
         for item in self.image_items:
             self._vb.removeItem(item)
         self.image_items.clear()
-
         if opacities is None:
             opacities = [1.0] * len(arrays)
-
         for rgba, opacity in zip(arrays, opacities):
             item = pg.ImageItem(axisOrder="row-major")
             item.setImage(rgba, autoLevels=False, levels=[0, 255])
             item.setOpacity(opacity)
             self.image_items.append(item)
             self._vb.addItem(item)
-
         QTimer.singleShot(0, self.reset_zoom)
 
-    def toggle_layer_visibility(self, index: int, visible: bool):
-        """Toggle visibility of a specific layer."""
+    def toggle_layer_visibility(self, index, visible):
         if 0 <= index < len(self.image_items):
             self.image_items[index].setVisible(visible)
 
     def reset_zoom(self):
-        """Reset zoom to fit all items."""
         if not self.image_items:
             return
         self._vb.autoRange(padding=0)
 
     def get_scene(self):
-        """Get the scene."""
         return self.sceneObj
 
     def mousePressEvent(self, event):
-        """Handle mouse press for handle dragging."""
         if event is None:
             return
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.draw_mode != DrawMode.SELECT:
+                scene_pos = self.mapToScene(event.pos())
+                view_pos = self._vb.mapSceneToView(scene_pos)
+                self._handle_roi_drawing_press(view_pos, event)
+                event.accept()
+                return
+            if self._try_select_resize_handle(event):
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
-        if event.button() == Qt.MouseButton.LeftButton and self.crop_rect_item:
+    def _handle_roi_drawing_press(self, view_pos, event):
+        if self.draw_mode in (DrawMode.RECT, DrawMode.CIRCLE):
+            self.draw_start = view_pos
+            if self.draw_mode == DrawMode.RECT:
+                self.temp_roi = CropRectROI(view_pos, QSize(1, 1))
+            else:
+                self.temp_roi = CropCircleROI(view_pos, QSize(1, 1))
+            self._vb.addItem(self.temp_roi)
+        elif self.draw_mode == DrawMode.POLY:
+            if self.temp_roi is None:
+                self.temp_roi = CropPolyROI()
+                self._vb.addItem(self.temp_roi)
+            else:
+                if len(self.temp_roi.points) >= 3:
+                    p0_screen = self.mapFromScene(self._vb.mapViewToScene(self.temp_roi.points[0]))
+                    curr_screen = event.pos()
+                    dist = ((p0_screen.x() - curr_screen.x()) ** 2 + (p0_screen.y() - curr_screen.y()) ** 2) ** 0.5
+                    if dist < 15:
+                        self.temp_roi.complete()
+                        self.roi_added.emit(self.temp_roi)
+                        self.temp_roi = None
+                        self.viewport().unsetCursor()
+                        return
+            self.temp_roi.add_point(QPointF(view_pos.x(), view_pos.y()))
+
+    def _try_select_resize_handle(self, event):
+        if self.crop_rect_item:
             for item in self.items(event.pos()):
                 if isinstance(item, ResizeHandle):
                     self.dragging_handle = item
                     scene_pos = self.mapToScene(event.pos())
                     self.drag_start_pos = self._vb.mapSceneToView(scene_pos)
                     self.drag_start_rect = QRectF(self.crop_rect_item.rect())
-                    event.accept()
-                    return
-
-        super().mousePressEvent(event)
+                    return True
+        return False
 
     def mouseMoveEvent(self, event):
-        """Track mouse movement and handle dragging."""
         if event is None:
             return
-
         pos = event.position()
         scene_pos = self.mapToScene(int(pos.x()), int(pos.y()))
         view_pos = self._vb.mapSceneToView(scene_pos)
-
+        if self.draw_mode != DrawMode.SELECT:
+            self._handle_roi_drawing_move(view_pos, event)
+            event.accept()
+            return
         if self.dragging_handle and self.drag_start_pos and self.drag_start_rect:
             self._resize_crop_rect(view_pos)
             event.accept()
@@ -223,26 +366,80 @@ class ZoomableImageView(pg.GraphicsView):
             self.mouse_moved.emit(int(view_pos.x()), int(view_pos.y()))
             super().mouseMoveEvent(event)
 
+    def _handle_roi_drawing_move(self, view_pos, event):
+        if self.draw_mode in (DrawMode.RECT, DrawMode.CIRCLE) and self.temp_roi and self.draw_start:
+            x1, y1 = self.draw_start.x(), self.draw_start.y()
+            x2, y2 = view_pos.x(), view_pos.y()
+            if self.draw_mode == DrawMode.RECT:
+                x, y = min(x1, x2), min(y1, y2)
+                w, h = abs(x2 - x1), abs(y2 - y1)
+                self.temp_roi.setPos([x, y])
+                self.temp_roi.setSize([w, h])
+            else:
+                r = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+                self.temp_roi.setPos([x1 - r, y1 - r])
+                self.temp_roi.setSize([r * 2, r * 2])
+        elif self.draw_mode == DrawMode.POLY and self.temp_roi:
+            if len(self.temp_roi.points) >= 3:
+                p0 = self.temp_roi.points[0]
+                p0_screen = self.mapFromScene(self._vb.mapViewToScene(p0))
+                curr_screen = event.pos()
+                dist = ((p0_screen.x() - curr_screen.x()) ** 2 + (p0_screen.y() - curr_screen.y()) ** 2) ** 0.5
+                if dist < 15:
+                    self.temp_roi.set_temp_point(p0)
+                    self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+                    return
+            self.temp_roi.set_temp_point(QPointF(view_pos.x(), view_pos.y()))
+            self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+
     def mouseReleaseEvent(self, event):
-        """Handle mouse release to stop dragging."""
         if event is None:
             return
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.draw_mode != DrawMode.SELECT:
+                self._handle_roi_drawing_release()
+                event.accept()
+                return
+            if self.dragging_handle:
+                self._handle_crop_rect_resize_release()
+                event.accept()
+                return
+        super().mouseReleaseEvent(event)
 
-        if event.button() == Qt.MouseButton.LeftButton and self.dragging_handle:
-            self.dragging_handle = None
-            self.drag_start_pos = None
-            self.drag_start_rect = None
+    def _handle_roi_drawing_release(self):
+        if self.draw_mode in (DrawMode.RECT, DrawMode.CIRCLE) and self.temp_roi and self.draw_start:
+            size = self.temp_roi.size()
+            if size[0] > 5 and size[1] > 5:
+                self.roi_added.emit(self.temp_roi)
+            else:
+                self._vb.removeItem(self.temp_roi)
+            self.temp_roi = None
+            self.draw_start = None
 
-            if self.crop_rect_item:
-                rect = self.crop_rect_item.rect()
-                self.crop_changed.emit(
-                    rect.left(), rect.top(), rect.right(), rect.bottom()
-                )
+    def _handle_crop_rect_resize_release(self):
+        self.dragging_handle = None
+        self.drag_start_pos = None
+        self.drag_start_rect = None
+        if self.crop_rect_item:
+            rect = self.crop_rect_item.rect()
+            self.crop_changed.emit(
+                rect.left(), rect.top(), rect.right(), rect.bottom()
+            )
 
+    def mouseDoubleClickEvent(self, event):
+        if event is None:
+            return
+        if self.draw_mode == DrawMode.POLY and self.temp_roi:
+            if self.temp_roi.complete():
+                self.roi_added.emit(self.temp_roi)
+            else:
+                self._vb.removeItem(self.temp_roi)
+            self.temp_roi = None
+            self.viewport().unsetCursor()
             event.accept()
             return
-
-        super().mouseReleaseEvent(event)
+        self.reset_zoom()
+        event.accept()
 
     def _resize_crop_rect(self, view_pos):
         """Resize crop rectangle based on handle drag."""
@@ -286,100 +483,169 @@ class ZoomableImageView(pg.GraphicsView):
 
 
 class CropDialog(QDialog):
-    """Interactive crop dialog with coordinate input and mouse tracking."""
+    crop_confirmed = pyqtSignal(int, int, int, int)
+    bead_crop_confirmed = pyqtSignal(list)
 
-    crop_confirmed = pyqtSignal(int, int, int, int)  # x1, y1, x2, y2
-
-    def __init__(self, images: list[np.ndarray], parent=None):
-        """
-        Initialize crop dialog.
-
-        Args:
-            images: List of grayscale images. First is reference/target, rest are moving.
-            parent: Parent widget.
-        """
+    def __init__(self, images: list[np.ndarray], parent=None, mode: str = "image", beads=None):
         super().__init__(parent)
-
+        self.mode = mode
+        self.beads = beads
+        self.created_rois = []
         self.original_images = images
-        self.crop_rect: InteractiveCropRect | None = None
-        self.highlight_rect: QGraphicsRectItem | None = None
-        self.updating_from_drag = False  # Flag to prevent circular updates
-
-        # Use original images directly (no downsampling)
+        self.crop_rect = None
+        self.highlight_rect = None
+        self.updating_from_drag = False
         self.preview_images = images
 
         self._setup_ui()
         self._create_overlay()
 
-        # Set initial crop to full image
-        h, w = self.preview_images[0].shape
-        self.start_x_input.setText("0")
-        self.start_y_input.setText("0")
-        self.end_x_input.setText(str(w))
-        self.end_y_input.setText(str(h))
-        self._update_crop_preview()
+        if self.mode == "image":
+            h, w = self.preview_images[0].shape
+            self.start_x_input.setText("0")
+            self.start_y_input.setText("0")
+            self.end_x_input.setText(str(w))
+            self.end_y_input.setText(str(h))
+            self._update_crop_preview()
 
     def _setup_ui(self):
-        """Create UI layout."""
-        self.setWindowTitle("Crop Image")
-        self.resize(1000, 800)
+        self.setWindowTitle("Crop Image" if self.mode == "image" else "Crop Beads")
+        self.resize(1200, 800)
         main_layout = QVBoxLayout(self)
 
-        # Instructions
-        instruction_text = "Mouse wheel: zoom, Drag: pan, Double-click: reset view, Drag handles: resize crop"
+        instruction_text = "Mouse wheel: zoom, Drag: pan, Double-click: reset view"
+        if self.mode == "image":
+            instruction_text += ", Drag handles: resize crop"
+        else:
+            instruction_text += ", Choose a tool to draw crop regions"
         self.instruction_label = QLabel(instruction_text)
         self.instruction_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Coordinate label
         self.coord_label = QLabel("Current Position: X: 0, Y: 0")
         self.coord_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Image view
         self.image_view = ZoomableImageView(self)
         self.image_view.setMinimumSize(800, 500)
         self.image_view.mouse_moved.connect(self._on_mouse_move)
-        self.image_view.crop_changed.connect(self._on_crop_changed_by_drag)
-        self.image_view.mouseDoubleClickEvent = self.reset_zoom
 
-        # Crop controls
-        crop_group = QGroupBox("Crop Bounds (Full Resolution Pixels)")
-        crop_layout = QFormLayout()
-
-        validator = QIntValidator(0, 999999)
-
-        self.start_x_input = QLineEdit()
-        self.start_x_input.setValidator(validator)
-        self.start_x_input.textChanged.connect(self._update_crop_preview)
-
-        self.start_y_input = QLineEdit()
-        self.start_y_input.setValidator(validator)
-        self.start_y_input.textChanged.connect(self._update_crop_preview)
-
-        self.end_x_input = QLineEdit()
-        self.end_x_input.setValidator(validator)
-        self.end_x_input.textChanged.connect(self._update_crop_preview)
-
-        self.end_y_input = QLineEdit()
-        self.end_y_input.setValidator(validator)
-        self.end_y_input.textChanged.connect(self._update_crop_preview)
-
-        crop_layout.addRow("Start X (left):", self.start_x_input)
-        crop_layout.addRow("Start Y (top):", self.start_y_input)
-        crop_layout.addRow("End X (right):", self.end_x_input)
-        crop_layout.addRow("End Y (bottom):", self.end_y_input)
-
-        self.size_label = QLabel("Crop Size: 0 x 0 pixels")
-        self.size_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        crop_layout.addRow(self.size_label)
-
-        crop_group.setLayout(crop_layout)
-
-        # Auto contrast toggle
         self.auto_contrast_checkbox = QCheckBox("Auto Contrast")
         self.auto_contrast_checkbox.setChecked(False)
         self.auto_contrast_checkbox.stateChanged.connect(self._on_auto_contrast_changed)
 
-        # Layer visibility controls (if multiple images)
+        main_layout.addWidget(self.instruction_label)
+        main_layout.addWidget(self.coord_label)
+
+        if self.mode == "bead":
+            content_layout = QHBoxLayout()
+            content_layout.addWidget(self.image_view, stretch=3)
+
+            self.side_panel = QWidget()
+            side_layout = QVBoxLayout(self.side_panel)
+
+            tools_group = QGroupBox("ROI Drawing Tools")
+            tools_layout = QHBoxLayout(tools_group)
+
+            self.select_tool_btn = QPushButton("Select/Pan")
+            self.select_tool_btn.setCheckable(True)
+            self.select_tool_btn.setChecked(True)
+            self.rect_tool_btn = QPushButton("Rect")
+            self.rect_tool_btn.setCheckable(True)
+            self.circle_tool_btn = QPushButton("Circle")
+            self.circle_tool_btn.setCheckable(True)
+            self.poly_tool_btn = QPushButton("Lasso")
+            self.poly_tool_btn.setCheckable(True)
+
+            self.tool_group = QButtonGroup(self)
+            self.tool_group.addButton(self.select_tool_btn)
+            self.tool_group.addButton(self.rect_tool_btn)
+            self.tool_group.addButton(self.circle_tool_btn)
+            self.tool_group.addButton(self.poly_tool_btn)
+            self.tool_group.setExclusive(True)
+
+            tools_layout.addWidget(self.select_tool_btn)
+            tools_layout.addWidget(self.rect_tool_btn)
+            tools_layout.addWidget(self.circle_tool_btn)
+            tools_layout.addWidget(self.poly_tool_btn)
+
+            self.select_tool_btn.clicked.connect(lambda: self._set_draw_mode(DrawMode.SELECT))
+            self.rect_tool_btn.clicked.connect(lambda: self._set_draw_mode(DrawMode.RECT))
+            self.circle_tool_btn.clicked.connect(lambda: self._set_draw_mode(DrawMode.CIRCLE))
+            self.poly_tool_btn.clicked.connect(lambda: self._set_draw_mode(DrawMode.POLY))
+
+            side_layout.addWidget(tools_group)
+
+            self.show_beads_checkbox = QCheckBox("Show Beads")
+            self.show_beads_checkbox.setChecked(True)
+            self.show_beads_checkbox.stateChanged.connect(self._toggle_bead_visibility)
+            side_layout.addWidget(self.show_beads_checkbox)
+
+            self.beads_count_label = QLabel("Selected Beads: 0 / 0 (0.0%)")
+            self.beads_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.beads_count_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+            side_layout.addWidget(self.beads_count_label)
+
+            roi_group = QGroupBox("Defined Crop Regions")
+            roi_layout = QVBoxLayout(roi_group)
+
+            self.roi_list_widget = QListWidget()
+            roi_layout.addWidget(self.roi_list_widget)
+
+            list_btn_layout = QHBoxLayout()
+            self.delete_roi_btn = QPushButton("Delete Selected")
+            self.delete_roi_btn.clicked.connect(self._delete_selected_roi)
+            self.clear_rois_btn = QPushButton("Clear All")
+            self.clear_rois_btn.clicked.connect(self._clear_all_rois)
+            list_btn_layout.addWidget(self.delete_roi_btn)
+            list_btn_layout.addWidget(self.clear_rois_btn)
+            roi_layout.addLayout(list_btn_layout)
+
+            side_layout.addWidget(roi_group)
+            side_layout.addWidget(self.auto_contrast_checkbox)
+            side_layout.addStretch()
+
+            self.side_panel.setLayout(side_layout)
+            content_layout.addWidget(self.side_panel, stretch=1)
+            main_layout.addLayout(content_layout)
+
+            self.image_view.roi_added.connect(self._on_roi_added)
+        else:
+            self.image_view.crop_changed.connect(self._on_crop_changed_by_drag)
+            main_layout.addWidget(self.image_view)
+
+            crop_group = QGroupBox("Crop Bounds (Full Resolution Pixels)")
+            crop_layout = QFormLayout()
+
+            validator = QIntValidator(0, 999999)
+
+            self.start_x_input = QLineEdit()
+            self.start_x_input.setValidator(validator)
+            self.start_x_input.textChanged.connect(self._update_crop_preview)
+
+            self.start_y_input = QLineEdit()
+            self.start_y_input.setValidator(validator)
+            self.start_y_input.textChanged.connect(self._update_crop_preview)
+
+            self.end_x_input = QLineEdit()
+            self.end_x_input.setValidator(validator)
+            self.end_x_input.textChanged.connect(self._update_crop_preview)
+
+            self.end_y_input = QLineEdit()
+            self.end_y_input.setValidator(validator)
+            self.end_y_input.textChanged.connect(self._update_crop_preview)
+
+            crop_layout.addRow("Start X (left):", self.start_x_input)
+            crop_layout.addRow("Start Y (top):", self.start_y_input)
+            crop_layout.addRow("End X (right):", self.end_x_input)
+            crop_layout.addRow("End Y (bottom):", self.end_y_input)
+
+            self.size_label = QLabel("Crop Size: 0 x 0 pixels")
+            self.size_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            crop_layout.addRow(self.size_label)
+
+            crop_group.setLayout(crop_layout)
+            main_layout.addWidget(crop_group)
+            main_layout.addWidget(self.auto_contrast_checkbox)
+
         if len(self.preview_images) > 1:
             self.visibility_groupbox = QGroupBox("Layers to be cropped")
             visibility_layout = QVBoxLayout()
@@ -400,8 +666,8 @@ class CropDialog(QDialog):
                 visibility_layout.addWidget(checkbox)
 
             self.visibility_groupbox.setLayout(visibility_layout)
+            main_layout.addWidget(self.visibility_groupbox)
 
-        # Buttons
         button_layout = QHBoxLayout()
         self.confirm_button = QPushButton("Confirm Crop")
         self.confirm_button.clicked.connect(self._validate_and_confirm)
@@ -412,21 +678,11 @@ class CropDialog(QDialog):
         button_layout.addWidget(self.confirm_button)
         button_layout.addWidget(self.cancel_button)
         button_layout.addStretch()
-
-        # Add to main layout
-        main_layout.addWidget(self.instruction_label)
-        main_layout.addWidget(self.coord_label)
-        main_layout.addWidget(self.image_view)
-        main_layout.addWidget(crop_group)
-        main_layout.addWidget(self.auto_contrast_checkbox)
-        if len(self.preview_images) > 1:
-            main_layout.addWidget(self.visibility_groupbox)
         main_layout.addLayout(button_layout)
 
         self.setLayout(main_layout)
 
     def _create_overlay(self):
-        """Create image overlay with colorization."""
         colors = ["red", "green", "blue", "cyan", "magenta", "yellow"]
         arrays = []
         opacities = []
@@ -443,22 +699,29 @@ class CropDialog(QDialog):
 
         self.image_view.set_images(arrays, opacities)
 
-        # Add interactive crop rectangle to the ViewBox (image pixel coordinates)
-        self.crop_rect = InteractiveCropRect()
-        self.image_view._vb.addItem(self.crop_rect, ignoreBounds=True)
-        self.image_view.crop_rect_item = self.crop_rect
+        if self.mode == "image":
+            self.crop_rect = InteractiveCropRect()
+            self.image_view._vb.addItem(self.crop_rect, ignoreBounds=True)
+            self.image_view.crop_rect_item = self.crop_rect
 
-        # Add pixel highlight rectangle
-        self.highlight_rect = QGraphicsRectItem()
-        highlight_pen = QPen(Qt.GlobalColor.yellow, 1, Qt.PenStyle.SolidLine)
-        self.highlight_rect.setPen(highlight_pen)
-        self.highlight_rect.setZValue(11)  # Above crop rect
-        self.image_view._vb.addItem(self.highlight_rect, ignoreBounds=True)
+            self.highlight_rect = QGraphicsRectItem()
+            highlight_pen = QPen(Qt.GlobalColor.yellow, 1, Qt.PenStyle.SolidLine)
+            self.highlight_rect.setPen(highlight_pen)
+            self.highlight_rect.setZValue(11)
+            self.image_view._vb.addItem(self.highlight_rect, ignoreBounds=True)
+        else:
+            if self.beads is not None and not self.beads.empty:
+                self.beads_scatter = pg.ScatterPlotItem(
+                    size=4,
+                    pen=pg.mkPen(None),
+                    brush=pg.mkBrush(QColor(0, 255, 0, 150))
+                )
+                self.image_view._vb.addItem(self.beads_scatter, ignoreBounds=True)
+                self.beads_scatter.setData(x=self.beads["x"].values, y=self.beads["y"].values)
+            self._update_selected_beads_count()
 
-    def _on_mouse_move(self, scene_x: int, scene_y: int):
-        """Update coordinate label and pixel highlight on mouse move."""
+    def _on_mouse_move(self, scene_x, scene_y):
         self.coord_label.setText(f"Current Position: X: {scene_x}, Y: {scene_y}")
-
         if self.highlight_rect:
             highlight_size = 4
             self.highlight_rect.setRect(
@@ -468,13 +731,11 @@ class CropDialog(QDialog):
                 highlight_size,
             )
 
-    def _on_visibility_changed(self, index: int, state):
-        """Toggle layer visibility."""
+    def _on_visibility_changed(self, index, state):
         visible = state == Qt.CheckState.Checked.value
         self.image_view.toggle_layer_visibility(index, visible)
 
     def _refresh_pixmaps(self):
-        """Update image layers in-place without touching scene structure or zoom."""
         colors = ["red", "green", "blue", "cyan", "magenta", "yellow"]
         for i, img in enumerate(self.preview_images):
             if i >= len(self.image_view.image_items):
@@ -490,54 +751,176 @@ class CropDialog(QDialog):
             )
 
     def _on_auto_contrast_changed(self):
-        """Swap image data with/without contrast — no scene or zoom changes."""
         self._refresh_pixmaps()
         if len(self.preview_images) > 1:
             for i, cb in enumerate(self.visibility_checkboxes):
                 self.image_view.toggle_layer_visibility(i, cb.isChecked())
 
-    def _on_crop_changed_by_drag(self, x1: float, y1: float, x2: float, y2: float):
-        """Update text fields when crop bounds change via handle dragging."""
+    def _on_crop_changed_by_drag(self, x1, y1, x2, y2):
         self.updating_from_drag = True
-
         self.start_x_input.setText(str(int(x1)))
         self.start_y_input.setText(str(int(y1)))
         self.end_x_input.setText(str(int(x2)))
         self.end_y_input.setText(str(int(y2)))
-
         width = int(x2 - x1)
         height = int(y2 - y1)
         self.size_label.setText(f"Crop Size: {width} x {height} pixels")
-
         self.updating_from_drag = False
 
     def _update_crop_preview(self):
-        """Update crop rectangle overlay based on input fields."""
         if self.updating_from_drag:
             return
-
         try:
             x1 = int(self.start_x_input.text()) if self.start_x_input.text() else 0
             y1 = int(self.start_y_input.text()) if self.start_y_input.text() else 0
             x2 = int(self.end_x_input.text()) if self.end_x_input.text() else 0
             y2 = int(self.end_y_input.text()) if self.end_y_input.text() else 0
-
             width = x2 - x1
             height = y2 - y1
-
             if width > 0 and height > 0:
                 if self.crop_rect:
                     self.crop_rect.setRect(x1, y1, width, height)
-
                 self.size_label.setText(f"Crop Size: {width} x {height} pixels")
             else:
                 self.size_label.setText("Crop Size: Invalid")
-
         except (ValueError, ZeroDivisionError):
-            pass  # Invalid input, don't update
+            pass
+
+    def _set_draw_mode(self, mode):
+        self.image_view.draw_mode = mode
+        if mode == DrawMode.SELECT:
+            self.image_view._vb.setMouseMode(pg.ViewBox.PanMode)
+            self.image_view.viewport().unsetCursor()
+        else:
+            self.image_view._vb.setMouseMode(pg.ViewBox.RectMode)
+            self.image_view.viewport().setCursor(Qt.CursorShape.CrossCursor)
+
+    def _toggle_bead_visibility(self, state):
+        visible = state == Qt.CheckState.Checked.value
+        if hasattr(self, "beads_scatter") and self.beads_scatter:
+            self.beads_scatter.setVisible(visible)
+
+    def _on_roi_added(self, roi_item):
+        roi_type = ""
+        if isinstance(roi_item, CropRectROI):
+            roi_type = "rect"
+            name = f"Rect ROI {len([r for r in self.created_rois if r['type'] == 'rect']) + 1}"
+            roi_item.sigRegionChangeFinished.connect(self._update_selected_beads_count)
+        elif isinstance(roi_item, CropCircleROI):
+            roi_type = "circle"
+            name = f"Circle ROI {len([r for r in self.created_rois if r['type'] == 'circle']) + 1}"
+            roi_item.sigRegionChangeFinished.connect(self._update_selected_beads_count)
+        elif isinstance(roi_item, CropPolyROI):
+            roi_type = "polygon"
+            name = f"Poly ROI {len([r for r in self.created_rois if r['type'] == 'polygon']) + 1}"
+            roi_item.sigRegionChangeFinished.connect(self._update_selected_beads_count)
+        self.created_rois.append({
+            "roi_item": roi_item,
+            "type": roi_type,
+            "name": name
+        })
+        self.roi_list_widget.addItem(name)
+        self._update_selected_beads_count()
+
+    def _delete_selected_roi(self):
+        current_row = self.roi_list_widget.currentRow()
+        if current_row < 0:
+            return
+        roi_info = self.created_rois.pop(current_row)
+        self.image_view._vb.removeItem(roi_info["roi_item"])
+        self.roi_list_widget.takeItem(current_row)
+        self._update_selected_beads_count()
+
+    def _clear_all_rois(self):
+        for roi_info in self.created_rois:
+            self.image_view._vb.removeItem(roi_info["roi_item"])
+        self.created_rois.clear()
+        self.roi_list_widget.clear()
+        self._update_selected_beads_count()
+
+    def _get_roi_definitions(self):
+        rois = []
+        for info in self.created_rois:
+            item = info["roi_item"]
+            t = info["type"]
+            if t == "rect":
+                pos = item.pos()
+                size = item.size()
+                rois.append({
+                    "type": "rect",
+                    "x1": float(pos[0]),
+                    "y1": float(pos[1]),
+                    "x2": float(pos[0] + size[0]),
+                    "y2": float(pos[1] + size[1])
+                })
+            elif t == "circle":
+                pos = item.pos()
+                size = item.size()
+                rois.append({
+                    "type": "circle",
+                    "cx": float(pos[0] + size[0]/2),
+                    "cy": float(pos[1] + size[1]/2),
+                    "r": float(size[0]/2)
+                })
+            elif t == "polygon":
+                pts = []
+                for pt in item.points:
+                    pt_scene = item.mapToScene(pt)
+                    pts.append((float(pt_scene.x()), float(pt_scene.y())))
+                rois.append({
+                    "type": "polygon",
+                    "points": pts
+                })
+        return rois
+
+    def _update_selected_beads_count(self):
+        if self.beads is None or self.beads.empty:
+            self.beads_count_label.setText("Selected Beads: 0 / 0 (0.0%)")
+            return
+        rois = self._get_roi_definitions()
+        if not rois:
+            self.beads_count_label.setText(f"Selected Beads: 0 / {len(self.beads)} (0.0%)")
+            return
+        keep = np.zeros(len(self.beads), dtype=bool)
+        for roi in rois:
+            if roi["type"] == "rect":
+                x1, y1, x2, y2 = roi["x1"], roi["y1"], roi["x2"], roi["y2"]
+                in_roi = (
+                    (self.beads["x"] >= x1)
+                    & (self.beads["x"] < x2)
+                    & (self.beads["y"] >= y1)
+                    & (self.beads["y"] < y2)
+                )
+            elif roi["type"] == "circle":
+                cx, cy, r = roi["cx"], roi["cy"], roi["r"]
+                in_roi = ((self.beads["x"] - cx) ** 2 + (self.beads["y"] - cy) ** 2) <= r ** 2
+            elif roi["type"] == "polygon":
+                pts = roi["points"]
+                from matplotlib.path import Path
+                path = Path(pts)
+                in_roi = path.contains_points(self.beads[["x", "y"]].to_numpy())
+            else:
+                in_roi = np.zeros(len(self.beads), dtype=bool)
+            keep = keep | in_roi
+        selected_count = np.sum(keep)
+        total_count = len(self.beads)
+        pct = (selected_count / total_count * 100) if total_count > 0 else 0.0
+        self.beads_count_label.setText(f"Selected Beads: {selected_count} / {total_count} ({pct:.1f}%)")
 
     def _validate_and_confirm(self):
-        """Validate crop bounds and emit signal."""
+        if self.mode == "bead":
+            rois = self._get_roi_definitions()
+            if not rois:
+                QMessageBox.warning(
+                    self,
+                    "No Regions Defined",
+                    "Please define at least one crop region before confirming.",
+                )
+                return
+            self.bead_crop_confirmed.emit(rois)
+            self.accept()
+            return
+
         try:
             x1 = int(self.start_x_input.text())
             y1 = int(self.start_y_input.text())
@@ -551,9 +934,7 @@ class CropDialog(QDialog):
             )
             return
 
-        # Validate bounds
         h, w = self.original_images[0].shape
-
         if x1 < 0 or y1 < 0 or x2 > w or y2 > h:
             QMessageBox.warning(
                 self,
@@ -574,7 +955,6 @@ class CropDialog(QDialog):
         self.accept()
 
     def reset_zoom(self, event=None):
-        """Reset zoom to fit view."""
         self.image_view.reset_zoom()
         if event:
             event.accept()

@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from pandas import DataFrame
 from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -42,6 +43,52 @@ from viewmodel.file_manager_vm import FileManagerVM, load_image
 from viewmodel.metadata_vm import MetadataVM
 
 warnings.filterwarnings("ignore")
+
+
+def point_in_polygon(x, y, polygon):
+    num = len(polygon)
+    j = num - 1
+    c = False
+    for i in range(num):
+        if ((polygon[i][1] > y) != (polygon[j][1] > y)) and (x < (polygon[j][0] - polygon[i][0]) * (y - polygon[i][1]) / (polygon[j][1] - polygon[i][1]) + polygon[i][0]):
+            c = not c
+        j = i
+    return c
+
+
+def filter_beads_by_rois(beads, rois, crop_mode="include"):
+    if beads is None or beads.empty:
+        return beads
+    if not rois:
+        return beads
+    in_any_roi = np.zeros(len(beads), dtype=bool)
+    for roi in rois:
+        if roi["type"] == "rect":
+            x1, y1, x2, y2 = roi["x1"], roi["y1"], roi["x2"], roi["y2"]
+            in_roi = (
+                (beads["x"] >= x1)
+                & (beads["x"] < x2)
+                & (beads["y"] >= y1)
+                & (beads["y"] < y2)
+            )
+        elif roi["type"] == "circle":
+            cx, cy, r = roi["cx"], roi["cy"], roi["r"]
+            in_roi = ((beads["x"] - cx) ** 2 + (beads["y"] - cy) ** 2) <= r ** 2
+        elif roi["type"] == "polygon":
+            pts = roi["points"]
+            from matplotlib.path import Path
+            path = Path(pts)
+            in_roi = path.contains_points(beads[["x", "y"]].to_numpy())
+        else:
+            in_roi = np.zeros(len(beads), dtype=bool)
+        in_any_roi = in_any_roi | in_roi
+
+    if crop_mode == "exclude":
+        keep = ~in_any_roi
+    else:
+        keep = in_any_roi
+    return beads[keep]
+
 
 
 class MainWindow(QMainWindow):
@@ -157,7 +204,6 @@ class MainWindow(QMainWindow):
         self.metadata_view.export_sig.connect(self.start_export_flow)
         self.metadata_view.manually_align_sig.connect(self.start_manual_alignment)
         self.metadata_view.crop_selected_sig.connect(self.start_crop)
-        self.metadata_view.crop_beads_sig.connect(self.start_bead_crop)
         self.metadata_view.find_crop_anchor_sig.connect(self.start_crop_anchor)
         self.metadata_vm.inspect_beads_sig.connect(self.vm.inspect_beads)
 
@@ -206,14 +252,13 @@ class MainWindow(QMainWindow):
             return
 
         beads = file_item.beads
-        if file_item.bead_crop_bounds is not None:
-            x1, y1, x2, y2 = file_item.bead_crop_bounds
-            beads = beads[
-                (beads["x"] >= x1)
-                & (beads["x"] < x2)
-                & (beads["y"] >= y1)
-                & (beads["y"] < y2)
-            ]
+        if getattr(file_item, "bead_crop_rois", None) is not None:
+            beads = filter_beads_by_rois(
+                beads,
+                file_item.bead_crop_rois,
+                getattr(file_item, "bead_crop_mode", "include"),
+            )
+
 
         total_beads = len(beads)
 
@@ -331,7 +376,7 @@ class MainWindow(QMainWindow):
             initial_protein_file=initial_protein_file,
             default_cycle_count=2,
         )
-        if not dialog.exec():
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         assignments_from_dialog = dialog.get_assignments()
@@ -384,36 +429,56 @@ class MainWindow(QMainWindow):
     ):
         if len(labeled_image) == 0:
             labeled_image = None
+
+        file_item = None
+        for item in self.vm.files.values():
+            if item.beads is beads_df:
+                file_item = item
+                break
+        if file_item is None:
+            file_item = self.vm.reference_item
+
         bf_image = bright_fields.get("cy0", None)
+        if bf_image is None and file_item is not None:
+            bf_image = self.vm._get_brightfield_image(file_item)
+            if bf_image is not None:
+                bright_fields["cy0"] = bf_image
+
         if bf_image is None:
-            self.show_error("Bright field image for cycle 0 is missing.")
+            self.show_error("Bright field image is missing and could not be loaded from reference file.")
             return
+
+        initial_tab = getattr(self, "_next_inspector_tab", "inspect")
+        self._next_inspector_tab = "inspect"
+
         data = {
             "bf_image": bf_image,
             "beads": beads_df,
             "cycles": cycles,
-            # "bboxs": bboxs,
-            # "labeled_image": labeled_image,
             "protein_profile": protein_profile,
             "bright_fields": bright_fields,
             "max_size": max_size,
         }
-        self.roi_inspector = ROIInspector(data)
+        self.roi_inspector = ROIInspector(data, file_item=file_item, initial_tab=initial_tab)
+        self.roi_inspector.bead_crop_confirmed.connect(
+            lambda rois, crop_mode: self._apply_bead_crop(
+                file_item, rois, crop_mode, len(file_item.beads) if file_item.beads is not None else 0
+            )
+        )
         self.roi_inspector.show()
 
     def _get_cropped_beads_for_export(self, reference_item: FileItem):
         beads = reference_item.beads
         if beads is None or beads.empty:
             return None
-        if reference_item.bead_crop_bounds is not None:
-            x1, y1, x2, y2 = reference_item.bead_crop_bounds
-            beads = beads[
-                (beads["x"] >= x1)
-                & (beads["x"] < x2)
-                & (beads["y"] >= y1)
-                & (beads["y"] < y2)
-            ]
+        if getattr(reference_item, "bead_crop_rois", None) is not None:
+            beads = filter_beads_by_rois(
+                beads,
+                reference_item.bead_crop_rois,
+                getattr(reference_item, "bead_crop_mode", "include"),
+            )
         return beads
+
 
     def recompute_ensemble_sweep(self, start: float, end: float, step: float):
         reference_item = self.vm.reference_item
@@ -517,14 +582,25 @@ class MainWindow(QMainWindow):
         beads_available = (
             reference_item.beads is not None and not reference_item.beads.empty
         )
+        excluded_count = 0
+        if beads_available and reference_item.beads is not None:
+            if getattr(reference_item, "bead_crop_rois", None) is not None:
+                cropped = filter_beads_by_rois(
+                    reference_item.beads,
+                    reference_item.bead_crop_rois,
+                    getattr(reference_item, "bead_crop_mode", "include"),
+                )
+                excluded_count = len(reference_item.beads) - len(cropped)
+
         dialog = ExportSelectionDialog(
             tiff_options=tiff_options,
             beads_enabled=beads_available,
             beads_checked=beads_available,
             beads_format="csv",
+            excluded_beads_count=excluded_count,
             parent=self,
         )
-        if not dialog.exec():
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         selected_tiff_files = dialog.get_selected_tiff_files()
@@ -609,14 +685,53 @@ class MainWindow(QMainWindow):
     def handle_dropped_paths(self, paths: List[str]):
         dirs = []
         files = []
+        csv_files = []
         for path in paths:
             if os.path.isdir(path):
                 dirs.append(path)
             elif os.path.isfile(path):
-                print("loading file:", path)
-                files.append(path)
-        self.vm.load_folder(dirs)
-        self.vm.load_file(files)
+                if path.lower().endswith(".csv"):
+                    csv_files.append(path)
+                else:
+                    files.append(path)
+        if dirs:
+            self.vm.load_folder(dirs)
+        if files:
+            self.vm.load_file(files)
+        for csv_path in csv_files:
+            self.handle_csv_import(csv_path)
+
+    def handle_csv_import(self, csv_path: str):
+        try:
+            df = pd.read_csv(csv_path, nrows=2)
+            cols = [str(c).lstrip("#").strip().lower() for c in df.columns]
+        except Exception as e:
+            self.show_error(f"Failed to read CSV headers: {e}")
+            return
+
+        is_bead = "x" in cols and "y" in cols and any(c.startswith("cy") for c in cols)
+        protein_aliases = {"protein name", "protein", "gene", "gene name", "target", "marker", "name"}
+        is_protein = not ("x" in cols and "y" in cols) and (
+            any(alias in c for alias in protein_aliases for c in cols) or any(c.startswith("cy") for c in cols)
+        )
+
+        if is_bead:
+            self.upload_bead_csv(csv_path)
+        elif is_protein:
+            self.metadata_vm.set_protein_files([csv_path])
+            self.metadata_view.protein_key_files_label.setText(os.path.basename(csv_path))
+            QMessageBox.information(
+                self,
+                "Protein Key Loaded",
+                f"Successfully loaded protein/gene key from {os.path.basename(csv_path)}."
+            )
+        else:
+            self.show_error(
+                f"Unrecognized CSV format for '{os.path.basename(csv_path)}'.\n\n"
+                "It must be either:\n"
+                "1. A Bead CSV (containing 'x', 'y' coordinates and cycle columns like 'cy0', 'cy1', ...)\n"
+                "2. A Protein CSV (containing a protein/gene name column and cycle columns)."
+            )
 
     def on_load_folder(self):
         folder = QFileDialog.getExistingDirectory()
@@ -705,31 +820,93 @@ class MainWindow(QMainWindow):
             ensemble_ratio_step=ensemble_ratio_step,
         )
 
-    def upload_bead_csv(self):
-        assignments = self._get_required_dataset_assignments()
-        if assignments is None:
-            return
-        reference_item = assignments[0]
+    def upload_bead_csv(self, csv_path: Optional[str] = None):
+        reference_item = self.vm.reference_item
+        if reference_item is None:
+            loaded_files = self._get_table_files_in_order()
+            if len(loaded_files) == 1:
+                self.vm.set_reference(loaded_files[0])
+                reference_item = loaded_files[0]
+            else:
+                self.show_error("Please set a reference image in the file table before importing Bead CSV.")
+                return
 
-        csv_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Bead CSV File",
-            "",
-            "CSV Files (*.csv)",
-        )
         if not csv_path:
-            return
+            csv_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Bead CSV File",
+                "",
+                "CSV Files (*.csv)",
+            )
+            if not csv_path:
+                return
 
         is_valid, error_msg, num_cycles = self.vm.validate_bead_csv(csv_path)
         if not is_valid:
             self.show_error(f"Invalid CSV file: {error_msg}")
             return
-        if num_cycles != len(assignments):
-            self.show_error(
-                f"CSV has {num_cycles} cycle column(s), but current assignment has {len(assignments)} cycle(s). Reassign cycles."
-            )
+
+        try:
+            beads_df = pd.read_csv(csv_path)
+            beads_df.columns = [str(c).lstrip("#").strip() for c in beads_df.columns]
+            
+            max_coord = max(beads_df["x"].max(), beads_df["y"].max())
+            import math
+            inferred_max_size = int(math.ceil((max_coord + 10) / 1000.0) * 1000)
+            
+            ref_h = reference_item.original_shape[-2]
+            ref_w = reference_item.original_shape[-1]
+            if inferred_max_size > ref_h or inferred_max_size > ref_w:
+                self.show_error(
+                    f"Inferred max size ({inferred_max_size}) exceeds reference image dimensions ({ref_w}x{ref_h})."
+                )
+                return
+                
+            if inferred_max_size != reference_item.metadata.max_size:
+                reply = QMessageBox.question(
+                    self,
+                    "Adjust Max Size?",
+                    f"Inferred max size of imported beads is {inferred_max_size}, but current max size is {reference_item.metadata.max_size}.\n\n"
+                    "Would you like to adjust the max size to match the imported beads?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    dataset_files = self.vm.get_dataset_files_ordered()
+                    if not dataset_files:
+                        dataset_files = [reference_item]
+                    self.vm.apply_metadata({"max_size": inferred_max_size}, dataset_files)
+        except Exception as e:
+            self.show_error(f"Failed to read bead CSV: {e}")
             return
-        self.vm.store_uploaded_beads(csv_path, reference_item, assignments)
+
+        assignments = self.vm.get_dataset_cycle_assignments()
+        if not assignments or len(assignments) != num_cycles:
+            reply = QMessageBox.question(
+                self,
+                "Assign Cycles Needed",
+                f"Bead CSV contains {num_cycles} cycles, but current cycle assignments are missing or mismatch.\n\n"
+                "Would you like to assign cycles now to load cycle images for inspection?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.assign_cycles()
+                assignments = self.vm.get_dataset_cycle_assignments()
+
+        if assignments and len(assignments) == num_cycles:
+            self.vm.store_uploaded_beads(csv_path, reference_item, assignments)
+        else:
+            reference_item.beads = beads_df
+            reference_item.pre_ensemble_beads = None
+            reference_item.ensemble_cache = None
+            reference_item.ensemble_sweep_stats = None
+            reference_item.ensemble_ratio_selected = None
+            reference_item.ensemble_ratio_applied = None
+            reference_item.status = FileStatus.BEADS_GENERATED
+            reference_item.metadata.prefix = FileStatus.BEADS_GENERATED.name.lower()
+            self.vm.file_information_update.emit([reference_item])
+            self.on_bead_upload_complete(reference_item)
 
     def on_bead_upload_complete(self, reference_item):
         print(
@@ -920,7 +1097,6 @@ class MainWindow(QMainWindow):
         crop_dialog.exec()
 
     def start_bead_crop(self):
-        """Open CropDialog to select a region for filtering beads."""
         reference_item = self.vm.reference_item
         if not reference_item:
             self.show_error("Please set a reference image first.")
@@ -930,72 +1106,19 @@ class MainWindow(QMainWindow):
             self.show_error("No beads available. Generate or upload beads first.")
             return
 
-        # Collect brightfield images from cycles
-        images = []
-        if reference_item.cycles:
-            for key in sorted(reference_item.cycles.keys()):
-                cycle_image = reference_item.cycles[key]
-                if len(cycle_image.shape) == 2:
-                    images.append(cycle_image)
-                    continue
-                if len(cycle_image.shape) == 3:
-                    bf_channel = 0
-                    if reference_item.cycle_files:
-                        try:
-                            cycle_num = int(key.replace("cy", ""))
-                            cycle_file = reference_item.cycle_files.get(cycle_num)
-                            if cycle_file:
-                                bf_channel = int(cycle_file.metadata.reference_channel)
-                        except ValueError:
-                            pass
-                    if bf_channel >= cycle_image.shape[0]:
-                        bf_channel = 0
-                    images.append(cycle_image[bf_channel])
-        elif reference_item.cycle_files:
-            for cycle_num in sorted(reference_item.cycle_files.keys()):
-                img = self.vm._get_brightfield_image(
-                    reference_item.cycle_files[cycle_num]
-                )
-                if img is not None:
-                    images.append(img)
-
-        if not images:
-            # Fallback to reference brightfield
-            img = self.vm._get_brightfield_image(reference_item)
-            if img is not None:
-                images.append(img)
-
-        if not images:
-            self.show_error("Could not load brightfield images for crop.")
-            return
-
-        total_before = len(reference_item.beads)
-        dialog = CropDialog(images, self)
-        dialog.crop_confirmed.connect(
-            lambda x1, y1, x2, y2: self._apply_bead_crop(
-                reference_item, x1, y1, x2, y2, total_before
-            )
-        )
-        dialog.exec()
+        self._next_inspector_tab = "crop"
+        self.vm.inspect_beads(reference_item, self.metadata_vm.protein_df)
 
     def _apply_bead_crop(
         self,
         reference_item: FileItem,
-        x1: int,
-        y1: int,
-        x2: int,
-        y2: int,
+        rois: list[dict],
+        crop_mode: str,
         total_before: int,
     ):
-        """Store bead crop bounds and recalculate statistics."""
-        reference_item.bead_crop_bounds = (x1, y1, x2, y2)
-        beads = reference_item.beads
-        filtered = beads[
-            (beads["x"] >= x1)
-            & (beads["x"] < x2)
-            & (beads["y"] >= y1)
-            & (beads["y"] < y2)
-        ]
+        reference_item.bead_crop_rois = rois
+        reference_item.bead_crop_mode = crop_mode
+        filtered = filter_beads_by_rois(reference_item.beads, rois, crop_mode)
         total_after = len(filtered)
         self.calculate_statistics_for_file(reference_item, self.metadata_vm.protein_df)
         QMessageBox.information(
@@ -1302,6 +1425,27 @@ class MainWindow(QMainWindow):
 class MenuBarUI(QMenuBar):
     def __init__(self, parent: MainWindow):
         super().__init__(parent)
+
+        self.file_menu = self.addMenu("&File")
+
+        import_images_action = QAction("Import Images...", self)
+        import_images_action.triggered.connect(parent.file_table_widget.browse_files)
+        self.file_menu.addAction(import_images_action)
+
+        import_folder_action = QAction("Import Folder...", self)
+        import_folder_action.triggered.connect(parent.file_table_widget.browse_folder)
+        self.file_menu.addAction(import_folder_action)
+
+        self.file_menu.addSeparator()
+
+        import_beads_action = QAction("Import Bead CSV...", self)
+        import_beads_action.triggered.connect(parent.upload_bead_csv)
+        self.file_menu.addAction(import_beads_action)
+
+        import_protein_action = QAction("Import Protein/Gene Key...", self)
+        import_protein_action.triggered.connect(parent.metadata_view.upload_protein_key_files)
+        self.file_menu.addAction(import_protein_action)
+
         if sys.platform == "win32":
             # Window controls
             self.controls_widget = QWidget()
@@ -1471,8 +1615,8 @@ def merge_bead_data_with_protein_profile(bead_data, protein_profile, merge_colum
 
     # Fill NaN values with "Invalid"
     bead_data["Protein name"].fillna("Invalid", inplace=True)
-    # For all merge columns being 255
-    mask_all_255 = (bead_data[merge_columns] == 255).all(axis=1)
-    bead_data.loc[mask_all_255, "Protein name"] = "Filtered"
+    # For any merge columns being 255
+    mask_any_255 = (bead_data[merge_columns] == 255).any(axis=1)
+    bead_data.loc[mask_any_255, "Protein name"] = "Filtered"
 
     return bead_data

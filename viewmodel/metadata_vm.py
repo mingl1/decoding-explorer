@@ -134,6 +134,7 @@ class MetadataVM(QObject):
 
     def _normalize_protein_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         working_df = df.dropna(axis=0, how="all").dropna(axis=1, how="all").copy()
+        working_df.columns = [str(c).lstrip("#").strip() for c in working_df.columns]
         if working_df.empty:
             return pd.DataFrame(columns=["Protein name"])
 

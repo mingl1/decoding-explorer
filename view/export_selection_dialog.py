@@ -20,6 +20,7 @@ class ExportSelectionDialog(QDialog):
         beads_enabled: bool,
         beads_checked: bool,
         beads_format: str = "csv",
+        excluded_beads_count: int = 0,
         parent=None,
     ):
         super().__init__(parent)
@@ -39,6 +40,12 @@ class ExportSelectionDialog(QDialog):
         self.export_beads_checkbox.setEnabled(bool(beads_enabled))
         self.export_beads_checkbox.setChecked(bool(beads_checked and beads_enabled))
         layout.addWidget(self.export_beads_checkbox)
+
+        if beads_enabled:
+            self.excluded_label = QLabel(f"Excluded by crop: {excluded_beads_count} beads")
+            self.excluded_label.setStyleSheet("color: gray; margin-left: 20px;")
+            layout.addWidget(self.excluded_label)
+
 
         format_row = QHBoxLayout()
         format_row.addWidget(QLabel("Beads format:"))
